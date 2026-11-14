@@ -28,12 +28,12 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 
 | Feature | Status | Where |
 |---|---|---|
-| VST3 plugin hosting | ✅ | `plugins/vst3.rs` (generic editor; native editor embedding ❌) |
-| CLAP plugin hosting | ✅ | `plugins/clap.rs` (floating native GUI) |
+| VST3 plugin hosting | ✅ | `plugins/vst3.rs` (generic editor + embedded native editor) |
+| CLAP plugin hosting | ✅ | `plugins/clap.rs` (embedded native editor, floating as fallback) |
 | Crash-safe plugin scan | ✅ | `scan_isolated` + `dragon scan-plugin` |
 | Plugin delay compensation | ✅ | per-edge delay lines in `Song::compile` |
 | Sends, buses, output routing | ✅ | mixer |
-| Sidechain | ✅ | stock compressor / gate and the other sidechain-capable effects (not passed to plugins yet) |
+| Sidechain | ✅ | stock compressor / gate and other sidechain effects; CLAP second input port and VST3 aux bus |
 | Automation lanes and modes | ✅ | `views/automation.rs`, `render.rs` |
 | Clip gain, fades, split, trim, duplicate | ✅ | playlist, clip window |
 | Takes and comping | ✅ | take lanes, `edit::comp_promote` |
@@ -69,28 +69,30 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 
 ## P3 – advanced
 
-| Feature | Status | Notes |
+| Feature | Status | Where |
 |---|---|---|
-| Pitch correction (Melodyne / Newtone style) | ❌ | not started |
-| MP3 / OGG / AAC export | ❌ | decoding works; encoding not implemented |
-| Native VST3 editor embedding | ❌ | needs a child native window; generic editor instead |
-| Sidechain into plugins | ❌ | built-in effects only |
-| Clip launcher / performance mode | ❌ | |
-| Audio-to-MIDI | ❌ | |
-| Video track | ❌ | |
-| Surround / Dolby Atmos | ❌ | stereo only |
+| Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: YIN pitch detection, key + scale, retune speed, amount (`effects/pitch.rs`) |
+| MP3 / Ogg Vorbis export | ✅ | LAME and libvorbis (aoTuV) encoders, export dialog and `dragon render --format mp3/ogg` |
+| Native plugin editors embedded in a host window | ✅ Linux (X11) / Windows | `plugins/window.rs`; VST3 `IPlugFrame` + `IRunLoop`, CLAP `set_parent` + timer / fd host extensions. macOS ❌ |
+| Sidechain into plugins | ✅ | CLAP second input port, VST3 aux input bus |
+| Clip launcher / performance mode | ✅ | View › Performance (F12): tracks × patterns, launch quantised to bar / beat, stop lanes, `LiveEvent::Launch` in the renderer |
+| Audio-to-MIDI | ✅ | Tools › Convert selected clip to MIDI (melody: YIN pitch tracking; drums: onsets sorted kick / snare / hat) |
+| Stem separation | ✅ (DSP, not AI) | Tools › Separate: harmonic/percussive median filtering + centre extraction → drums, harmonic, centre stems |
+| Control surfaces (Mackie Control) | ✅ | Options › Control surface: faders, V-pots, mute / solo / arm / select, transport, banks; motor faders and LEDs |
+| Video track | ✅ (needs ffmpeg) | File › Import video, View › Video (frame at the playhead with timecode), soundtrack as a clip, export the video with the mix |
+| Surround / Dolby Atmos | ❌ | the engine is stereo throughout; multichannel buses and ADM export would be a separate project |
 
 ## P4 – out of scope for an offline app
 
 | Feature | Status | Notes |
 |---|---|---|
-| Cloud collaboration, sharing, accounts | ❌ by design | the app is offline |
-| AI stem separation / generation inside the DAW | ❌ | the splash animation was made with Higgsfield AI, but the app has no AI features |
-| Control surfaces (HUI / Mackie) | ❌ | MIDI CC mapping only |
+| Cloud collaboration, sharing, accounts | ❌ by design | you asked for an offline app without a backend |
+| AI (neural) stem separation / generation | ❌ | the DSP separation above runs offline; the splash animation was made with Higgsfield AI |
 
 ## Not verified on real hardware
 
-The development environment has no sound card and no MIDI ports. The device layer (`cpal` output and input
+The development environment has no sound card, no MIDI ports and no control surface; plugin editors were tested
+against the in-repo test plugins on an X11 server (Xvfb), not against commercial plugins. The device layer (`cpal` output and input
 streams, the recorder thread, `midir` inputs) compiles and is exercised through the same `Renderer` the tests
 cover. Without a device the app falls back to a silent clock. Before relying on recording, test it on your
 machine.

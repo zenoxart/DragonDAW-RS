@@ -681,6 +681,9 @@ pub struct MeterValues {
     /// The most recent master samples (mono) for the spectrum analyser.
     pub scope: Vec<f32>,
     pub cpu_load: f32,
+    /// Clip launcher: playing (lane, pattern) and queued (lane, pattern or stop).
+    pub launched: Vec<(Id, Id)>,
+    pub queued: Vec<(Id, Option<Id>)>,
 }
 
 #[derive(Clone, Default)]
@@ -703,6 +706,14 @@ impl Meters {
     }
 }
 
+fn quantize_up(beat: f64, q: f64) -> f64 {
+    if q <= 0.0 {
+        beat
+    } else {
+        ((beat / q) - 1e-9).ceil() * q
+    }
+}
+
 /// Live events from the UI / MIDI input, applied at the next block.
 #[derive(Debug, Clone)]
 pub enum LiveEvent {
@@ -712,6 +723,20 @@ pub enum LiveEvent {
     /// Plays a one-shot of an audio file (browser preview) through the master.
     Preview(Arc<AudioData>),
     StopPreview,
+    /// Clip launcher: starts `pattern` looping on `lane` (or stops the lane with `None`) at the next multiple
+    /// of `quantize` beats (0 = immediately). Launched patterns play on top of the song.
+    Launch { lane: Id, pattern: Option<Id>, quantize: f64 },
+    /// Stops every launched pattern at the next quantize boundary.
+    StopAllLaunches { quantize: f64 },
+}
+
+/// A pattern looping in a launcher lane.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Launch {
+    lane: Id,
+    pattern: Id,
+    start: f64,
+    end: f64,
 }
 
 struct Preview {
@@ -740,6 +765,8 @@ pub struct Renderer {
     click_accent: bool,
     count_in: f64,
     scope: Vec<f32>,
+    launches: Vec<Launch>,
+    queued: Vec<(Id, Option<Id>, f64)>,
     /// When set, the renderer records which strips' signals to tap for recording (unused offline).
     pub last_block_beat: (f64, f64),
 }
@@ -767,6 +794,8 @@ impl Renderer {
             click_accent: false,
             count_in: 0.0,
             scope: Vec::with_capacity(4096),
+            launches: Vec::new(),
+            queued: Vec::new(),
             last_block_beat: (0.0, 0.0),
         }
     }
@@ -816,6 +845,8 @@ impl Renderer {
     pub fn stop(&mut self) {
         self.pause();
         self.transport.beat = self.start_beat;
+        self.launches.clear();
+        self.queued.clear();
     }
 
     pub fn seek(&mut self, beat: f64) {
@@ -894,6 +925,19 @@ impl Renderer {
                 LiveEvent::AllNotesOff => self.all_notes_off(0.01),
                 LiveEvent::Preview(d) => self.preview = Some(Preview { data: d, pos: 0 }),
                 LiveEvent::StopPreview => self.preview = None,
+                LiveEvent::Launch { lane, pattern, quantize } => {
+                    let at = quantize_up(self.transport.beat.max(0.0), quantize);
+                    self.queued.retain(|q| q.0 != lane);
+                    self.queued.push((lane, pattern, at));
+                }
+                LiveEvent::StopAllLaunches { quantize } => {
+                    let at = quantize_up(self.transport.beat.max(0.0), quantize);
+                    let lanes: Vec<Id> = self.launches.iter().filter(|l| l.end.is_infinite()).map(|l| l.lane).collect();
+                    self.queued.clear();
+                    for lane in lanes {
+                        self.queued.push((lane, None, at));
+                    }
+                }
             }
         }
 
@@ -1192,6 +1236,8 @@ impl Renderer {
             mv.short_term = self.loudness.short_term();
             mv.integrated = self.loudness.integrated();
             mv.true_peak = self.loudness.true_peak;
+            mv.launched = self.launches.iter().filter(|l| l.end.is_infinite()).map(|l| (l.lane, l.pattern)).collect();
+            mv.queued = self.queued.iter().map(|q| (q.0, q.1)).collect();
             mv.voices = song.channels.iter().filter_map(|c| c.instrument.as_ref()).map(|i| i.lock().map(|g| g.active_voices()).unwrap_or(0)).sum();
             mv.scope.clear();
             mv.scope.extend_from_slice(&self.scope);
@@ -1256,13 +1302,53 @@ impl Renderer {
         let b = events.partition_point(|e| e.beat < sb1);
         let t_seg0 = song.tempo.beat_to_seconds(sb0.max(0.0));
         let mut sched: Vec<(usize, SEvent)> = Vec::with_capacity(b - a);
+        let to_frame = |beat: f64| f0 + (((song.tempo.beat_to_seconds(beat) - t_seg0) * self.rate as f64).round().max(0.0) as usize).min(f1 - f0 - 1);
         for e in &events[a..b] {
             if sb0 < 0.0 {
                 break;
             }
-            let t = song.tempo.beat_to_seconds(e.beat);
-            let off = f0 + (((t - t_seg0) * self.rate as f64).round().max(0.0) as usize).min(f1 - f0 - 1);
-            sched.push((off, *e));
+            sched.push((to_frame(e.beat), *e));
+        }
+        if sb0 >= 0.0 && self.transport.mode == PlayMode::Song {
+            // Clip launcher: activate queued launches whose boundary falls in this segment.
+            let due: Vec<(Id, Option<Id>, f64)> = self.queued.iter().filter(|q| q.2 < sb1).copied().collect();
+            self.queued.retain(|q| q.2 >= sb1);
+            for (lane, pattern, at) in due {
+                for l in self.launches.iter_mut().filter(|l| l.lane == lane && l.end.is_infinite()) {
+                    l.end = at;
+                }
+                if let Some(pattern) = pattern {
+                    self.launches.push(Launch { lane, pattern, start: at, end: f64::INFINITY });
+                }
+            }
+            for l in &self.launches {
+                let Some((evs, len)) = song.pattern_events.get(&l.pattern) else { continue };
+                // A lane that stops in this segment releases its channels.
+                if l.end >= sb0 && l.end < sb1 {
+                    let at = to_frame(l.end);
+                    for e in evs.iter().filter(|e| e.on) {
+                        sched.push((at, SEvent { on: false, beat: l.end, ..*e }));
+                    }
+                }
+                if *len <= 0.0 || l.start >= sb1 || l.end <= sb0 {
+                    continue;
+                }
+                let first = ((sb0 - l.start) / len).floor().max(0.0) as i64;
+                let last = ((sb1 - l.start) / len).floor() as i64;
+                for k in first..=last {
+                    let off = l.start + k as f64 * len;
+                    for e in evs {
+                        let beat = e.beat + off;
+                        // Note-offs are always delivered (so a stopped lane releases its notes); note-ons only
+                        // while the launch is active.
+                        if beat >= sb0 && beat < sb1 && (beat < l.end || !e.on) && beat >= l.start {
+                            sched.push((to_frame(beat), SEvent { beat, ..*e }));
+                        }
+                    }
+                }
+            }
+            self.launches.retain(|l| l.end >= sb1);
+            sched.sort_by_key(|e| e.0);
         }
         self.render_instruments_until(song, f0, f1, &sched);
     }
@@ -1617,5 +1703,38 @@ mod tests {
             r.render(&mut l, &mut rr, &[]);
             assert!(r.transport.beat >= 0.0 && r.transport.beat < 1.0 + 1e-6, "{}", r.transport.beat);
         }
+    }
+
+    #[test]
+    fn clip_launcher_starts_on_the_bar_and_stops() {
+        let mut p = Project::new_default();
+        p.bpm = 120.0;
+        let ch = p.add_channel("Synth", Instrument::Synth(SynthParams::default()));
+        let pat = p.patterns[0].id;
+        p.patterns[0].channels.insert(ch, PatternChannel { steps: vec![], notes: vec![Note { pitch: 57, start: 0, length: PPQ * 4, ..Note::default() }] });
+        // No clips on the playlist: only the launcher makes sound.
+        let cache = SampleCache::default();
+        let mut pool = Pool::new();
+        let mut r = offline_renderer(&p, &cache, 48000.0, &mut pool);
+        r.play(PlayMode::Song);
+        let block = |r: &mut Renderer, secs: f64| {
+            let n = (secs * 48000.0) as usize;
+            let (mut l, mut rr) = (vec![0.0f32; n], vec![0.0f32; n]);
+            for (a, b) in l.chunks_mut(512).zip(rr.chunks_mut(512)) {
+                r.render(a, b, &[]);
+            }
+            l.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+        };
+        assert!(block(&mut r, 0.25) < 1e-4, "silent before launching");
+        // Launch quantised to the bar (4 beats = 2 s at 120 BPM): nothing until beat 4.
+        r.push_live(LiveEvent::Launch { lane: 1, pattern: Some(pat), quantize: 4.0 });
+        assert!(block(&mut r, 1.5) < 1e-4, "waits for the bar");
+        assert!(block(&mut r, 0.5) > 0.05, "plays from the bar");
+        assert_eq!(r.meters.snapshot().launched, vec![(1, pat)]);
+        // Stop immediately: the note is released.
+        r.push_live(LiveEvent::Launch { lane: 1, pattern: None, quantize: 0.0 });
+        block(&mut r, 1.0);
+        assert!(block(&mut r, 0.3) < 1e-3, "stopped");
+        assert!(r.meters.snapshot().launched.is_empty());
     }
 }

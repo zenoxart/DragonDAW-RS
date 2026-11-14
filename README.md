@@ -44,10 +44,13 @@ docking, command pool, shortcuts, palette, navigation and i18n. Dragon DAW is no
 | 🎙️ **Record** | Arm tracks, choose stereo or mono inputs, monitoring modes, metronome with count-in, loop and punch ranges, automatic round-trip latency compensation, takes stacked into lanes with **comping** by dragging a range, MIDI note recording into patterns |
 | ✂️ **Arrange & edit** | Playlist with audio and pattern clips, move / trim / resize / split / duplicate / mute, cross-track moves, clip gain, pan, fades with three curves, reverse, pitch, varispeed and pitch-preserving **time-stretch** (WSOLA), fit-to-tempo with BPM detection, markers, tempo and time-signature changes, unlimited undo with a history list |
 | 🎛️ **Mix** | Mixer strips with inserts, pre/post-fader sends, output routing to buses, sidechain inputs, VCA faders, stereo width, polarity, L/R swap, solo-safe, peak and gain-reduction meters, **plugin delay compensation** across the whole routing graph, automation lanes (read / write / touch / latch / trim), MIDI learn |
-| 🧪 **19 stock effects** | Parametric EQ, compressor, multiband compressor, gate, limiter, de-esser, transient shaper, reverb, delay (tempo-synced), chorus, flanger, phaser, tremolo, saturator, bitcrusher, filter, utility, stereo imager and a showcase "Dragon Particle" effect, with presets |
+| 🧪 **20 stock effects** | Dragon Tune pitch correction, parametric EQ, compressor, multiband compressor, gate, limiter, de-esser, transient shaper, reverb, delay (tempo-synced), chorus, flanger, phaser, tremolo, saturator, bitcrusher, filter, utility, stereo imager and a showcase "Dragon Particle" effect, with presets |
 | 🏁 **Master** | Momentary / short-term / integrated LUFS and true peak (ITU-R BS.1770), loudness targets for streaming, broadcast and club, a spectrum analyser, a one-click mastering chain, and export normalised to a LUFS target or peak |
-| 💾 **Export** | WAV 16 / 24 / 32-float, FLAC 16 / 24, 44.1–96 kHz, song / loop / pattern range, tail, TPDF dither, mono, **stems** (one file per mixer channel), bounce-in-place, MIDI export |
-| 🔌 **Plugins** | CLAP and VST3 instruments and effects, **crash-isolated scanning** (each file in its own process), generic parameter editors, native plugin GUIs, full plugin state saved in the project, latency reported to PDC |
+| 💾 **Export** | WAV 16 / 24 / 32-float, FLAC 16 / 24, MP3, Ogg Vorbis, 44.1–96 kHz, song / loop / pattern range, tail, TPDF dither, mono, **stems** (one file per mixer channel), bounce-in-place, MIDI export |
+| 🔌 **Plugins** | CLAP and VST3 instruments and effects, **crash-isolated scanning** (each file in its own process), plugin GUIs embedded in native host windows (Linux X11, Windows), generic parameter editors, sidechain into plugins, full plugin state saved in the project, latency reported to PDC |
+| 🎤 **Vocal & audio tools** | "Dragon Tune" pitch correction (key, scale, retune speed), audio-to-MIDI (melody and drums), offline stem separation (drums / harmonic / centre) |
+| 🎛️ **Performance & hardware** | Clip launcher (tracks × patterns, launch on the bar), Mackie Control surfaces with motor faders and LEDs |
+| 🎬 **Video** | Import a video, watch it in sync with the playhead with timecode, its soundtrack on a track, export the video with your mix (uses ffmpeg) |
 | 🛟 **Safety** | Autosave with crash detection and a recovery dialog, numbered backups on save, relative paths, missing-file relinking, "collect all files" into the project folder |
 | 🪟 **Desktop shell** | VS-style docking (tabs, splits, floating windows, saved layout), generated menus, a command palette (`Ctrl+Shift+P`), rebindable and chorded shortcuts, drag & drop from the file manager and browser, an animated splash (Higgsfield AI) |
 
@@ -129,6 +132,8 @@ cargo run --release -p dragon-daw -- song.dragon
 cargo build --release -p dragon-cli          # the `dragon` tool (put it next to the app for isolated plugin scans)
 ```
 
+Optional: install **ffmpeg** (with `ffprobe`) for the video features.
+
 When you press **Space**, the starter project plays a beat. Some useful keys:
 
 | Key | Action | Key | Action |
@@ -138,6 +143,7 @@ When you press **Space**, the starter project plays a beat. Some useful keys:
 | `Ctrl+Z` / `Ctrl+Y` | undo / redo | `Ctrl+T` | typing keyboard to piano |
 | `Ctrl+S` | save | `Ctrl+R` | export |
 | `Ctrl+Shift+P` | command palette | `F8` / `F10` | plugin manager / options |
+| `F12` | performance (clip launcher) | `F4` | new pattern |
 
 Every shortcut can be changed in **Options › Keyboard shortcuts**.
 
@@ -157,8 +163,9 @@ any mixer insert slot. The host:
 - sends notes and sample-accurate parameter events,
 - reports the plugin's latency to delay compensation,
 - stores the plugin's full state in the project,
-- opens the plugin's own GUI as a floating window (CLAP). VST3 editors need a parent window to embed in, which
-  the app doesn't provide yet, so VST3 plugins use the generic parameter editor.
+- passes a sidechain signal (CLAP second input port, VST3 aux bus),
+- embeds the plugin's own GUI in a native window (X11 on Linux with the VST3 run loop and CLAP timer / fd
+  extensions, Win32 on Windows; macOS falls back to CLAP floating windows and the generic editor).
 
 The host is tested against small CLAP and VST3 plugins in [`crates/test-plugins`](crates/test-plugins). They're
 written for this repository: a gain effect and a sine instrument.
@@ -166,7 +173,7 @@ written for this repository: a gain effect and a sine instrument.
 ## ⌨️ Command line
 
 ```text
-dragon render <project> <out.wav|out.flac|folder> [--format wav16|wav24|wav32|flac16|flac24]
+dragon render <project> <out.wav|out.flac|out.mp3|out.ogg|folder> [--format wav16|wav24|wav32|flac16|flac24|mp3|ogg]
               [--rate 48000] [--lufs -14] [--peak -1] [--stems] [--mono] [--no-plugins]
 dragon info <project>          tracks, patterns, length, missing files
 dragon new <project>           writes an empty project

@@ -1,7 +1,7 @@
 //! `dragon` – headless Dragon DAW tools.
 //!
 //! ```text
-//! dragon render <project.dragon> <out.wav|out.flac|folder> [--format wav16|wav24|wav32|flac16|flac24]
+//! dragon render <project.dragon> <out.wav|out.flac|folder> [--format wav16|wav24|wav32|flac16|flac24|mp3|mp3-192|mp3-128|ogg]
 //!               [--rate 48000] [--lufs -14] [--peak -1] [--stems] [--mono] [--no-plugins]
 //! dragon info <project.dragon>          tracks, patterns, length, missing files
 //! dragon new <project.dragon>           writes an empty project
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage:
-  dragon render <project> <out> [--format wav16|wav24|wav32|flac16|flac24] [--rate N] [--lufs X] [--peak X] [--stems] [--mono] [--no-plugins]
+  dragon render <project> <out> [--format wav16|wav24|wav32|flac16|flac24|mp3|mp3-192|mp3-128|ogg] [--rate N] [--lufs X] [--peak X] [--stems] [--mono] [--no-plugins]
   dragon info <project>
   dragon new <project>
   dragon loudness <audio>
@@ -75,6 +75,8 @@ fn render(args: &[String]) -> Result<(), String> {
     let mut o = ExportOptions::default();
     let fmt = flag_value(args, "--format").unwrap_or_else(|| match out.extension().and_then(|e| e.to_str()) {
         Some("flac") => "flac24".into(),
+        Some("mp3") => "mp3".into(),
+        Some("ogg") => "ogg".into(),
         _ => "wav24".into(),
     });
     o.format = match fmt.as_str() {
@@ -83,6 +85,10 @@ fn render(args: &[String]) -> Result<(), String> {
         "wav32" => ExportFormat::Wav(BitDepth::Float32),
         "flac16" => ExportFormat::Flac16,
         "flac24" => ExportFormat::Flac24,
+        "mp3" | "mp3-320" => ExportFormat::Mp3(320),
+        "mp3-192" => ExportFormat::Mp3(192),
+        "mp3-128" => ExportFormat::Mp3(128),
+        "ogg" => ExportFormat::Ogg(0.6),
         f => return Err(format!("unknown format '{f}'")),
     };
     if let Some(r) = flag_value(args, "--rate") {

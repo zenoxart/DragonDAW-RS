@@ -770,6 +770,29 @@ pub struct MidiMapping {
     pub max: f32,
 }
 
+// ---------------------------------------------------------------------------------------------------- video
+
+/// A video file placed on the timeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoRef {
+    pub path: PathBuf,
+    /// Beat where the video's first frame sits.
+    pub start_beat: f64,
+    /// Seconds skipped at the start of the file.
+    pub offset: f64,
+    pub duration: f64,
+    pub fps: f64,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Default for VideoRef {
+    fn default() -> Self {
+        VideoRef { path: PathBuf::new(), start_beat: 0.0, offset: 0.0, duration: 0.0, fps: 25.0, width: 0, height: 0 }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------- project
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -796,6 +819,8 @@ pub struct Project {
     /// Loudness target for the master meter / export normalisation (LUFS).
     pub loudness_target: f32,
     pub next_id: Id,
+    /// Video for scoring / post: shown in sync with the playhead, can be exported with the mix.
+    pub video: Option<VideoRef>,
 }
 
 impl Default for Project {
@@ -820,6 +845,7 @@ impl Default for Project {
             midi_mappings: Vec::new(),
             loudness_target: -14.0,
             next_id: 1,
+            video: None,
         }
     }
 }
@@ -933,6 +959,9 @@ impl Project {
     /// Every file the project references.
     pub fn referenced_files(&self) -> Vec<PathBuf> {
         let mut v = Vec::new();
+        if let Some(vid) = &self.video {
+            v.push(vid.path.clone());
+        }
         for t in &self.tracks {
             for c in t.clips.iter().chain(t.takes.iter().flat_map(|k| k.clips.iter())) {
                 if let Some(a) = c.audio() {

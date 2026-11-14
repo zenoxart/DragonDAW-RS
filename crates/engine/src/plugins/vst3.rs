@@ -12,6 +12,7 @@ use crate::{EngineError, Result};
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void, CStr};
 use std::path::{Path, PathBuf};
+use vst3::Steinberg::Linux::{IEventHandlerTrait, ITimerHandlerTrait};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComRef, ComWrapper, Interface};
@@ -314,7 +315,7 @@ pub struct Vst3Plugin {
     inputs: i32,
     outputs: i32,
     event_inputs: i32,
-    view: Option<ComPtr<IPlugView>>,
+    editor: Option<Editor>,
     pub info: PluginRef,
 }
 
@@ -381,11 +382,12 @@ impl Vst3Plugin {
             }
 
             // Buses: activate main stereo in/out and the first event input.
-            let inputs = component.getBusCount(MediaTypes_::kAudio as MediaType, BusDirections_::kInput as BusDirection).min(1);
+            // Main input plus an optional aux (sidechain) input bus.
+            let inputs = component.getBusCount(MediaTypes_::kAudio as MediaType, BusDirections_::kInput as BusDirection).min(2);
             let outputs = component.getBusCount(MediaTypes_::kAudio as MediaType, BusDirections_::kOutput as BusDirection).min(1);
             let event_inputs = component.getBusCount(MediaTypes_::kEvent as MediaType, BusDirections_::kInput as BusDirection).min(1);
-            if inputs > 0 {
-                component.activateBus(MediaTypes_::kAudio as MediaType, BusDirections_::kInput as BusDirection, 0, 1);
+            for bus in 0..inputs {
+                component.activateBus(MediaTypes_::kAudio as MediaType, BusDirections_::kInput as BusDirection, bus, 1);
             }
             if outputs > 0 {
                 component.activateBus(MediaTypes_::kAudio as MediaType, BusDirections_::kOutput as BusDirection, 0, 1);
@@ -393,9 +395,9 @@ impl Vst3Plugin {
             if event_inputs > 0 {
                 component.activateBus(MediaTypes_::kEvent as MediaType, BusDirections_::kInput as BusDirection, 0, 1);
             }
-            let mut stereo: SpeakerArrangement = 3; // kStereo = L | R
+            let mut stereo: [SpeakerArrangement; 2] = [3, 3]; // kStereo = L | R
             let mut stereo_out: SpeakerArrangement = 3;
-            processor.setBusArrangements(if inputs > 0 { &mut stereo } else { std::ptr::null_mut() }, inputs, if outputs > 0 { &mut stereo_out } else { std::ptr::null_mut() }, outputs);
+            processor.setBusArrangements(if inputs > 0 { stereo.as_mut_ptr() } else { std::ptr::null_mut() }, inputs, if outputs > 0 { &mut stereo_out } else { std::ptr::null_mut() }, outputs);
             let mut setup = ProcessSetup { processMode: ProcessModes_::kRealtime as int32, symbolicSampleSize: SymbolicSampleSizes_::kSample32 as int32, maxSamplesPerBlock: max_block as int32, sampleRate: rate as f64 };
             if processor.setupProcessing(&mut setup) != kResultOk {
                 return Err(EngineError::Plugin("setupProcessing failed".into()));
@@ -427,7 +429,7 @@ impl Vst3Plugin {
                 inputs,
                 outputs,
                 event_inputs,
-                view: None,
+                editor: None,
                 info: r.clone(),
             };
             for (id, v) in &r.params {
@@ -482,8 +484,12 @@ impl Vst3Plugin {
         self.changes.used.set(used);
         let s = &mut self.scratch;
         let mut in_ptrs = [s.in_l.as_mut_ptr(), s.in_r.as_mut_ptr()];
+        let mut sc_ptrs = [s.sc_l.as_mut_ptr(), s.sc_r.as_mut_ptr()];
         let mut out_ptrs = [s.out_l.as_mut_ptr(), s.out_r.as_mut_ptr()];
-        let mut inb = AudioBusBuffers { numChannels: 2, silenceFlags: 0, __field0: AudioBusBuffers__type0 { channelBuffers32: in_ptrs.as_mut_ptr() } };
+        let mut inb = [
+            AudioBusBuffers { numChannels: 2, silenceFlags: 0, __field0: AudioBusBuffers__type0 { channelBuffers32: in_ptrs.as_mut_ptr() } },
+            AudioBusBuffers { numChannels: 2, silenceFlags: 0, __field0: AudioBusBuffers__type0 { channelBuffers32: sc_ptrs.as_mut_ptr() } },
+        ];
         let mut outb = AudioBusBuffers { numChannels: 2, silenceFlags: 0, __field0: AudioBusBuffers__type0 { channelBuffers32: out_ptrs.as_mut_ptr() } };
         let mut data = ProcessData {
             processMode: ProcessModes_::kRealtime as int32,
@@ -491,7 +497,7 @@ impl Vst3Plugin {
             numSamples: n as int32,
             numInputs: self.inputs,
             numOutputs: self.outputs,
-            inputs: if self.inputs > 0 { &mut inb } else { std::ptr::null_mut() },
+            inputs: if self.inputs > 0 { inb.as_mut_ptr() } else { std::ptr::null_mut() },
             outputs: if self.outputs > 0 { &mut outb } else { std::ptr::null_mut() },
             inputParameterChanges: self.changes.as_com_ref::<IParameterChanges>().unwrap().as_ptr(),
             outputParameterChanges: std::ptr::null_mut(),
@@ -535,33 +541,22 @@ impl Vst3Plugin {
         }
     }
 
-    /// Plugin editors need a native parent window; the app embeds them through
-    /// [`Vst3Plugin::attach_editor`]. `editor(true)` reports whether an editor exists.
+    /// Opens the plugin's editor embedded in its own native window, or closes it.
     fn set_editor(&mut self, open: bool) -> bool {
         if !open {
-            if let Some(v) = self.view.take() {
-                // SAFETY: detaching the view we attached.
-                unsafe { v.removed() };
+            if let Some(ed) = self.editor.take() {
+                // SAFETY: detach in SDK order: removed, then drop the frame.
+                unsafe {
+                    ed.view.removed();
+                    ed.view.setFrame(std::ptr::null_mut());
+                }
             }
             return false;
         }
-        let Some(c) = &self.controller else { return false };
-        // SAFETY: createView("editor") per SDK.
-        let v = unsafe { ComPtr::<IPlugView>::from_raw(c.createView(c"editor".as_ptr())) };
-        let has = v.is_some();
-        self.view = v;
-        has
-    }
-
-    /// Attaches the editor to a native parent window handle (HWND / NSView / X11 window id).
-    ///
-    /// # Safety
-    /// `parent` must be a valid native window handle of the platform for as long as the editor is open.
-    pub unsafe fn attach_editor(&mut self, parent: *mut c_void) -> Option<(i32, i32)> {
-        if self.view.is_none() && !self.set_editor(true) {
-            return None;
+        if self.editor.is_some() {
+            return true;
         }
-        let v = self.view.as_ref()?;
+        let Some(c) = &self.controller else { return false };
         let platform: &CStr = if cfg!(target_os = "windows") {
             c"HWND"
         } else if cfg!(target_os = "macos") {
@@ -569,18 +564,137 @@ impl Vst3Plugin {
         } else {
             c"X11EmbedWindowID"
         };
-        // SAFETY: IPlugView calls with a valid parent handle supplied by the app.
+        // SAFETY: IPlugView lifecycle per SDK: create, check platform, size, setFrame, attached.
         unsafe {
-            if v.isPlatformTypeSupported(platform.as_ptr()) != kResultOk {
-                return None;
-            }
-            if v.attached(parent, platform.as_ptr()) != kResultOk {
-                return None;
+            let Some(view) = ComPtr::<IPlugView>::from_raw(c.createView(c"editor".as_ptr())) else { return false };
+            if view.isPlatformTypeSupported(platform.as_ptr()) != kResultTrue {
+                return false;
             }
             let mut rect: ViewRect = std::mem::zeroed();
-            v.getSize(&mut rect);
-            Some((rect.right - rect.left, rect.bottom - rect.top))
+            view.getSize(&mut rect);
+            let (w, h) = ((rect.right - rect.left).max(64) as u32, (rect.bottom - rect.top).max(64) as u32);
+            let window = match super::window::EditorWindow::open(&self.info.name, w, h) {
+                Ok(win) => win,
+                Err(e) => {
+                    tracing::warn!("plugin editor window: {e}");
+                    return false;
+                }
+            };
+            let frame = ComWrapper::new(Frame::default());
+            view.setFrame(frame.as_com_ref::<IPlugFrame>().unwrap().as_ptr());
+            if view.attached(window.handle(), platform.as_ptr()) != kResultOk {
+                view.setFrame(std::ptr::null_mut());
+                return false;
+            }
+            self.editor = Some(Editor { view, window, frame });
         }
+        true
+    }
+
+    /// Pumps the editor window and the plugin's run-loop handlers. Returns `false` once the editor closed.
+    fn idle_editor(&mut self) -> bool {
+        let Some(ed) = &mut self.editor else { return false };
+        if !ed.window.pump() {
+            self.set_editor(false);
+            return false;
+        }
+        // Resize requests from the plugin.
+        if let Some(mut r) = ed.frame.pending_resize.take() {
+            ed.window.resize((r.right - r.left) as u32, (r.bottom - r.top) as u32);
+            // SAFETY: tell the view its new size (SDK: host resizes, then calls onSize).
+            unsafe { ed.view.onSize(&mut r) };
+        }
+        ed.frame.dispatch();
+        true
+    }
+
+    /// Native window of the open editor (tests use it to inspect the embedded child window).
+    pub fn editor_window(&self) -> Option<&super::window::EditorWindow> {
+        self.editor.as_ref().map(|e| &e.window)
+    }
+}
+
+/// An open, embedded plugin editor.
+struct Editor {
+    view: ComPtr<IPlugView>,
+    window: super::window::EditorWindow,
+    frame: ComWrapper<Frame>,
+}
+
+/// Host side of the editor: `IPlugFrame` (resize requests) and, for Linux, `IRunLoop` (the plugin's file
+/// descriptors and timers are serviced from the UI thread).
+#[derive(Default)]
+struct Frame {
+    pending_resize: Cell<Option<ViewRect>>,
+    handlers: RefCell<Vec<(ComPtr<Linux::IEventHandler>, i32)>>,
+    timers: RefCell<Vec<(ComPtr<Linux::ITimerHandler>, std::time::Duration, std::time::Instant)>>,
+}
+
+impl Frame {
+    fn dispatch(&self) {
+        let handlers: Vec<(ComPtr<Linux::IEventHandler>, i32)> = self.handlers.borrow().clone();
+        for (h, fd) in handlers {
+            // SAFETY: handler registered by the plugin; called on the UI thread.
+            unsafe { h.onFDIsSet(fd) };
+        }
+        let now = std::time::Instant::now();
+        let due: Vec<ComPtr<Linux::ITimerHandler>> = self
+            .timers
+            .borrow_mut()
+            .iter_mut()
+            .filter(|t| now.duration_since(t.2) >= t.1)
+            .map(|t| {
+                t.2 = now;
+                t.0.clone()
+            })
+            .collect();
+        for t in due {
+            // SAFETY: as above.
+            unsafe { t.onTimer() };
+        }
+    }
+}
+
+impl Class for Frame {
+    type Interfaces = (IPlugFrame, Linux::IRunLoop);
+}
+
+impl IPlugFrameTrait for Frame {
+    unsafe fn resizeView(&self, _view: *mut IPlugView, new_size: *mut ViewRect) -> tresult {
+        if new_size.is_null() {
+            return kInvalidArgument;
+        }
+        self.pending_resize.set(Some(*new_size));
+        kResultOk
+    }
+}
+
+impl Linux::IRunLoopTrait for Frame {
+    unsafe fn registerEventHandler(&self, handler: *mut Linux::IEventHandler, fd: Linux::FileDescriptor) -> tresult {
+        match ComRef::from_raw(handler) {
+            Some(h) => {
+                self.handlers.borrow_mut().push((h.to_com_ptr(), fd));
+                kResultOk
+            }
+            None => kInvalidArgument,
+        }
+    }
+    unsafe fn unregisterEventHandler(&self, handler: *mut Linux::IEventHandler) -> tresult {
+        self.handlers.borrow_mut().retain(|(h, _)| h.as_ptr() != handler);
+        kResultOk
+    }
+    unsafe fn registerTimer(&self, handler: *mut Linux::ITimerHandler, ms: Linux::TimerInterval) -> tresult {
+        match ComRef::from_raw(handler) {
+            Some(h) => {
+                self.timers.borrow_mut().push((h.to_com_ptr(), std::time::Duration::from_millis(ms.max(1)), std::time::Instant::now()));
+                kResultOk
+            }
+            None => kInvalidArgument,
+        }
+    }
+    unsafe fn unregisterTimer(&self, handler: *mut Linux::ITimerHandler) -> tresult {
+        self.timers.borrow_mut().retain(|(h, _, _)| h.as_ptr() != handler);
+        kResultOk
     }
 }
 
@@ -588,8 +702,9 @@ impl Drop for Vst3Plugin {
     fn drop(&mut self) {
         // SAFETY: SDK teardown order.
         unsafe {
-            if let Some(v) = self.view.take() {
-                v.removed();
+            if let Some(ed) = self.editor.take() {
+                ed.view.removed();
+                ed.view.setFrame(std::ptr::null_mut());
             }
             self.processor.setProcessing(0);
             self.component.setActive(0);
@@ -614,9 +729,10 @@ impl Effect for Vst3Plugin {
         }
     }
     fn reset(&mut self) {}
-    fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
         let n = l.len();
         self.scratch.ensure(n);
+        self.scratch.set_sidechain(n, sc);
         self.scratch.in_l[..n].copy_from_slice(l);
         self.scratch.in_r[..n].copy_from_slice(r);
         self.scratch.out_l[..n].copy_from_slice(l);
@@ -641,6 +757,9 @@ impl Effect for Vst3Plugin {
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
     }
+    fn idle(&mut self) -> bool {
+        self.idle_editor()
+    }
 }
 
 impl InstrumentVoice for Vst3Plugin {
@@ -658,6 +777,7 @@ impl InstrumentVoice for Vst3Plugin {
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let n = l.len();
         self.scratch.ensure(n);
+        self.scratch.set_sidechain(n, None);
         for b in [&mut self.scratch.in_l, &mut self.scratch.in_r, &mut self.scratch.out_l, &mut self.scratch.out_r] {
             b[..n].iter_mut().for_each(|x| *x = 0.0);
         }
@@ -685,6 +805,9 @@ impl InstrumentVoice for Vst3Plugin {
     }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
+    }
+    fn idle(&mut self) -> bool {
+        self.idle_editor()
     }
 }
 

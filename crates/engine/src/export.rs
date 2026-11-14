@@ -14,12 +14,18 @@ pub enum ExportFormat {
     Wav(BitDepth),
     Flac16,
     Flac24,
+    /// MP3 (LAME), constant bitrate in kbit/s.
+    Mp3(u32),
+    /// Ogg Vorbis, quality −0.1 … 1.0.
+    Ogg(f32),
 }
 
 impl ExportFormat {
     pub fn extension(&self) -> &'static str {
         match self {
             ExportFormat::Wav(_) => "wav",
+            ExportFormat::Mp3(_) => "mp3",
+            ExportFormat::Ogg(_) => "ogg",
             _ => "flac",
         }
     }
@@ -141,6 +147,8 @@ pub fn write(path: &Path, d: &AudioData, opts: &ExportOptions) -> Result<()> {
     match opts.format {
         ExportFormat::Wav(depth) => write_wav(path, &d.l, &d.r, d.rate, depth, opts.mono, opts.dither),
         ExportFormat::Flac16 => write_flac(path, d, 16, opts.mono, opts.dither),
+        ExportFormat::Mp3(kbps) => write_mp3(path, d, kbps, opts.mono),
+        ExportFormat::Ogg(q) => write_ogg(path, d, q, opts.mono),
         ExportFormat::Flac24 => write_flac(path, d, 24, opts.mono, opts.dither),
     }
 }
@@ -208,6 +216,92 @@ pub fn write_flac(path: &Path, d: &AudioData, bits: u32, mono: bool, dither: boo
         bytes[9] = bytes[11];
     }
     std::fs::write(path, bytes).map_err(|e| EngineError::Io(e.to_string()))
+}
+
+fn mono_mix(d: &AudioData) -> Vec<f32> {
+    d.l.iter().zip(&d.r).map(|(a, b)| (a + b) * 0.5).collect()
+}
+
+/// MP3 via LAME (CBR). MP3 supports at most 48 kHz, so higher rates are resampled.
+#[cfg(feature = "lossy")]
+pub fn write_mp3(path: &Path, d: &AudioData, kbps: u32, mono: bool) -> Result<()> {
+    use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, MonoPcm, Quality};
+    let resampled;
+    let d = if d.rate > 48000 {
+        resampled = resample(d, 48000);
+        &resampled
+    } else {
+        d
+    };
+    let fe = |e: &dyn std::fmt::Display| EngineError::Io(format!("MP3: {e}"));
+    let brate = match kbps {
+        0..=96 => Bitrate::Kbps96,
+        97..=128 => Bitrate::Kbps128,
+        129..=160 => Bitrate::Kbps160,
+        161..=192 => Bitrate::Kbps192,
+        193..=256 => Bitrate::Kbps256,
+        _ => Bitrate::Kbps320,
+    };
+    let mut b = Builder::new().ok_or_else(|| EngineError::Io("MP3: cannot create encoder".into()))?;
+    b.set_num_channels(if mono { 1 } else { 2 }).map_err(|e| fe(&e))?;
+    b.set_sample_rate(d.rate).map_err(|e| fe(&e))?;
+    b.set_brate(brate).map_err(|e| fe(&e))?;
+    b.set_quality(Quality::Best).map_err(|e| fe(&e))?;
+    let mut enc = b.build().map_err(|e| fe(&e))?;
+    let mut out = Vec::new();
+    let mono_data = if mono { mono_mix(d) } else { Vec::new() };
+    for start in (0..d.frames()).step_by(4096) {
+        let end = (start + 4096).min(d.frames());
+        out.reserve(mp3lame_encoder::max_required_buffer_size(end - start));
+        if mono {
+            enc.encode_to_vec(MonoPcm(&mono_data[start..end]), &mut out).map_err(|e| fe(&e))?;
+        } else {
+            enc.encode_to_vec(DualPcm { left: &d.l[start..end], right: &d.r[start..end] }, &mut out).map_err(|e| fe(&e))?;
+        }
+    }
+    out.reserve(7200);
+    enc.flush_to_vec::<FlushNoGap>(&mut out).map_err(|e| fe(&e))?;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(path, out).map_err(|e| EngineError::Io(e.to_string()))
+}
+
+/// Ogg Vorbis (aoTuV-tuned libvorbis), quality-based VBR.
+#[cfg(feature = "lossy")]
+pub fn write_ogg(path: &Path, d: &AudioData, quality: f32, mono: bool) -> Result<()> {
+    use vorbis_rs::{VorbisBitrateManagementStrategy, VorbisEncoderBuilder};
+    let fe = |e: &dyn std::fmt::Display| EngineError::Io(format!("Ogg: {e}"));
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let file = std::io::BufWriter::new(std::fs::File::create(path).map_err(|e| EngineError::Io(e.to_string()))?);
+    let rate = std::num::NonZeroU32::new(d.rate).ok_or_else(|| EngineError::Io("Ogg: rate 0".into()))?;
+    let channels = std::num::NonZeroU8::new(if mono { 1 } else { 2 }).unwrap();
+    let mut builder = VorbisEncoderBuilder::new_with_serial(rate, channels, file, 0x0D4A_6011);
+    builder.bitrate_management_strategy(VorbisBitrateManagementStrategy::QualityVbr { target_quality: quality.clamp(-0.1, 1.0) });
+    let mut enc = builder.build().map_err(|e| fe(&e))?;
+    let mono_data = if mono { mono_mix(d) } else { Vec::new() };
+    for start in (0..d.frames()).step_by(4096) {
+        let end = (start + 4096).min(d.frames());
+        if mono {
+            enc.encode_audio_block([&mono_data[start..end]]).map_err(|e| fe(&e))?;
+        } else {
+            enc.encode_audio_block([&d.l[start..end], &d.r[start..end]]).map_err(|e| fe(&e))?;
+        }
+    }
+    enc.finish().map_err(|e| fe(&e))?;
+    Ok(())
+}
+
+#[cfg(not(feature = "lossy"))]
+pub fn write_mp3(_: &Path, _: &AudioData, _: u32, _: bool) -> Result<()> {
+    Err(EngineError::Io("built without the `lossy` feature".into()))
+}
+
+#[cfg(not(feature = "lossy"))]
+pub fn write_ogg(_: &Path, _: &AudioData, _: f32, _: bool) -> Result<()> {
+    Err(EngineError::Io("built without the `lossy` feature".into()))
 }
 
 /// Exports the mix (or stems) to `path` (for stems: `path` is a folder or a file whose stem prefixes the
@@ -337,5 +431,23 @@ mod tests {
         let cache = SampleCache::default();
         let rep = export(&p, &cache, &dir.path().join("p.wav"), &ExportOptions::default(), &mut |_| {}).unwrap();
         assert!(rep.loudness.sample_peak_db > -40.0, "{:?}", rep.loudness);
+    }
+
+    #[cfg(feature = "lossy")]
+    #[test]
+    fn export_mp3_and_ogg_decode_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = project_with_tone(dir.path());
+        let cache = SampleCache::default();
+        for (fmt, name) in [(ExportFormat::Mp3(192), "mix.mp3"), (ExportFormat::Ogg(0.6), "mix.ogg")] {
+            let out = dir.path().join(name);
+            export(&p, &cache, &out, &ExportOptions { format: fmt, tail: 0.0, ..Default::default() }, &mut |_| {}).unwrap();
+            let d = crate::samples::decode(&out).unwrap();
+            assert!((d.duration() - 2.0).abs() < 0.1, "{name}: {} s", d.duration());
+            // The 220 Hz tone survives the lossy codec at about the same level.
+            let st = crate::dsp::loudness::measure(&d.l, &d.r, d.rate as f32);
+            assert!((d.peak() - 0.24).abs() < 0.05, "{name}: peak {}", d.peak());
+            assert!(st.integrated > -30.0, "{name}: {:?}", st);
+        }
     }
 }

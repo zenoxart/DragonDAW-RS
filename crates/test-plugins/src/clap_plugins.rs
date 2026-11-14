@@ -40,6 +40,10 @@ static GAIN: Desc = desc(c"dragon.test.gain", c"Dragon Test Gain", &GAIN_FEATURE
 static SINE: Desc = desc(c"dragon.test.sine", c"Dragon Test Sine", &SINE_FEATURES);
 
 struct State {
+    host: *const clap_host,
+    child: Option<crate::x11child::Child>,
+    sized: bool,
+    timer: Option<clap_id>,
     instrument: bool,
     gain: f64,
     rate: f64,
@@ -118,9 +122,15 @@ unsafe extern "C" fn process(p: *const clap_plugin, pr: *const clap_process) -> 
         let inp = &*pr.audio_inputs;
         let il = std::slice::from_raw_parts(*inp.data32, n);
         let ir = std::slice::from_raw_parts(*inp.data32.add(1), n);
+        // Ducking by the sidechain: out = in · gain · (1 − |sidechain|).
+        let sc = (pr.audio_inputs_count >= 2).then(|| {
+            let b = &*pr.audio_inputs.add(1);
+            std::slice::from_raw_parts(*b.data32, n)
+        });
         for i in 0..n {
-            ol[i] = il[i] * s.gain as f32;
-            or[i] = ir[i] * s.gain as f32;
+            let duck = 1.0 - sc.map(|x| x[i].abs().min(1.0)).unwrap_or(0.0);
+            ol[i] = il[i] * s.gain as f32 * duck;
+            or[i] = ir[i] * s.gain as f32 * duck;
         }
     }
     CLAP_PROCESS_CONTINUE
@@ -192,22 +202,24 @@ static STATE: StateExt = StateExt(clap_plugin_state { save: Some(s_save), load: 
 
 // ---- audio ports
 unsafe extern "C" fn ap_count(p: *const clap_plugin, is_input: bool) -> u32 {
-    if is_input && state(p).instrument {
-        0
-    } else {
-        1
+    match (is_input, state(p).instrument) {
+        (true, true) => 0,
+        // The effect has a main input and a sidechain input.
+        (true, false) => 2,
+        (false, _) => 1,
     }
 }
 unsafe extern "C" fn ap_get(_p: *const clap_plugin, index: u32, is_input: bool, info: *mut clap_audio_port_info) -> bool {
-    if index != 0 {
+    if index > 1 || (index == 1 && !is_input) {
         return false;
     }
     let info = &mut *info;
-    info.id = if is_input { 0 } else { 1 };
-    for (d, s) in info.name.iter_mut().zip(b"Main\0") {
+    info.id = if is_input { index } else { 10 };
+    let name: &[u8] = if index == 1 { b"Sidechain\0" } else { b"Main\0" };
+    for (d, s) in info.name.iter_mut().zip(name) {
         *d = *s as c_char;
     }
-    info.flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info.flags = if index == 0 { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
     info.channel_count = 2;
     info.port_type = CLAP_PORT_STEREO.as_ptr();
     info.in_place_pair = clap_sys::id::CLAP_INVALID_ID;
@@ -217,6 +229,102 @@ struct Ports(clap_plugin_audio_ports);
 unsafe impl Sync for Ports {}
 static PORTS: Ports = Ports(clap_plugin_audio_ports { count: Some(ap_count), get: Some(ap_get) });
 
+
+// ---- GUI (test editor): embeds a child X11 window, requests a resize from the host and uses a host
+// timer. The timer sets the gain to 1.5 once the host applied the resize (0.5 before).
+use clap_sys::ext::gui::*;
+use clap_sys::ext::timer_support::*;
+
+unsafe fn host_ext<T>(p: *const clap_plugin, id: &CStr) -> *const T {
+    let h = state(p).host;
+    if h.is_null() {
+        return std::ptr::null();
+    }
+    (*h).get_extension.map(|g| g(h, id.as_ptr())).unwrap_or(std::ptr::null()) as *const T
+}
+unsafe extern "C" fn g_supported(_p: *const clap_plugin, api: *const c_char, floating: bool) -> bool {
+    CStr::from_ptr(api) == CLAP_WINDOW_API_X11 && !floating
+}
+unsafe extern "C" fn g_preferred(_p: *const clap_plugin, _api: *mut *const c_char, _f: *mut bool) -> bool {
+    false
+}
+unsafe extern "C" fn g_create(p: *const clap_plugin, api: *const c_char, floating: bool) -> bool {
+    if !g_supported(p, api, floating) {
+        return false;
+    }
+    let t = host_ext::<clap_host_timer_support>(p, CLAP_EXT_TIMER_SUPPORT);
+    if !t.is_null() {
+        let mut id = 0;
+        if (*t).register_timer.map(|f| f(state(p).host, 5, &mut id)).unwrap_or(false) {
+            state(p).timer = Some(id);
+        }
+    }
+    true
+}
+unsafe extern "C" fn g_destroy(p: *const clap_plugin) {
+    let t = host_ext::<clap_host_timer_support>(p, CLAP_EXT_TIMER_SUPPORT);
+    if let (false, Some(id)) = (t.is_null(), state(p).timer.take()) {
+        if let Some(f) = (*t).unregister_timer {
+            f(state(p).host, id);
+        }
+    }
+    state(p).child = None;
+}
+unsafe extern "C" fn g_scale(_p: *const clap_plugin, _s: f64) -> bool {
+    true
+}
+unsafe extern "C" fn g_get_size(p: *const clap_plugin, w: *mut u32, h: *mut u32) -> bool {
+    let (a, b) = if state(p).sized { (500, 400) } else { (320, 200) };
+    *w = a;
+    *h = b;
+    true
+}
+unsafe extern "C" fn g_false(_p: *const clap_plugin) -> bool {
+    false
+}
+unsafe extern "C" fn g_hints(_p: *const clap_plugin, _h: *mut clap_gui_resize_hints) -> bool {
+    false
+}
+unsafe extern "C" fn g_adjust(_p: *const clap_plugin, _w: *mut u32, _h: *mut u32) -> bool {
+    false
+}
+unsafe extern "C" fn g_set_size(p: *const clap_plugin, _w: u32, _h: u32) -> bool {
+    state(p).sized = true;
+    true
+}
+unsafe extern "C" fn g_set_parent(p: *const clap_plugin, w: *const clap_window) -> bool {
+    let parent = (*w).specific.x11;
+    // `c_ulong` is 64-bit on Linux but 32-bit on Windows.
+    #[allow(clippy::unnecessary_cast)]
+    let Some(child) = crate::x11child::Child::new(parent as u64, 320, 200) else { return false };
+    state(p).child = Some(child);
+    let g = host_ext::<clap_host_gui>(p, CLAP_EXT_GUI);
+    if !g.is_null() {
+        if let Some(f) = (*g).request_resize {
+            f(state(p).host, 500, 400);
+        }
+    }
+    true
+}
+unsafe extern "C" fn g_transient(_p: *const clap_plugin, _w: *const clap_window) -> bool {
+    false
+}
+unsafe extern "C" fn g_title(_p: *const clap_plugin, _t: *const c_char) {}
+unsafe extern "C" fn g_true(_p: *const clap_plugin) -> bool {
+    true
+}
+struct Gui(clap_plugin_gui);
+unsafe impl Sync for Gui {}
+static GUI: Gui = Gui(clap_plugin_gui { is_api_supported: Some(g_supported), get_preferred_api: Some(g_preferred), create: Some(g_create), destroy: Some(g_destroy), set_scale: Some(g_scale), get_size: Some(g_get_size), can_resize: Some(g_false), get_resize_hints: Some(g_hints), adjust_size: Some(g_adjust), set_size: Some(g_set_size), set_parent: Some(g_set_parent), set_transient: Some(g_transient), suggest_title: Some(g_title), show: Some(g_true), hide: Some(g_true) });
+
+unsafe extern "C" fn on_timer(p: *const clap_plugin, _id: clap_id) {
+    let s = state(p);
+    s.gain = if s.sized { 1.5 } else { 0.5 };
+}
+struct Timer(clap_plugin_timer_support);
+unsafe impl Sync for Timer {}
+static TIMER: Timer = Timer(clap_plugin_timer_support { on_timer: Some(on_timer) });
+
 unsafe extern "C" fn get_extension(_p: *const clap_plugin, id: *const c_char) -> *const c_void {
     let id = CStr::from_ptr(id);
     if id == CLAP_EXT_PARAMS {
@@ -225,6 +333,10 @@ unsafe extern "C" fn get_extension(_p: *const clap_plugin, id: *const c_char) ->
         &STATE.0 as *const _ as *const c_void
     } else if id == CLAP_EXT_AUDIO_PORTS {
         &PORTS.0 as *const _ as *const c_void
+    } else if id == CLAP_EXT_GUI {
+        &GUI.0 as *const _ as *const c_void
+    } else if id == CLAP_EXT_TIMER_SUPPORT {
+        &TIMER.0 as *const _ as *const c_void
     } else {
         std::ptr::null()
     }
@@ -250,7 +362,7 @@ unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, _host: *const clap
     } else {
         return std::ptr::null();
     };
-    let data = Box::into_raw(Box::new(State { instrument, gain: 1.0, rate: 48000.0, note: None, phase: 0.0 }));
+    let data = Box::into_raw(Box::new(State { host: _host, child: None, sized: false, timer: None, instrument, gain: 1.0, rate: 48000.0, note: None, phase: 0.0 }));
     Box::into_raw(Box::new(clap_plugin {
         desc: d,
         plugin_data: data as *mut c_void,

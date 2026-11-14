@@ -18,6 +18,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("file.collect", "Collect all files into project folder", "File", 1, ""),
     ("file.import_audio", "Import audio…", "File/Import", 2, "Ctrl+I"),
     ("file.import_midi", "Import MIDI file…", "File/Import", 2, ""),
+    ("file.import_video", "Import video…", "File/Import", 2, ""),
     ("file.export", "Export mix…", "File/Export", 3, "Ctrl+R"),
     ("file.export_stems", "Export stems…", "File/Export", 3, "Ctrl+Shift+R"),
     ("file.export_midi", "Export pattern as MIDI…", "File/Export", 3, ""),
@@ -58,8 +59,10 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("view.rack", "Channel rack", "View", 0, "F6"),
     ("view.piano", "Piano roll", "View", 0, "F7"),
     ("view.mixer", "Mixer", "View", 0, "F9"),
+    ("view.launcher", "Performance (clip launcher)", "View", 0, "F12"),
     ("view.browser", "Browser", "View", 1, "Alt+F8"),
     ("view.master", "Mastering & loudness", "View", 1, ""),
+    ("view.video", "Video", "View", 1, ""),
     ("view.project", "Project & tempo", "View", 1, ""),
     ("view.automation", "Automation & MIDI mappings", "View", 1, ""),
     ("view.history", "Undo history", "View", 1, "Alt+Z"),
@@ -72,6 +75,9 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.normalize", "Normalize selected clips", "Tools", 1, ""),
     ("tools.bounce", "Bounce selected track to audio", "Tools", 1, ""),
     ("tools.slice", "Slice selected sample to rack", "Tools", 1, ""),
+    ("tools.to_midi_melody", "Convert selected clip to MIDI (melody)", "Tools", 2, ""),
+    ("tools.to_midi_drums", "Convert selected clip to MIDI (drums)", "Tools", 2, ""),
+    ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
     ("help.about", "About Dragon DAW", "Help", 0, ""),
 ];
 
@@ -107,8 +113,10 @@ pub fn view_of(id: &str) -> Option<&'static str> {
         "dragon.view.rack" => "dragon.rack",
         "dragon.view.piano" => "dragon.piano",
         "dragon.view.mixer" => "dragon.mixer",
+        "dragon.view.launcher" => "dragon.launcher",
         "dragon.view.browser" => "dragon.browser",
         "dragon.view.master" => "dragon.master",
+        "dragon.view.video" => "dragon.video",
         "dragon.view.project" => "dragon.project",
         "dragon.view.automation" => "dragon.automation",
         "dragon.view.history" => "dragon.history",
@@ -160,6 +168,11 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "file.import_midi" => {
             if let Some(f) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
                 st.import_midi(&f);
+            }
+        }
+        "file.import_video" => {
+            if let Some(f) = rfd::FileDialog::new().add_filter("Video", &["mp4", "mov", "mkv", "avi", "webm", "m4v"]).pick_file() {
+                st.import_video(&f);
             }
         }
         "file.export" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, false)),
@@ -429,6 +442,59 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 None => st.toast("Select an audio clip or a sampler channel", Severity::Info),
             }
         }
+        "tools.to_midi_melody" | "tools.to_midi_drums" => {
+            let drums = id == "tools.to_midi_drums";
+            let clip = st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| st.ui.clips.contains(&c.id) && c.audio().is_some()).cloned();
+            let Some(clip) = clip else {
+                st.toast("Select an audio clip first", Severity::Info);
+                return true;
+            };
+            let a = clip.audio().cloned().unwrap();
+            match st.session.cache.get(&a.source, st.audio.rate()) {
+                Ok(d) => {
+                    // Only the part of the file the clip plays.
+                    let rate = d.rate as f64;
+                    let start = (a.offset * rate) as usize;
+                    let tm = dragon_engine::time::TempoMap::from_project(&st.session.project);
+                    let secs = tm.beat_to_seconds(clip.end()) - tm.beat_to_seconds(clip.start);
+                    let end = (start + (secs * rate * a.speed) as usize).min(d.frames());
+                    let part = dragon_engine::samples::AudioData { rate: d.rate, l: d.l[start.min(end)..end].to_vec(), r: d.r[start.min(end)..end].to_vec(), ..Default::default() };
+                    let bpm = st.session.project.bpm;
+                    let notes = dragon_engine::analysis::audio_to_notes(&part, bpm, if drums { dragon_engine::analysis::TranscribeMode::Drums } else { dragon_engine::analysis::TranscribeMode::Melody });
+                    if notes.is_empty() {
+                        st.toast("No notes found in the clip", Severity::Info);
+                        return true;
+                    }
+                    let n = notes.len();
+                    let pads = crate::state::kit_pads(&st.kit);
+                    let name = format!("{} (MIDI)", clip.name);
+                    let (ch, pat) = st.session.edit("Audio to MIDI", |p| {
+                        let inst = if drums { Instrument::DrumPads(pads) } else { Instrument::Synth(SynthParams::default()) };
+                        let ch = p.add_channel(&name, inst);
+                        let pat = p.add_pattern();
+                        if let Some(pt) = p.pattern_mut(pat) {
+                            pt.name = name.clone();
+                            pt.channels.entry(ch).or_default().notes = notes;
+                        }
+                        let len = p.pattern(pat).map(|x| x.length_beats()).unwrap_or(4.0);
+                        let track = p.add_track(&name);
+                        let id = p.next_id();
+                        let color = p.pattern(pat).map(|x| x.color).unwrap_or_default();
+                        if let Some(t) = p.track_mut(track) {
+                            t.clips.push(Clip { id, name: name.clone(), start: clip.start, length: len, muted: false, color, kind: ClipKind::Pattern { pattern: pat } });
+                        }
+                        (ch, pat)
+                    });
+                    st.ui.pattern = pat;
+                    st.ui.channel = Some(ch);
+                    st.ui.piano_channel = Some(ch);
+                    st.ctx.open("dragon.piano", None);
+                    st.toast(format!("Transcribed {n} notes into a new pattern"), Severity::Success);
+                }
+                Err(e) => st.toast(e.to_string(), Severity::Error),
+            }
+        }
+        "tools.separate" => st.separate_selected(),
         "help.about" => st.ui.about = true,
         _ => return false,
     }

@@ -10,7 +10,7 @@ use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS};
-use clap_sys::ext::gui::{clap_plugin_gui, CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11};
+use clap_sys::ext::gui::{clap_plugin_gui, clap_window, clap_window_handle, CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11};
 use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::params::{clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
@@ -113,8 +113,84 @@ pub fn scan(path: &Path) -> Result<Vec<PluginInfo>> {
 
 // ------------------------------------------------------------------------------------------------ host
 
-unsafe extern "C" fn host_get_extension(_h: *const clap_host, _id: *const c_char) -> *const c_void {
-    std::ptr::null()
+/// Per-instance host state reached through `clap_host::host_data`: GUI resize requests, timers and file
+/// descriptors registered by the plugin (serviced from the UI thread).
+#[derive(Default)]
+struct HostState {
+    resize: std::cell::Cell<Option<(u32, u32)>>,
+    closed: std::cell::Cell<bool>,
+    timers: std::cell::RefCell<Vec<(clap_sys::id::clap_id, std::time::Duration, std::time::Instant)>>,
+    next_timer: std::cell::Cell<u32>,
+    fds: std::cell::RefCell<Vec<(i32, u32)>>,
+}
+
+unsafe fn host_state<'a>(h: *const clap_host) -> Option<&'a HostState> {
+    if h.is_null() || (*h).host_data.is_null() {
+        None
+    } else {
+        Some(&*((*h).host_data as *const HostState))
+    }
+}
+
+unsafe extern "C" fn gui_resize_hints(_h: *const clap_host) {}
+unsafe extern "C" fn gui_request_resize(h: *const clap_host, w: u32, hh: u32) -> bool {
+    host_state(h).map(|s| s.resize.set(Some((w, hh)))).is_some()
+}
+unsafe extern "C" fn gui_request_show(_h: *const clap_host) -> bool {
+    true
+}
+unsafe extern "C" fn gui_request_hide(_h: *const clap_host) -> bool {
+    false
+}
+unsafe extern "C" fn gui_closed(h: *const clap_host, _destroyed: bool) {
+    if let Some(s) = host_state(h) {
+        s.closed.set(true);
+    }
+}
+unsafe extern "C" fn timer_register(h: *const clap_host, period_ms: u32, id: *mut clap_sys::id::clap_id) -> bool {
+    let Some(s) = host_state(h) else { return false };
+    let n = s.next_timer.get() + 1;
+    s.next_timer.set(n);
+    s.timers.borrow_mut().push((n, std::time::Duration::from_millis(period_ms.max(1) as u64), std::time::Instant::now()));
+    if !id.is_null() {
+        *id = n;
+    }
+    true
+}
+unsafe extern "C" fn timer_unregister(h: *const clap_host, id: clap_sys::id::clap_id) -> bool {
+    host_state(h).map(|s| s.timers.borrow_mut().retain(|t| t.0 != id)).is_some()
+}
+unsafe extern "C" fn fd_register(h: *const clap_host, fd: i32, flags: u32) -> bool {
+    host_state(h).map(|s| s.fds.borrow_mut().push((fd, flags))).is_some()
+}
+unsafe extern "C" fn fd_modify(h: *const clap_host, fd: i32, flags: u32) -> bool {
+    host_state(h).map(|s| s.fds.borrow_mut().iter_mut().filter(|f| f.0 == fd).for_each(|f| f.1 = flags)).is_some()
+}
+unsafe extern "C" fn fd_unregister(h: *const clap_host, fd: i32) -> bool {
+    host_state(h).map(|s| s.fds.borrow_mut().retain(|f| f.0 != fd)).is_some()
+}
+
+struct HostExt<T>(T);
+// SAFETY: tables of function pointers.
+unsafe impl<T> Sync for HostExt<T> {}
+static HOST_GUI: HostExt<clap_sys::ext::gui::clap_host_gui> = HostExt(clap_sys::ext::gui::clap_host_gui { resize_hints_changed: Some(gui_resize_hints), request_resize: Some(gui_request_resize), request_show: Some(gui_request_show), request_hide: Some(gui_request_hide), closed: Some(gui_closed) });
+static HOST_TIMER: HostExt<clap_sys::ext::timer_support::clap_host_timer_support> = HostExt(clap_sys::ext::timer_support::clap_host_timer_support { register_timer: Some(timer_register), unregister_timer: Some(timer_unregister) });
+static HOST_FD: HostExt<clap_sys::ext::posix_fd_support::clap_host_posix_fd_support> = HostExt(clap_sys::ext::posix_fd_support::clap_host_posix_fd_support { register_fd: Some(fd_register), modify_fd: Some(fd_modify), unregister_fd: Some(fd_unregister) });
+
+unsafe extern "C" fn host_get_extension(_h: *const clap_host, id: *const c_char) -> *const c_void {
+    if id.is_null() {
+        return std::ptr::null();
+    }
+    let id = CStr::from_ptr(id);
+    if id == CLAP_EXT_GUI {
+        &HOST_GUI.0 as *const _ as *const c_void
+    } else if id == clap_sys::ext::timer_support::CLAP_EXT_TIMER_SUPPORT {
+        &HOST_TIMER.0 as *const _ as *const c_void
+    } else if id == clap_sys::ext::posix_fd_support::CLAP_EXT_POSIX_FD_SUPPORT {
+        &HOST_FD.0 as *const _ as *const c_void
+    } else {
+        std::ptr::null()
+    }
 }
 unsafe extern "C" fn host_request(_h: *const clap_host) {}
 
@@ -180,6 +256,8 @@ pub struct ClapPlugin {
     steady: i64,
     voices: usize,
     gui_open: bool,
+    state: Box<HostState>,
+    window: Option<super::window::EditorWindow>,
     pub info: PluginRef,
 }
 
@@ -191,9 +269,10 @@ impl ClapPlugin {
     pub fn load(r: &PluginRef, rate: f32, max_block: usize, _instrument: bool) -> Result<ClapPlugin> {
         let f = factory(&r.path)?;
         let strings = vec![CString::new("Dragon DAW").unwrap(), CString::new("ZenoxArt").unwrap(), CString::new("https://github.com/zenoxart/RedHiveFramework").unwrap(), CString::new(env!("CARGO_PKG_VERSION")).unwrap()];
+        let state = Box::<HostState>::default();
         let host = Box::new(clap_host {
             clap_version: CLAP_VERSION,
-            host_data: std::ptr::null_mut(),
+            host_data: &*state as *const HostState as *mut c_void,
             name: strings[0].as_ptr(),
             vendor: strings[1].as_ptr(),
             url: strings[2].as_ptr(),
@@ -221,7 +300,8 @@ impl ClapPlugin {
             let gui = ext(CLAP_EXT_GUI) as *const clap_plugin_gui;
             let (mut inputs, mut outputs) = (1, 1);
             if !ports.is_null() {
-                inputs = (*ports).count.map(|c| c(plugin, true)).unwrap_or(0).min(1);
+                // Main input plus an optional second (sidechain) input port.
+                inputs = (*ports).count.map(|c| c(plugin, true)).unwrap_or(0).min(2);
                 outputs = (*ports).count.map(|c| c(plugin, false)).unwrap_or(1).min(1);
                 let mut info: clap_audio_port_info = std::mem::zeroed();
                 if outputs == 1 && (*ports).get.map(|g| g(plugin, 0, false, &mut info)).unwrap_or(false) && info.channel_count == 0 {
@@ -249,7 +329,7 @@ impl ClapPlugin {
                 return Err(EngineError::Plugin("activate failed".into()));
             }
             let latency = if latency_ext.is_null() { 0 } else { (*latency_ext).get.map(|g| g(plugin)).unwrap_or(0) };
-            let mut me = ClapPlugin { _host: host, _strings: strings, plugin, params_ext, gui, params, events: Vec::with_capacity(256), pending: Vec::with_capacity(256), scratch: Scratch::new(max_block), inputs, outputs, latency, processing: false, steady: 0, voices: 0, gui_open: false, info: r.clone() };
+            let mut me = ClapPlugin { _host: host, _strings: strings, plugin, params_ext, gui, params, events: Vec::with_capacity(256), pending: Vec::with_capacity(256), scratch: Scratch::new(max_block), inputs, outputs, latency, processing: false, steady: 0, voices: 0, gui_open: false, state, window: None, info: r.clone() };
             for (id, v) in &r.params {
                 me.pending.push(HostEvent::Param { id: *id, value: me.plain(*id, *v) });
             }
@@ -292,12 +372,16 @@ impl ClapPlugin {
         }
         let s = &mut self.scratch;
         let mut in_ptrs = [s.in_l.as_mut_ptr(), s.in_r.as_mut_ptr()];
+        let mut sc_ptrs = [s.sc_l.as_mut_ptr(), s.sc_r.as_mut_ptr()];
         let mut out_ptrs = [s.out_l.as_mut_ptr(), s.out_r.as_mut_ptr()];
-        let inb = clap_audio_buffer { data32: in_ptrs.as_mut_ptr(), data64: std::ptr::null_mut(), channel_count: 2, latency: 0, constant_mask: 0 };
+        let inb = [
+            clap_audio_buffer { data32: in_ptrs.as_mut_ptr(), data64: std::ptr::null_mut(), channel_count: 2, latency: 0, constant_mask: 0 },
+            clap_audio_buffer { data32: sc_ptrs.as_mut_ptr(), data64: std::ptr::null_mut(), channel_count: 2, latency: 0, constant_mask: 0 },
+        ];
         let mut outb = clap_audio_buffer { data32: out_ptrs.as_mut_ptr(), data64: std::ptr::null_mut(), channel_count: 2, latency: 0, constant_mask: 0 };
         let in_events = clap_input_events { ctx: &self.events as *const Vec<EvSlot> as *mut c_void, size: Some(in_size), get: Some(in_get) };
         let out_events = clap_output_events { ctx: std::ptr::null_mut(), try_push: Some(out_push) };
-        let process = clap_process { steady_time: self.steady, frames_count: n as u32, transport: std::ptr::null(), audio_inputs: &inb, audio_outputs: &mut outb, audio_inputs_count: self.inputs, audio_outputs_count: self.outputs, in_events: &in_events, out_events: &out_events };
+        let process = clap_process { steady_time: self.steady, frames_count: n as u32, transport: std::ptr::null(), audio_inputs: inb.as_ptr(), audio_outputs: &mut outb, audio_inputs_count: self.inputs, audio_outputs_count: self.outputs, in_events: &in_events, out_events: &out_events };
         // SAFETY: CLAP processing per spec; buffers live for the call.
         unsafe {
             if !self.processing {
@@ -349,10 +433,38 @@ impl ClapPlugin {
         } else {
             CLAP_WINDOW_API_X11
         };
-        // SAFETY: GUI extension, floating window (the plugin owns its window).
+        // SAFETY: GUI extension lifecycle per the CLAP spec, on the UI thread.
         unsafe {
             let g = &*self.gui;
             if open && !self.gui_open {
+                self.state.closed.set(false);
+                // Preferred: embed into a native window of ours.
+                if g.is_api_supported.map(|f| f(self.plugin, api.as_ptr(), false)).unwrap_or(false) && g.create.map(|f| f(self.plugin, api.as_ptr(), false)).unwrap_or(false) {
+                    let (mut w, mut h) = (400u32, 300u32);
+                    if let Some(f) = g.get_size {
+                        f(self.plugin, &mut w, &mut h);
+                    }
+                    match super::window::EditorWindow::open(&self.info.name, w, h) {
+                        Ok(win) => {
+                            let handle = win.handle();
+                            let specific = if cfg!(target_os = "linux") { clap_window_handle { x11: handle as std::ffi::c_ulong } } else { clap_window_handle { ptr: handle } };
+                            let cw = clap_window { api: api.as_ptr(), specific };
+                            if g.set_parent.map(|f| f(self.plugin, &cw)).unwrap_or(false) {
+                                if let Some(f) = g.show {
+                                    f(self.plugin);
+                                }
+                                self.window = Some(win);
+                                self.gui_open = true;
+                                return true;
+                            }
+                        }
+                        Err(e) => tracing::warn!("plugin editor window: {e}"),
+                    }
+                    if let Some(f) = g.destroy {
+                        f(self.plugin);
+                    }
+                }
+                // Fallback: the plugin's own floating window.
                 if !g.is_api_supported.map(|f| f(self.plugin, api.as_ptr(), true)).unwrap_or(false) {
                     return false;
                 }
@@ -372,10 +484,63 @@ impl ClapPlugin {
                 if let Some(f) = g.destroy {
                     f(self.plugin);
                 }
+                self.window = None;
                 self.gui_open = false;
             }
         }
         self.gui_open
+    }
+
+    /// Pumps the editor window and services the plugin's timers and file descriptors.
+    fn idle_editor(&mut self) -> bool {
+        if !self.gui_open {
+            return false;
+        }
+        let closed_by_user = self.window.as_mut().map(|w| !w.pump()).unwrap_or(false);
+        if closed_by_user || self.state.closed.get() {
+            self.set_editor(false);
+            return false;
+        }
+        // SAFETY: plugin extension calls on the UI (main) thread.
+        unsafe {
+            if let Some((w, h)) = self.state.resize.take() {
+                if let Some(win) = &mut self.window {
+                    win.resize(w, h);
+                }
+                if let Some(f) = (*self.gui).set_size {
+                    f(self.plugin, w, h);
+                }
+            }
+            let ext = |name: &CStr| (*self.plugin).get_extension.map(|g| g(self.plugin, name.as_ptr())).unwrap_or(std::ptr::null());
+            let timer = ext(clap_sys::ext::timer_support::CLAP_EXT_TIMER_SUPPORT) as *const clap_sys::ext::timer_support::clap_plugin_timer_support;
+            if !timer.is_null() {
+                let now = std::time::Instant::now();
+                let due: Vec<u32> = self.state.timers.borrow_mut().iter_mut().filter(|t| now.duration_since(t.2) >= t.1).map(|t| {
+                    t.2 = now;
+                    t.0
+                }).collect();
+                for id in due {
+                    if let Some(f) = (*timer).on_timer {
+                        f(self.plugin, id);
+                    }
+                }
+            }
+            let fdx = ext(clap_sys::ext::posix_fd_support::CLAP_EXT_POSIX_FD_SUPPORT) as *const clap_sys::ext::posix_fd_support::clap_plugin_posix_fd_support;
+            if !fdx.is_null() {
+                let fds: Vec<(i32, u32)> = self.state.fds.borrow().clone();
+                for (fd, flags) in fds {
+                    if let Some(f) = (*fdx).on_fd {
+                        f(self.plugin, fd, flags & clap_sys::ext::posix_fd_support::CLAP_POSIX_FD_READ);
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Native window of an embedded editor (tests inspect its child windows).
+    pub fn editor_window(&self) -> Option<&super::window::EditorWindow> {
+        self.window.as_ref()
     }
 }
 
@@ -413,9 +578,10 @@ impl Effect for ClapPlugin {
         }
     }
     fn reset(&mut self) {}
-    fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
         let n = l.len();
         self.scratch.ensure(n);
+        self.scratch.set_sidechain(n, sc);
         self.scratch.in_l[..n].copy_from_slice(l);
         self.scratch.in_r[..n].copy_from_slice(r);
         self.scratch.out_l[..n].copy_from_slice(l);
@@ -439,6 +605,9 @@ impl Effect for ClapPlugin {
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
     }
+    fn idle(&mut self) -> bool {
+        self.idle_editor()
+    }
 }
 
 impl InstrumentVoice for ClapPlugin {
@@ -457,6 +626,7 @@ impl InstrumentVoice for ClapPlugin {
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let n = l.len();
         self.scratch.ensure(n);
+        self.scratch.set_sidechain(n, None);
         self.scratch.in_l[..n].iter_mut().for_each(|x| *x = 0.0);
         self.scratch.in_r[..n].iter_mut().for_each(|x| *x = 0.0);
         self.scratch.out_l[..n].iter_mut().for_each(|x| *x = 0.0);
@@ -486,5 +656,8 @@ impl InstrumentVoice for ClapPlugin {
     }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
+    }
+    fn idle(&mut self) -> bool {
+        self.idle_editor()
     }
 }

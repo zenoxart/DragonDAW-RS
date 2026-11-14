@@ -6,11 +6,13 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["device", "plugins"]
+default = ["device", "plugins", "lossy"]
 # Real-time audio and MIDI devices (cpal, midir). Disable for headless builds.
 device = ["dep:cpal", "dep:midir"]
 # Third-party plugin hosting (CLAP and VST3 via dynamic libraries).
-plugins = ["dep:libloading", "dep:clap-sys", "dep:vst3"]
+plugins = ["dep:libloading", "dep:clap-sys", "dep:vst3", "dep:x11-dl", "dep:windows-sys"]
+# MP3 (LAME) and Ogg Vorbis export.
+lossy = ["dep:mp3lame-encoder", "dep:vorbis_rs"]
 
 [dependencies]
 serde.workspace = true
@@ -29,6 +31,15 @@ midir = { version = "0.10", optional = true }
 libloading = { version = "0.8", optional = true }
 clap-sys = { version = "0.5", optional = true }
 vst3 = { version = "0.3", optional = true }
+mp3lame-encoder = { version = "0.2", optional = true }
+vorbis_rs = { version = "0.5", optional = true }
+
+# Native windows for plugin editors.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
 
 [dev-dependencies]
 tempfile = "3"

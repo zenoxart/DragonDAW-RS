@@ -53,6 +53,9 @@ pub fn missing_files(p: &Project) -> Vec<PathBuf> {
 
 /// Replaces every file path in the project (clips, takes, samplers, drum pads).
 pub fn rewrite_paths(p: &mut Project, mut f: impl FnMut(&Path) -> PathBuf) {
+    if let Some(v) = &mut p.video {
+        v.path = f(&v.path);
+    }
     for t in &mut p.tracks {
         for c in t.clips.iter_mut().chain(t.takes.iter_mut().flat_map(|k| k.clips.iter_mut())) {
             if let ClipKind::Audio(a) = &mut c.kind {

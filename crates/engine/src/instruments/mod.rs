@@ -50,6 +50,10 @@ pub trait InstrumentVoice: Send {
     fn editor(&mut self, _open: bool) -> bool {
         false
     }
+    /// See [`crate::effects::Effect::idle`].
+    fn idle(&mut self) -> bool {
+        false
+    }
 }
 
 /// Creates the engine instrument for a model (plugins are created by the plugin host).

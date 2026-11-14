@@ -214,6 +214,100 @@ impl RetroBuffer {
     }
 }
 
+
+// ---------------------------------------------------------------------------------------------- Mackie Control
+
+/// An action decoded from a Mackie Control Universal (MCU) compatible control surface (Behringer X-Touch,
+/// iCON, PreSonus FaderPort in MCU mode, …). Strips are 0–7 within the current bank.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum McuAction {
+    /// Fader position 0 … 1 (strip 8 = master).
+    Fader { strip: u8, value: f32 },
+    /// V-pot turned by `delta` detents (negative = left).
+    Pan { strip: u8, delta: i8 },
+    Mute(u8),
+    Solo(u8),
+    Arm(u8),
+    Select(u8),
+    Play,
+    Stop,
+    Record,
+    Rewind,
+    Forward,
+    Loop,
+    Click,
+    BankLeft,
+    BankRight,
+    ChannelLeft,
+    ChannelRight,
+}
+
+/// Decodes one MCU message (button presses only; releases are ignored).
+pub fn mackie(m: MidiMessage) -> Option<McuAction> {
+    use McuAction::*;
+    match m {
+        MidiMessage::PitchBend { channel, value } if channel <= 8 => Some(Fader { strip: channel, value: ((value as f32 + 8192.0) / 16383.0).clamp(0.0, 1.0) }),
+        MidiMessage::Control { controller, value, .. } if (0x10..=0x17).contains(&controller) => {
+            let mag = (value & 0x3F) as i8;
+            Some(Pan { strip: controller - 0x10, delta: if value & 0x40 != 0 { -mag } else { mag } })
+        }
+        MidiMessage::NoteOn { note, velocity, .. } if velocity > 0 => Some(match note {
+            0x00..=0x07 => Arm(note),
+            0x08..=0x0F => Solo(note - 0x08),
+            0x10..=0x17 => Mute(note - 0x10),
+            0x18..=0x1F => Select(note - 0x18),
+            0x2E => BankLeft,
+            0x2F => BankRight,
+            0x30 => ChannelLeft,
+            0x31 => ChannelRight,
+            0x56 => Loop,
+            0x59 => Click,
+            0x5B => Rewind,
+            0x5C => Forward,
+            0x5D => Stop,
+            0x5E => Play,
+            0x5F => Record,
+            _ => return None,
+        }),
+        _ => None,
+    }
+}
+
+/// MCU fader curve: fader travel 0 … 1 → linear gain (unity at about 75 %, +6 dB at the top).
+pub fn mcu_fader_to_gain(v: f32) -> f32 {
+    if v <= 0.0 {
+        0.0
+    } else {
+        // −60 dB … +6 dB with unity at 0.75.
+        let db = if v >= 0.75 { (v - 0.75) / 0.25 * 6.0 } else { -60.0 + v / 0.75 * 60.0 };
+        crate::dsp::db_to_gain(db)
+    }
+}
+
+/// Inverse of [`mcu_fader_to_gain`] (for motor-fader feedback).
+pub fn mcu_gain_to_fader(g: f32) -> f32 {
+    if g <= 0.001 {
+        return 0.0;
+    }
+    let db = crate::dsp::gain_to_db(g).clamp(-60.0, 6.0);
+    if db >= 0.0 {
+        0.75 + db / 6.0 * 0.25
+    } else {
+        (db + 60.0) / 60.0 * 0.75
+    }
+}
+
+/// MIDI bytes that move motor fader `strip` to `fader` (0 … 1).
+pub fn mcu_fader_message(strip: u8, fader: f32) -> [u8; 3] {
+    let v = (fader.clamp(0.0, 1.0) * 16383.0).round() as u16;
+    [0xE0 | (strip & 0x0F), (v & 0x7F) as u8, (v >> 7) as u8]
+}
+
+/// MIDI bytes that light (or clear) a button LED.
+pub fn mcu_led_message(note: u8, on: bool) -> [u8; 3] {
+    [0x90, note, if on { 0x7F } else { 0 }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +347,29 @@ mod tests {
         assert_eq!((n[0].start, n[0].length), (0, 96));
         assert_eq!(n[1].start, 192);
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn mackie_control_decoding() {
+        use super::*;
+        assert_eq!(mackie(parse(&[0x90, 0x5E, 0x7F])), Some(McuAction::Play));
+        assert_eq!(mackie(parse(&[0x90, 0x5E, 0x00])), None, "release ignored");
+        assert_eq!(mackie(parse(&[0x90, 0x12, 0x7F])), Some(McuAction::Mute(2)));
+        assert_eq!(mackie(parse(&[0x90, 0x09, 0x7F])), Some(McuAction::Solo(1)));
+        assert_eq!(mackie(parse(&[0x90, 0x03, 0x7F])), Some(McuAction::Arm(3)));
+        assert_eq!(mackie(parse(&[0xB0, 0x11, 0x41])), Some(McuAction::Pan { strip: 1, delta: -1 }));
+        assert_eq!(mackie(parse(&[0xB0, 0x11, 0x03])), Some(McuAction::Pan { strip: 1, delta: 3 }));
+        match mackie(parse(&[0xE3, 0x7F, 0x7F])) {
+            Some(McuAction::Fader { strip: 3, value }) => assert!((value - 1.0).abs() < 1e-3),
+            other => panic!("{other:?}"),
+        }
+        // Fader curve round trip and unity at 75 %.
+        assert!((mcu_fader_to_gain(0.75) - 1.0).abs() < 1e-4);
+        for g in [0.01f32, 0.25, 0.5, 1.0, 1.8] {
+            assert!((mcu_fader_to_gain(mcu_gain_to_fader(g)) - g).abs() / g < 0.01, "{g}");
+        }
+        assert_eq!(mcu_fader_message(0, 1.0), [0xE0, 0x7F, 0x7F]);
+        let back = parse(&mcu_fader_message(2, 0.5));
+        assert!(matches!(mackie(back), Some(McuAction::Fader { strip: 2, value }) if (value - 0.5).abs() < 1e-3));
     }
 }

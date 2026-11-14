@@ -456,6 +456,30 @@ pub struct TimedMidi {
     pub port: usize,
 }
 
+pub fn midi_outputs() -> Vec<String> {
+    let Ok(m) = midir::MidiOutput::new("Dragon DAW") else { return Vec::new() };
+    m.ports().iter().filter_map(|p| m.port_name(p).ok()).collect()
+}
+
+/// An open MIDI output (control-surface feedback: motor faders, LEDs).
+pub struct MidiOutput {
+    conn: midir::MidiOutputConnection,
+    pub name: String,
+}
+
+impl MidiOutput {
+    pub fn open(name: &str) -> Result<MidiOutput> {
+        let out = midir::MidiOutput::new("Dragon DAW").map_err(|e| EngineError::Midi(e.to_string()))?;
+        let port = out.ports().into_iter().find(|p| out.port_name(p).ok().as_deref() == Some(name)).ok_or_else(|| EngineError::Midi(format!("no MIDI output named {name}")))?;
+        let conn = out.connect(&port, "dragon-out").map_err(|e| EngineError::Midi(e.to_string()))?;
+        Ok(MidiOutput { conn, name: name.to_string() })
+    }
+
+    pub fn send(&mut self, bytes: &[u8]) {
+        let _ = self.conn.send(bytes);
+    }
+}
+
 pub fn midi_inputs() -> Vec<String> {
     let Ok(m) = midir::MidiInput::new("Dragon DAW") else { return Vec::new() };
     m.ports().iter().filter_map(|p| m.port_name(p).ok()).collect()
@@ -466,6 +490,8 @@ pub struct MidiInputs {
     _conns: Vec<midir::MidiInputConnection<()>>,
     pub rx: Receiver<TimedMidi>,
     pub names: Vec<String>,
+    /// Every port present when opening; [`TimedMidi::port`] indexes this list.
+    pub all_ports: Vec<String>,
 }
 
 impl MidiInputs {
@@ -500,6 +526,6 @@ impl MidiInputs {
                 opened.push(name.clone());
             }
         }
-        MidiInputs { _conns: conns, rx, names: opened }
+        MidiInputs { _conns: conns, rx, names: opened, all_ports: ports }
     }
 }

@@ -30,6 +30,9 @@ pub struct Settings {
     pub show_splash: bool,
     pub reduced_motion: bool,
     pub follow_playhead: bool,
+    /// Mackie Control surface: MIDI input and (optional) output for motor faders and LEDs.
+    pub mackie_input: Option<String>,
+    pub mackie_output: Option<String>,
 }
 
 impl Default for Settings {
@@ -46,6 +49,8 @@ impl Default for Settings {
             show_splash: true,
             reduced_motion: false,
             follow_playhead: true,
+            mackie_input: None,
+            mackie_output: None,
         }
     }
 }
@@ -93,6 +98,11 @@ pub struct UiState {
     pub pr_drag: Option<crate::views::piano_roll::Drag>,
     pub waveforms: std::collections::HashMap<PathBuf, std::sync::Arc<Vec<(f32, f32)>>>,
     pub clip_window: Option<Id>,
+    /// Open native plugin editors: (mixer channel or rack channel, insert).
+    pub native_editors: Vec<(Id, Option<Id>)>,
+    pub video: crate::views::video::VideoState,
+    /// Running stem separation: (source clip start beat, track name) → stem files.
+    pub stem_job: Option<redhive_client_framework::runtime::Promise<StemResult>>,
     pub pattern_mode: bool,
     pub export: Option<crate::views::export::ExportDialog>,
     pub recovery: Option<Vec<(PathBuf, std::time::SystemTime)>>,
@@ -136,6 +146,9 @@ impl UiState {
             pr_drag: None,
             waveforms: Default::default(),
             clip_window: None,
+            native_editors: Vec::new(),
+            video: Default::default(),
+            stem_job: None,
             pattern_mode: false,
             export: None,
             recovery: None,
@@ -162,6 +175,16 @@ pub struct State {
     pub last_autosave: Instant,
     pub crashed_last_time: bool,
     pub kit: Vec<(String, u8, PathBuf)>,
+    pub mcu: Mcu,
+}
+
+/// Mackie Control state: bank offset, the output connection and what was last sent (feedback only on change).
+#[derive(Default)]
+pub struct Mcu {
+    pub bank: usize,
+    pub out: Option<dragon_engine::device::MidiOutput>,
+    sent_faders: [f32; 9],
+    sent_leds: std::collections::HashMap<u8, bool>,
 }
 
 /// The built-in drum kit (synthesised on first run into the app's data folder).
@@ -236,11 +259,12 @@ impl State {
         session.history.limit = settings.undo_limit;
         let song = session.compile(48000.0);
         let audio = Audio::start(&settings.device, song);
-        let midi = Some(MidiInputs::open(&settings.device.midi_inputs, Some(audio.shared_transport())));
+        let midi = None;
         let autosave = Autosave::new(ctx.paths.autosave.clone());
         let crashed = !autosave.begin_session();
         let ui = UiState::new(&session.project);
-        let mut st = State { ctx, session, audio, ui, settings, midi, retro: RetroBuffer::new(120.0), autosave, last_autosave: Instant::now(), crashed_last_time: crashed, kit };
+        let mut st = State { ctx, session, audio, ui, settings, midi, retro: RetroBuffer::new(120.0), autosave, last_autosave: Instant::now(), crashed_last_time: crashed, kit, mcu: Mcu::default() };
+        st.open_midi();
         st.session.force_recompile();
         if st.crashed_last_time {
             let list = st.autosave.list();
@@ -443,6 +467,134 @@ impl State {
         }
     }
 
+    /// (Re)opens MIDI inputs (the configured ones plus the control surface) and the control-surface output.
+    pub fn open_midi(&mut self) {
+        let mut names = self.settings.device.midi_inputs.clone();
+        if let (false, Some(m)) = (names.is_empty(), &self.settings.mackie_input) {
+            if !names.contains(m) {
+                names.push(m.clone());
+            }
+        }
+        self.midi = None;
+        self.midi = Some(MidiInputs::open(&names, Some(self.audio.shared_transport())));
+        self.mcu.out = None;
+        self.mcu.sent_faders = [-1.0; 9];
+        self.mcu.sent_leds.clear();
+        if let Some(name) = self.settings.mackie_output.clone() {
+            match dragon_engine::device::MidiOutput::open(&name) {
+                Ok(o) => self.mcu.out = Some(o),
+                Err(e) => self.ctx.log.warn("mackie", e.to_string()),
+            }
+        }
+    }
+
+    fn mcu_track(&self, strip: u8) -> Option<Id> {
+        self.session.project.tracks.get(self.mcu.bank + strip as usize).map(|t| t.id)
+    }
+
+    fn mcu_mixer(&self, strip: u8) -> Option<Id> {
+        if strip == 8 {
+            Some(self.session.project.mixer.master.id)
+        } else {
+            self.mcu_track(strip).and_then(|t| self.session.project.track(t)).map(|t| t.mixer)
+        }
+    }
+
+    /// Applies one control-surface action; returns `true` when it was a continuous gesture.
+    pub fn apply_mcu(&mut self, a: dragon_engine::midi::McuAction) -> bool {
+        use dragon_engine::midi::McuAction as A;
+        let n_tracks = self.session.project.tracks.len();
+        match a {
+            A::Fader { strip, value } => {
+                if let Some(m) = self.mcu_mixer(strip) {
+                    let g = dragon_engine::midi::mcu_fader_to_gain(value);
+                    self.session.gesture("Fader", |p| p.mixer.get_mut(m).iter_mut().for_each(|c| c.volume = g));
+                    self.mcu.sent_faders[strip as usize] = value;
+                    return true;
+                }
+            }
+            A::Pan { strip, delta } => {
+                if let Some(m) = self.mcu_mixer(strip) {
+                    self.session.gesture("Pan", |p| p.mixer.get_mut(m).iter_mut().for_each(|c| c.pan = (c.pan + delta as f32 * 0.02).clamp(-1.0, 1.0)));
+                    return true;
+                }
+            }
+            A::Mute(s) | A::Solo(s) | A::Arm(s) => {
+                if let Some(t) = self.mcu_track(s) {
+                    self.session.edit("Control surface", |p| {
+                        if let Some(tr) = p.track_mut(t) {
+                            match a {
+                                A::Mute(_) => tr.muted = !tr.muted,
+                                A::Solo(_) => tr.solo = !tr.solo,
+                                _ => tr.armed = !tr.armed,
+                            }
+                        }
+                    });
+                }
+            }
+            A::Select(s) => {
+                if let Some(m) = self.mcu_mixer(s) {
+                    self.ui.mixer = m;
+                }
+            }
+            A::Play => self.toggle_play(),
+            A::Stop => self.stop(),
+            A::Record => self.ctx.run("dragon.transport.record", serde_json::Value::Null),
+            A::Rewind => {
+                let b = self.beat_now();
+                self.seek((b - 4.0).max(0.0));
+            }
+            A::Forward => {
+                let b = self.beat_now();
+                self.seek(b + 4.0);
+            }
+            A::Loop => self.ctx.run("dragon.transport.loop", serde_json::Value::Null),
+            A::Click => self.ctx.run("dragon.transport.metronome", serde_json::Value::Null),
+            A::BankLeft => self.mcu.bank = self.mcu.bank.saturating_sub(8),
+            A::BankRight => self.mcu.bank = (self.mcu.bank + 8).min(n_tracks.saturating_sub(1) / 8 * 8),
+            A::ChannelLeft => self.mcu.bank = self.mcu.bank.saturating_sub(1),
+            A::ChannelRight => self.mcu.bank = (self.mcu.bank + 1).min(n_tracks.saturating_sub(1)),
+        }
+        false
+    }
+
+    /// Sends motor-fader positions and button LEDs that changed to the control surface.
+    pub fn mcu_feedback(&mut self) {
+        if self.mcu.out.is_none() {
+            return;
+        }
+        let playing = self.transport().playing;
+        let recording = self.audio.is_recording() || self.ui.record_started.is_some();
+        let mut msgs: Vec<[u8; 3]> = Vec::new();
+        for strip in 0..9u8 {
+            let vol = self.mcu_mixer(strip).and_then(|m| self.session.project.mixer.get(m)).map(|c| c.volume).unwrap_or(0.0);
+            let f = dragon_engine::midi::mcu_gain_to_fader(vol);
+            if (f - self.mcu.sent_faders[strip as usize]).abs() > 0.002 {
+                self.mcu.sent_faders[strip as usize] = f;
+                msgs.push(dragon_engine::midi::mcu_fader_message(strip, f));
+            }
+        }
+        let mut leds: Vec<(u8, bool)> = vec![(0x5E, playing), (0x5F, recording), (0x56, self.session.project.loop_enabled), (0x59, self.session.project.metronome.enabled)];
+        for strip in 0..8u8 {
+            let t = self.mcu_track(strip).and_then(|t| self.session.project.track(t));
+            leds.push((strip, t.map(|t| t.armed).unwrap_or(false)));
+            leds.push((0x08 + strip, t.map(|t| t.solo).unwrap_or(false)));
+            leds.push((0x10 + strip, t.map(|t| t.muted).unwrap_or(false)));
+            leds.push((0x18 + strip, t.map(|t| t.mixer == self.ui.mixer).unwrap_or(false)));
+        }
+        for (note, on) in leds {
+            if self.mcu.sent_leds.get(&note) != Some(&on) {
+                self.mcu.sent_leds.insert(note, on);
+                msgs.push(dragon_engine::midi::mcu_led_message(note, on));
+            }
+        }
+        if let Some(out) = &mut self.mcu.out {
+            for m in msgs {
+                out.send(&m);
+            }
+        }
+    }
+
     /// Copies every loaded plugin's internal state into the project (so it is saved with it).
     pub fn capture_plugin_states(&mut self) {
         let mut states: Vec<(Id, Option<Id>, Vec<u8>)> = Vec::new();
@@ -537,6 +689,91 @@ impl State {
         self.ui.channel = Some(id);
     }
 
+    /// Starts separating the selected audio clip into drums / harmonic / centre stems (background).
+    pub fn separate_selected(&mut self) {
+        let clip = self.session.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| self.ui.clips.contains(&c.id) && c.audio().is_some()).cloned();
+        let Some(clip) = clip else {
+            self.toast("Select an audio clip first", Severity::Info);
+            return;
+        };
+        if self.ui.stem_job.is_some() {
+            return;
+        }
+        let a = clip.audio().cloned().unwrap();
+        let cache = self.session.cache.clone();
+        let rate = self.audio.rate();
+        let dir = self.recordings_dir();
+        let name = clip.name.clone();
+        let start = clip.start;
+        self.ui.status = format!("Separating {name}…");
+        self.ui.stem_job = Some(redhive_client_framework::runtime::Promise::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let d = cache.get(&a.source, rate).map_err(|e| e.to_string())?;
+                let off = ((a.offset * d.rate as f64) as usize).min(d.frames());
+                let part = dragon_engine::samples::AudioData { rate: d.rate, l: d.l[off..].to_vec(), r: d.r[off..].to_vec(), ..Default::default() };
+                let s = dragon_engine::analysis::separate_stems(&part);
+                let mut files = Vec::new();
+                for (label, data) in [("Drums", &s.drums), ("Harmonic", &s.harmonic), ("Centre", &s.center)] {
+                    let f = dir.join(format!("{} – {label}.wav", sanitize(&name)));
+                    dragon_engine::samples::write_wav(&f, &data.l, &data.r, data.rate, dragon_engine::samples::BitDepth::Float32, false, false).map_err(|e| e.to_string())?;
+                    files.push((label.to_string(), f));
+                }
+                Ok((start, name, files))
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()))
+        }));
+    }
+
+    pub fn poll_stem_job(&mut self) {
+        let Some(r) = redhive_client_framework::runtime::poll(&mut self.ui.stem_job) else { return };
+        match r {
+            Ok((start, name, files)) => {
+                for (label, f) in files {
+                    let t = self.session.edit("Add stem track", |p| p.add_track(&format!("{name} {label}")));
+                    self.add_audio_clip(&f, Some(t), start);
+                }
+                let ids = self.ui.clips.clone();
+                self.session.edit("Mute source of stems", |p| {
+                    for t in p.tracks.iter_mut() {
+                        for c in t.clips.iter_mut().filter(|c| ids.contains(&c.id)) {
+                            c.muted = true;
+                        }
+                    }
+                });
+                self.toast("Separated into drums, harmonic and centre stems (source clip muted)", Severity::Success);
+            }
+            Err(e) => self.toast(format!("Stem separation failed: {e}"), Severity::Error),
+        }
+        self.ui.status.clear();
+    }
+
+    /// Puts a video on the timeline at beat 0 and its soundtrack on a new audio track.
+    pub fn import_video(&mut self, path: &Path) {
+        let v = match dragon_engine::video::probe(path) {
+            Ok(v) => v,
+            Err(e) => {
+                self.toast(format!("Cannot open video: {e}"), Severity::Error);
+                return;
+            }
+        };
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let wav = self.recordings_dir().join(format!("{} (video audio).wav", sanitize(&stem)));
+        let has_audio = match dragon_engine::video::extract_audio(path, &wav) {
+            Ok(b) => b,
+            Err(e) => {
+                self.toast(format!("Video audio: {e}"), Severity::Warning);
+                false
+            }
+        };
+        self.session.edit("Import video", |p| p.video = Some(v));
+        if has_audio {
+            let t = self.session.edit("Video audio track", |p| p.add_track(&format!("{stem} (audio)")));
+            self.add_audio_clip(&wav, Some(t), 0.0);
+        }
+        self.ctx.open("dragon.video", None);
+    }
+
     pub fn import_midi(&mut self, path: &Path) {
         match dragon_engine::midi::import(path) {
             Ok(m) => {
@@ -571,10 +808,16 @@ impl State {
     /// Applies an incoming MIDI message: notes to the selected channel, CC to mappings / MIDI learn.
     pub fn handle_midi(&mut self) {
         let Some(m) = &self.midi else { return };
-        let msgs: Vec<_> = m.rx.try_iter().collect();
+        let msgs: Vec<_> = m.rx.try_iter().map(|t| (t, m.all_ports.get(t.port).cloned())).collect();
         let mut mapped = false;
-        for t in msgs {
+        for (t, port) in msgs {
             use dragon_engine::midi::MidiMessage as M;
+            if port.is_some() && port == self.settings.mackie_input {
+                if let Some(a) = dragon_engine::midi::mackie(t.message) {
+                    mapped |= self.apply_mcu(a);
+                }
+                continue;
+            }
             match t.message {
                 M::NoteOn { note, velocity, .. } if velocity > 0 => self.live_note(true, note, velocity as f32 / 127.0),
                 M::NoteOn { note, .. } | M::NoteOff { note, .. } => self.live_note(false, note, 0.0),
@@ -605,6 +848,21 @@ impl State {
         }
     }
 }
+
+impl State {
+    /// Services open native plugin editors (window events, plugin timers); drops the closed ones.
+    pub fn pump_plugin_editors(&mut self) -> bool {
+        let pool = &self.session.pool;
+        self.ui.native_editors.retain(|(owner, ins)| match ins {
+            Some(i) => pool.effect_by_id(*i).map(|e| e.lock().map(|mut g| g.idle()).unwrap_or(false)).unwrap_or(false),
+            None => pool.instrument_by_id(*owner).map(|e| e.lock().map(|mut g| g.idle()).unwrap_or(false)).unwrap_or(false),
+        });
+        !self.ui.native_editors.is_empty()
+    }
+}
+
+/// Result of a stem-separation job: source clip start, clip name and the stem files.
+pub type StemResult = Result<(f64, String, Vec<(String, PathBuf)>), String>;
 
 /// Frames per waveform overview bucket.
 pub const WAVE_BUCKET: usize = 256;
@@ -772,5 +1030,24 @@ mod tests {
         let window = |s: usize| mix.l[s..s + 2000].iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(window(0) > 0.2 && window(clap_at) > 0.1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn control_surface_moves_faders_and_toggles_tracks() {
+        use dragon_engine::midi::McuAction;
+        let mut st = State::new(redhive_client_framework::AppContext::new("en"), Settings { show_splash: false, ..Settings::default() });
+        let t0 = st.session.project.tracks[0].clone();
+        assert!(st.apply_mcu(McuAction::Fader { strip: 0, value: 0.75 }));
+        st.session.end_gesture();
+        let vol = st.session.project.mixer.get(t0.mixer).unwrap().volume;
+        assert!((vol - 1.0).abs() < 1e-3, "unity at 75 %: {vol}");
+        st.apply_mcu(McuAction::Mute(0));
+        assert!(st.session.project.track(t0.id).unwrap().muted);
+        st.apply_mcu(McuAction::Fader { strip: 8, value: 0.0 });
+        st.session.end_gesture();
+        assert_eq!(st.session.project.mixer.master.volume, 0.0);
+        // Banking past the last track is clamped.
+        st.apply_mcu(McuAction::BankRight);
+        assert_eq!(st.mcu.bank, 0, "four tracks fit in the first bank");
     }
 }

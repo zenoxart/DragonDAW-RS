@@ -25,6 +25,8 @@ pub fn view_meta(key: &str) -> Option<(&'static str, ViewRole, DockSide)> {
         "dragon.piano" => ("Piano roll", ViewRole::Document, DockSide::Left),
         "dragon.mixer" => ("Mixer", ViewRole::ToolWindow, DockSide::Bottom),
         "dragon.master" => ("Mastering", ViewRole::ToolWindow, DockSide::Bottom),
+        "dragon.launcher" => ("Performance", ViewRole::Document, DockSide::Left),
+        "dragon.video" => ("Video", ViewRole::ToolWindow, DockSide::Right),
         "dragon.automation" => ("Automation", ViewRole::ToolWindow, DockSide::Bottom),
         "dragon.browser" => ("Browser", ViewRole::ToolWindow, DockSide::Left),
         "dragon.project" => ("Project", ViewRole::ToolWindow, DockSide::Right),
@@ -124,6 +126,8 @@ impl DragonApp {
             }
         }
         self.st.handle_midi();
+        self.st.mcu_feedback();
+        self.st.poll_stem_job();
         // Recompile at most every 40 ms while dragging; immediately otherwise.
         if !self.st.session.in_gesture() || self.last_compile.elapsed().as_millis() >= 40 {
             self.last_compile = std::time::Instant::now();
@@ -133,6 +137,9 @@ impl DragonApp {
         }
         // Finish background plugin scans.
         views::plugins::poll_scan(&mut self.st);
+        if self.st.pump_plugin_editors() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         self.st.autosave_tick();
         self.st.audio.meters().decay(0.86);
     }
@@ -184,6 +191,8 @@ impl egui_dock::TabViewer for Viewer<'_> {
             "dragon.piano" => views::piano_roll::show(ui, st),
             "dragon.mixer" => views::mixer::show(ui, st),
             "dragon.master" => views::master::show(ui, st),
+            "dragon.launcher" => views::launcher::show(ui, st),
+            "dragon.video" => views::video::show(ui, st),
             "dragon.automation" => views::automation::show(ui, st),
             "dragon.browser" => views::browser::show(ui, st),
             "dragon.project" => views::project::show(ui, st),

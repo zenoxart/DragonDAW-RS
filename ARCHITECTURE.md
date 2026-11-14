@@ -38,17 +38,18 @@
 | `time` | Tempo map with tempo changes (beats ↔ seconds ↔ frames), bar/beat and timecode formatting |
 | `samples` | Decoding (symphonia), resampling (rubato), a shared sample cache, waveform peaks, WAV writing with TPDF dither |
 | `dsp` | dB helpers, pan law, smoothers, biquads, SVF, DAHDSR envelopes, delay lines, LFOs, envelope followers, BS.1770 loudness and true peak, WSOLA time-stretch / pitch-shift |
-| `effects` | The 19 stock effects behind one `Effect` trait (parameters, latency, gain reduction, tempo, sidechain) |
+| `effects` | The 20 stock effects behind one `Effect` trait (parameters, latency, gain reduction, tempo, sidechain, plugin editor idle); `effects::pitch` has YIN pitch detection, the granular pitch shifter and Dragon Tune |
 | `instruments` | Sampler, synth and drum pads behind `InstrumentVoice`, plus the built-in Dragon Kit |
-| `render` | `Pool`, `Song::compile`, `Renderer`, meters, live events (notes, previews), the offline renderer |
+| `render` | `Pool`, `Song::compile`, `Renderer`, meters, live events (notes, previews, clip-launcher launches), the offline renderer |
 | `edit` | Split, duplicate, delete, shuffle, normalise, takes and comping, scales, quantize, legato, transpose, chords, progressions, arpeggiator, strum, flam, humanize, steps → notes, slicing to the rack |
 | `history` | Snapshot undo / redo with labels and a dirty flag |
 | `project_io` | Save (relative paths, numbered backups), load and repair, missing files, collect files, autosave with crash detection, recent projects |
-| `export` | Mix, stems, WAV / FLAC, loudness / peak normalisation, bounce-in-place, all with a plugin-aware pool |
-| `midi` | MIDI message parsing, CC mapping, SMF import / export, the retro-capture buffer |
-| `analysis` | BPM (onset autocorrelation) and key (chroma + key profiles) detection |
+| `export` | Mix, stems, WAV / FLAC / MP3 / Ogg, loudness / peak normalisation, bounce-in-place, all with a plugin-aware pool |
+| `midi` | MIDI message parsing, CC mapping, SMF import / export, the retro-capture buffer, Mackie Control decoding and feedback messages |
+| `analysis` | BPM (onset autocorrelation) and key (chroma + key profiles) detection, audio-to-MIDI, HPSS + centre stem separation |
 | `device` | Output stream with a command channel, input capture into a recorder thread, recorded takes with latency, shared transport, MIDI inputs |
-| `plugins` | Folder scan, isolated scan, CLAP host, VST3 host, `Host` as the pool's plugin factory |
+| `plugins` | Folder scan, isolated scan, CLAP host, VST3 host, native editor windows (`window`), `Host` as the pool's plugin factory |
+| `video` | ffprobe / ffmpeg wrappers: probe, frame at a time, soundtrack extraction, muxing the mix into the video |
 
 ## Real-time path
 
@@ -71,11 +72,14 @@ edited in the host are re-applied on every compile. Plugin state is captured int
 
 - **CLAP**: `clap_entry` → plugin factory → `create_plugin` / `init` / `activate`. Audio ports, params
   (plain ↔ normalised), latency, state and GUI extensions. Notes and parameter values go out as input events.
-  The GUI opens as a floating window.
+  The GUI is embedded into a native host window (`set_parent`); the host implements the gui, timer-support and
+  posix-fd-support extensions and services them from the UI thread. Floating windows are the fallback.
 - **VST3**: `GetPluginFactory` → `IComponent` + `IAudioProcessor`. The `IEditController` is either the same
   object or a separate class, connected through `IConnectionPoint`. The host implements `IHostApplication`,
   `IParameterChanges` / `IParamValueQueue`, `IEventList` and an `IBStream` memory stream. Component and
-  controller state are packed into one blob in the project.
+  controller state are packed into one blob in the project. Editors attach to a native host window through an
+  `IPlugFrame` that also implements the Linux `IRunLoop` (fd handlers and timers, serviced from the UI thread).
+- **Sidechain**: a second CLAP input port or a VST3 aux input bus receives the insert's sidechain signal.
 - **Scanning** runs `dragon scan-plugin` in a child process per file, with a timeout. Loaded libraries are never
   unloaded while the app runs.
 

@@ -10,6 +10,7 @@
 
 pub mod clap;
 pub mod vst3;
+pub mod window;
 
 use crate::effects::Effect;
 use crate::instruments::InstrumentVoice;
@@ -189,13 +190,28 @@ pub(crate) enum HostEvent {
 pub(crate) struct Scratch {
     pub in_l: Vec<f32>,
     pub in_r: Vec<f32>,
+    pub sc_l: Vec<f32>,
+    pub sc_r: Vec<f32>,
     pub out_l: Vec<f32>,
     pub out_r: Vec<f32>,
 }
 
 impl Scratch {
     pub fn new(n: usize) -> Self {
-        Scratch { in_l: vec![0.0; n], in_r: vec![0.0; n], out_l: vec![0.0; n], out_r: vec![0.0; n] }
+        Scratch { in_l: vec![0.0; n], in_r: vec![0.0; n], sc_l: vec![0.0; n], sc_r: vec![0.0; n], out_l: vec![0.0; n], out_r: vec![0.0; n] }
+    }
+    /// Copies the sidechain signal (or silence) into the sidechain buffers.
+    pub fn set_sidechain(&mut self, n: usize, sc: Option<(&[f32], &[f32])>) {
+        match sc {
+            Some((a, b)) => {
+                self.sc_l[..n].copy_from_slice(&a[..n]);
+                self.sc_r[..n].copy_from_slice(&b[..n]);
+            }
+            None => {
+                self.sc_l[..n].fill(0.0);
+                self.sc_r[..n].fill(0.0);
+            }
+        }
     }
     pub fn ensure(&mut self, n: usize) {
         if self.in_l.len() < n {

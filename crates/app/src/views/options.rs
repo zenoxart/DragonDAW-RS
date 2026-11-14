@@ -4,7 +4,7 @@
 use crate::audio::Audio;
 use crate::state::State;
 use crate::theme;
-use dragon_engine::device::{self, MidiInputs};
+use dragon_engine::device;
 use egui::{RichText, Ui};
 
 pub fn show(ui: &mut Ui, st: &mut State) {
@@ -86,9 +86,35 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         if sel != st.settings.device.midi_inputs || ui.button("Reconnect MIDI").clicked() {
             st.settings.device.midi_inputs = sel;
-            st.midi = None;
-            st.midi = Some(MidiInputs::open(&st.settings.device.midi_inputs, Some(st.audio.shared_transport())));
+            st.open_midi();
             st.save_settings();
+        }
+
+        ui.separator();
+        ui.heading("Control surface (Mackie Control)");
+        ui.label(RichText::new("X-Touch, iCON, FaderPort and other MCU-compatible surfaces: faders, V-pots (pan), mute / solo / arm / select, transport, loop and click, banks of 8 tracks; motor faders and LEDs follow the project when an output is set.").small().color(theme::TEXT_DIM));
+        let mut mi = st.settings.mackie_input.clone();
+        let mut mo = st.settings.mackie_output.clone();
+        egui::ComboBox::from_label("MCU input").selected_text(mi.clone().unwrap_or("off".into())).show_ui(ui, |ui| {
+            ui.selectable_value(&mut mi, None, "off");
+            for p in &ports {
+                ui.selectable_value(&mut mi, Some(p.clone()), p);
+            }
+        });
+        egui::ComboBox::from_label("MCU output (feedback)").selected_text(mo.clone().unwrap_or("off".into())).show_ui(ui, |ui| {
+            ui.selectable_value(&mut mo, None, "off");
+            for p in device::midi_outputs() {
+                ui.selectable_value(&mut mo, Some(p.clone()), p);
+            }
+        });
+        if mi != st.settings.mackie_input || mo != st.settings.mackie_output {
+            st.settings.mackie_input = mi;
+            st.settings.mackie_output = mo;
+            st.open_midi();
+            st.save_settings();
+        }
+        if st.settings.mackie_input.is_some() {
+            ui.label(format!("Bank: tracks {}–{}", st.mcu.bank + 1, st.mcu.bank + 8));
         }
 
         ui.separator();
@@ -144,6 +170,6 @@ fn restart_audio(st: &mut State) {
     st.audio = Audio::Null(crate::audio::NullEngine::start(song.clone()), "restarting".into());
     st.audio = Audio::start(&st.settings.device, song);
     st.session.force_recompile();
-    st.midi = Some(MidiInputs::open(&st.settings.device.midi_inputs, Some(st.audio.shared_transport())));
+    st.open_midi();
     st.ui.status = st.audio.describe();
 }

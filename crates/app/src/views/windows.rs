@@ -278,8 +278,16 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
                 Ok(e) => e.lock().unwrap().editor(true),
                 Err(i) => i.lock().unwrap().editor(true),
             };
-            if !ok {
-                st.toast("This plugin has no floating editor the host can open – use the generic controls", redhive_contracts::ui::Severity::Info);
+            if ok {
+                let key = match slot {
+                    PluginSlot::Insert(m, i) => (m, Some(i)),
+                    PluginSlot::Channel(c) => (c, None),
+                };
+                if !st.ui.native_editors.contains(&key) {
+                    st.ui.native_editors.push(key);
+                }
+            } else {
+                st.toast("This plugin has no editor the host can open on this platform – use the generic controls", redhive_contracts::ui::Severity::Info);
             }
         }
         if ui.button("Store state in project").on_hover_text("Saves the plugin's full internal state (also done automatically on save)").clicked() {

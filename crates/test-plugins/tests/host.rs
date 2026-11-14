@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 
 fn built_library() -> PathBuf {
     // tests/ binary lives in target/<profile>/deps; the cdylib is in target/<profile>.
+    // `cargo test` rebuilds the cdylib in target/<profile>/deps (the copy one level up is only refreshed by
+    // `cargo build`), so prefer the deps copy.
     let exe = std::env::current_exe().unwrap();
-    let dir = exe.parent().unwrap().parent().unwrap();
+    let deps = exe.parent().unwrap();
     let name = if cfg!(target_os = "windows") {
         "dragon_test_plugins.dll"
     } else if cfg!(target_os = "macos") {
@@ -17,9 +19,8 @@ fn built_library() -> PathBuf {
     } else {
         "libdragon_test_plugins.so"
     };
-    let p = dir.join(name);
-    assert!(p.exists(), "cdylib not built at {}", p.display());
-    p
+    let p = [deps.join(name), deps.parent().unwrap().join(name)].into_iter().find(|p| p.exists());
+    p.unwrap_or_else(|| panic!("cdylib {name} not built in {}", deps.display()))
 }
 
 /// Installs the library as a `.clap` file and a `.vst3` bundle in a temp folder.
@@ -151,6 +152,64 @@ fn vst3_effect_params_and_state() {
     let (mut l, mut r) = (vec![1.0f32; 32], vec![1.0f32; 32]);
     Effect::process(&mut q, &mut l, &mut r, None);
     assert!((l[0] - 0.5).abs() < 1e-6, "restored normalized 0.25 → gain 0.5");
+}
+
+#[test]
+fn sidechain_reaches_clap_and_vst3_plugins() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (clap, bundle) = install(tmp.path());
+    let c = scan_file(PluginFormat::Clap, &clap).unwrap().remove(0);
+    let v = scan_file(PluginFormat::Vst3, &bundle).unwrap().remove(0);
+    let mut cp = ClapPlugin::load(&c.to_ref(), 48000.0, 512, false).unwrap();
+    let mut vp = Vst3Plugin::load(&v.to_ref(), 48000.0, 512, false).unwrap();
+    for (name, p) in [("clap", &mut cp as &mut dyn Effect), ("vst3", &mut vp as &mut dyn Effect)] {
+        // No sidechain: unity.
+        let (mut l, mut r) = (vec![0.5f32; 128], vec![0.5f32; 128]);
+        p.process(&mut l, &mut r, None);
+        assert!((l[0] - 0.5).abs() < 1e-6);
+        // Sidechain at 0.5 ducks by half, at 1.0 silences.
+        let half = vec![0.5f32; 128];
+        let (mut l, mut r) = (vec![0.5f32; 128], vec![0.5f32; 128]);
+        p.process(&mut l, &mut r, Some((&half, &half)));
+        assert!((l[0] - 0.25).abs() < 1e-6, "{name}: {}", l[0]);
+        let full = vec![1.0f32; 128];
+        let (mut l, mut r) = (vec![0.5f32; 128], vec![0.5f32; 128]);
+        p.process(&mut l, &mut r, Some((&full, &full)));
+        assert!(l[0].abs() < 1e-6 && r[100].abs() < 1e-6);
+    }
+}
+
+/// Embedded editors: needs an X server (set DISPLAY, e.g. Xvfb); skipped otherwise.
+#[cfg(target_os = "linux")]
+#[test]
+fn editors_embed_resize_and_run_timers() {
+    if std::env::var_os("DISPLAY").is_none() {
+        eprintln!("skipped: no DISPLAY");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let (clap, bundle) = install(tmp.path());
+    let c = scan_file(PluginFormat::Clap, &clap).unwrap().remove(0);
+    let v = scan_file(PluginFormat::Vst3, &bundle).unwrap().remove(0);
+    let mut cp = ClapPlugin::load(&c.to_ref(), 48000.0, 512, false).unwrap();
+    let mut vp = Vst3Plugin::load(&v.to_ref(), 48000.0, 512, false).unwrap();
+    for (name, p) in [("clap", &mut cp as &mut dyn Effect), ("vst3", &mut vp as &mut dyn Effect)] {
+        assert!(p.editor(true), "{name}: editor opens");
+        for _ in 0..20 {
+            assert!(p.idle(), "{name}: editor stays open");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // The plugin's timer saw the host-applied resize and wrote 0.75 into its parameter.
+        let v = p.plugin_param(0).unwrap();
+        assert!((v - 0.75).abs() < 1e-6, "{name}: parameter {v}");
+        p.editor(false);
+        assert!(!p.idle(), "{name}: closed");
+    }
+    // The embedded child window lives inside the host's editor window.
+    assert!(Effect::editor(&mut cp, true));
+    assert_eq!(cp.editor_window().unwrap().x11_children(), 1);
+    assert!(Effect::editor(&mut vp, true));
+    assert_eq!(vp.editor_window().unwrap().x11_children(), 1);
 }
 
 #[test]

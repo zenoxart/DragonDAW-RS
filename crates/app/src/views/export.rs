@@ -20,6 +20,7 @@ pub struct ExportDialog {
     progress: Arc<AtomicU32>,
     rx: Option<mpsc::Receiver<Result<ExportReport, String>>>,
     result: Option<Result<ExportReport, String>>,
+    with_video: bool,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -34,7 +35,7 @@ impl ExportDialog {
         let name = if p.meta.name.is_empty() { "Untitled".to_string() } else { p.meta.name.clone() };
         let dir = dirs_documents().join("DragonDAW Exports");
         let path = if stems { dir.join(format!("{name} stems")) } else { dir.join(format!("{name}.wav")) };
-        ExportDialog { opts: ExportOptions { stems, ..Default::default() }, path, norm: Norm::None, peak: -0.3, lufs: p.loudness_target, progress: Arc::new(AtomicU32::new(0)), rx: None, result: None }
+        ExportDialog { opts: ExportOptions { stems, ..Default::default() }, path, norm: Norm::None, peak: -0.3, lufs: p.loudness_target, progress: Arc::new(AtomicU32::new(0)), rx: None, result: None, with_video: p.video.is_some() && !stems }
     }
 
     /// Shows the dialog; returns `false` when it should close.
@@ -83,8 +84,8 @@ impl ExportDialog {
                 });
                 ui.end_row();
                 ui.label("Format");
-                ui.horizontal(|ui| {
-                    for (f, n) in [(ExportFormat::Wav(BitDepth::Int16), "WAV 16"), (ExportFormat::Wav(BitDepth::Int24), "WAV 24"), (ExportFormat::Wav(BitDepth::Float32), "WAV 32f"), (ExportFormat::Flac16, "FLAC 16"), (ExportFormat::Flac24, "FLAC 24")] {
+                ui.horizontal_wrapped(|ui| {
+                    for (f, n) in [(ExportFormat::Wav(BitDepth::Int16), "WAV 16"), (ExportFormat::Wav(BitDepth::Int24), "WAV 24"), (ExportFormat::Wav(BitDepth::Float32), "WAV 32f"), (ExportFormat::Flac16, "FLAC 16"), (ExportFormat::Flac24, "FLAC 24"), (ExportFormat::Mp3(320), "MP3 320"), (ExportFormat::Mp3(192), "MP3 192"), (ExportFormat::Ogg(0.6), "OGG")] {
                         ui.selectable_value(&mut self.opts.format, f, n);
                     }
                 });
@@ -147,6 +148,11 @@ impl ExportDialog {
                     ui.checkbox(&mut self.opts.stems, "stems");
                 });
                 ui.end_row();
+                if st.session.project.video.is_some() && !self.opts.stems {
+                    ui.label("Video");
+                    ui.checkbox(&mut self.with_video, "also write the video with this mix (.mp4, picture copied)");
+                    ui.end_row();
+                }
             });
             ui.separator();
             ui.horizontal(|ui| {
@@ -174,11 +180,20 @@ impl ExportDialog {
         let cache = st.session.cache.clone();
         let opts = self.opts.clone();
         let progress = self.progress.clone();
+        let video = if self.with_video && !self.opts.stems { project.video.clone() } else { None };
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
             let r = dragon_engine::export::export_with(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed));
-            let _ = tx.send(r.map_err(|e| e.to_string()));
+            let r = r.map_err(|e| e.to_string()).and_then(|mut rep| {
+                if let Some(v) = video {
+                    let out = path.with_extension("mp4");
+                    dragon_engine::video::mux(&v, &path, &out).map_err(|e| e.to_string())?;
+                    rep.files.push(out);
+                }
+                Ok(rep)
+            });
+            let _ = tx.send(r);
         });
     }
 }

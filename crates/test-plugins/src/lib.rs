@@ -12,3 +12,4 @@
 
 pub mod clap_plugins;
 pub mod vst3_plugin;
+mod x11child;

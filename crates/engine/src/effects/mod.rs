@@ -7,6 +7,7 @@ pub use color::DragonParticle;
 mod dynamics;
 mod eq;
 mod modulation;
+pub mod pitch;
 mod reverb;
 
 pub use eq::{ParametricEq, EQ_BANDS};
@@ -132,6 +133,11 @@ pub trait Effect: Send {
     fn editor(&mut self, _open: bool) -> bool {
         false
     }
+    /// Services an open plugin editor (window events, plugin timers). Called from the UI thread every frame;
+    /// returns `false` when no editor is open (any more).
+    fn idle(&mut self) -> bool {
+        false
+    }
 }
 
 /// A parameter of a hosted plugin (values are normalized 0 … 1 on the host side).
@@ -188,6 +194,7 @@ pub fn registry() -> &'static [EffectDef] {
             color::utility_def(),
             color::imager_def(),
             color::dragon_particle_def(),
+            pitch::pitch_correct_def(),
         ]
     })
 }
