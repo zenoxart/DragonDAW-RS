@@ -1,0 +1,14 @@
+[package]
+name = "dragon-cli"
+description = "Headless Dragon DAW tools: render a project to WAV/FLAC, export stems, measure loudness, scan plugins."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dragon"
+path = "src/main.rs"
+
+[dependencies]
+dragon-engine = { workspace = true, features = ["plugins"] }
+serde_json.workspace = true

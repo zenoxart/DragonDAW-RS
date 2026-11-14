@@ -1,15 +1,17 @@
 //! Navigation: the view registry, the most-recently-used module list and the navigation wheel
 //! (hold **Ctrl+Tab**: inner ring = modules, outer ring = their views, Alt+Tab semantics).
 
-use redhive_contracts::api::has_permission;
-use redhive_contracts::viewpack::{DockSide, ViewRole, ViewSpec};
+use redhive_contracts::ui::has_permission;
+use redhive_contracts::ui::{DockSide, ViewRole};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum ViewSource {
-    Module(Box<ViewSpec>),
+    /// Built into the shell (output, settings, …).
     Shell,
+    /// A Dragon DAW editor (playlist, mixer, …).
+    App,
 }
 
 #[derive(Debug, Clone)]
@@ -39,21 +41,6 @@ impl NavigationRegistry {
     pub fn register(&mut self, entry: ViewEntry) {
         self.views.insert(entry.key.clone(), entry);
         self.revision += 1;
-    }
-
-    pub fn register_module_view(&mut self, module_id: &str, spec: &ViewSpec) {
-        self.register(ViewEntry {
-            key: spec.key.clone(),
-            title: spec.title.clone(),
-            icon: spec.icon.clone(),
-            role: spec.role,
-            dock: spec.dock,
-            home: spec.home,
-            permission: spec.permission.clone(),
-            order: spec.order,
-            owner: module_id.to_string(),
-            source: ViewSource::Module(Box::new(spec.clone())),
-        });
     }
 
     pub fn unregister_owner(&mut self, owner: &str) {

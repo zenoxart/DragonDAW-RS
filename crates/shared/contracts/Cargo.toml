@@ -1,15 +1,12 @@
 [package]
 name = "redhive-contracts"
-description = "Red Hive wire contracts shared by client and backend: platform API, notifications, commands, modules, view packs and workflows."
+description = "Red Hive contracts shared by the client framework and the app: commands, key gestures, text keys and dock roles."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 redhive-monads.workspace = true
-chrono.workspace = true
-semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
-regex-lite = "0.1"

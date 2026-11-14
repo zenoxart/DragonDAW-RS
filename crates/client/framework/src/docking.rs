@@ -3,7 +3,7 @@
 
 use crate::context::Paths;
 use egui_dock::{DockState, NodeIndex, SurfaceIndex};
-use redhive_contracts::viewpack::{DockSide, ViewRole};
+use redhive_contracts::ui::{DockSide, ViewRole};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

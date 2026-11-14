@@ -3,12 +3,10 @@
 //! in-process queues (commands to run, views to open, executed commands). Everything a module registers is
 //! recorded with the module id as owner, so unloading removes it in one call.
 
-use crate::api::ApiClient;
 use crate::commands::CommandPool;
 use crate::i18n::LanguageManager;
 use crate::icons::IconCatalog;
 use crate::navigation::NavigationRegistry;
-use crate::security::Session;
 use crate::shortcuts::ShortcutManager;
 use chrono::{DateTime, Local};
 use serde::de::DeserializeOwned;
@@ -23,16 +21,24 @@ pub struct Paths {
     pub config: PathBuf,
     /// Local data (layouts, window placement – per machine, monitors differ).
     pub local: PathBuf,
-    /// Downloaded module packages.
-    pub modules: PathBuf,
+    /// Default folder for projects, recordings and exports.
+    pub projects: PathBuf,
+    /// Autosaves and crash-recovery snapshots.
+    pub autosave: PathBuf,
 }
 
 impl Paths {
     pub fn new() -> Self {
-        let base_config = dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("RedHive");
-        let base_local = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("RedHive");
-        let p = Paths { config: base_config, modules: base_local.join("Modules"), local: base_local };
-        for d in [&p.config, &p.local, &p.modules, &p.local.join("Layout")] {
+        Self::for_app("DragonDAW")
+    }
+
+    /// Paths for an app name (`<config>/<app>`, `<local data>/<app>`, `<documents>/<app> Projects`).
+    pub fn for_app(app: &str) -> Self {
+        let base_config = dirs::config_dir().unwrap_or_else(std::env::temp_dir).join(app);
+        let base_local = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join(app);
+        let projects = dirs::document_dir().unwrap_or_else(|| base_local.clone()).join(format!("{app} Projects"));
+        let p = Paths { config: base_config, autosave: base_local.join("Autosave"), projects, local: base_local };
+        for d in [&p.config, &p.local, &p.autosave, &p.projects, &p.local.join("Layout")] {
             let _ = std::fs::create_dir_all(d);
         }
         p
@@ -116,7 +122,7 @@ impl LogManager {
 #[derive(Debug, Clone)]
 pub struct Toast {
     pub text: String,
-    pub severity: redhive_contracts::notifications::Severity,
+    pub severity: redhive_contracts::ui::Severity,
     pub until: std::time::Instant,
     pub navigate: Option<(String, Option<String>)>,
 }
@@ -124,14 +130,14 @@ pub struct Toast {
 /// The root context.
 pub struct AppContext {
     pub paths: Paths,
-    pub api: ApiClient,
     pub lang: LanguageManager,
     pub icons: IconCatalog,
     pub commands: CommandPool,
     pub shortcuts: ShortcutManager,
     pub navigation: NavigationRegistry,
     pub log: LogManager,
-    pub session: Option<Session>,
+    /// Granted permissions. The offline app grants everything (`*`).
+    pub permissions: Vec<String>,
     pub toasts: Vec<Toast>,
     /// Commands queued for execution (from menus, palette, shortcuts, the wheel, deep links).
     pub pending_commands: VecDeque<(String, serde_json::Value)>,
@@ -146,14 +152,13 @@ impl AppContext {
         let paths = Paths::new();
         let shortcuts = ShortcutManager::load(&paths);
         AppContext {
-            api: ApiClient::default(),
             lang: LanguageManager::new(language),
             icons: IconCatalog::default(),
             commands: CommandPool::default(),
             shortcuts,
             navigation: NavigationRegistry::default(),
             log: LogManager::default(),
-            session: None,
+            permissions: vec!["*".to_string()],
             toasts: Vec::new(),
             pending_commands: VecDeque::new(),
             executed_commands: Vec::new(),
@@ -168,7 +173,7 @@ impl AppContext {
     }
 
     pub fn has(&self, permission: &str) -> bool {
-        self.session.as_ref().is_some_and(|s| s.has(permission))
+        redhive_contracts::ui::has_permission(&self.permissions, permission)
     }
 
     /// Queues a command (executed by the shell at the start of the next frame).
@@ -181,13 +186,13 @@ impl AppContext {
         self.open_requests.push_back((key.to_string(), parameter));
     }
 
-    pub fn toast(&mut self, text: impl Into<String>, severity: redhive_contracts::notifications::Severity) {
+    pub fn toast(&mut self, text: impl Into<String>, severity: redhive_contracts::ui::Severity) {
         self.toasts.push(Toast { text: text.into(), severity, until: std::time::Instant::now() + std::time::Duration::from_secs(6), navigate: None });
     }
 
     pub fn toast_error(&mut self, e: &redhive_monads::Error) {
         let text = self.lang.error(e);
         self.log.error("ui", format!("{} ({})", text, e.code));
-        self.toast(text, redhive_contracts::notifications::Severity::Error);
+        self.toast(text, redhive_contracts::ui::Severity::Error);
     }
 }

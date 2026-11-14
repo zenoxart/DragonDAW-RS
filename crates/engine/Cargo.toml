@@ -1,0 +1,33 @@
+[package]
+name = "dragon-engine"
+description = "Dragon DAW audio engine: project model, sample-accurate renderer, mixer graph, effects, instruments, automation, recording, MIDI, export and plugin hosting (CLAP, VST3)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Real-time audio and MIDI devices (cpal, midir). Disable for headless builds.
+device = ["dep:cpal", "dep:midir"]
+# Third-party plugin hosting (CLAP and VST3 via dynamic libraries).
+plugins = ["dep:libloading", "dep:clap-sys"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+crossbeam-channel = "0.5"
+symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis", "isomp4", "aac", "adpcm", "aiff"] }
+hound = "3.5"
+rubato = "0.16"
+rustfft = "6"
+midly = "0.5"
+flacenc = "0.4"
+cpal = { version = "0.15", optional = true }
+midir = { version = "0.10", optional = true }
+libloading = { version = "0.8", optional = true }
+clap-sys = { version = "0.5", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

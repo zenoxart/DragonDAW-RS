@@ -33,7 +33,7 @@ impl LanguageManager {
     }
 
     /// Built-in texts: lines `scope:key = text`.
-    fn register_scope(&mut self, owner: &str, lang: &str, table: &str) {
+    pub fn register_scope(&mut self, owner: &str, lang: &str, table: &str) {
         for line in table.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
             if let Some((k, v)) = line.split_once(" = ") {
                 self.texts.entry(lang.to_string()).or_default().insert(k.trim().to_string(), v.trim().replace("\\n", "\n"));

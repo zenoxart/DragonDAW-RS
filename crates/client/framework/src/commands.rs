@@ -5,9 +5,8 @@
 //! the same registry. A module's commands are removed in one call when it unloads; ids stay stable across
 //! hot-swaps, so shortcut overrides and menu positions survive updates.
 
-use redhive_contracts::api::has_permission;
+use redhive_contracts::ui::has_permission;
 use redhive_contracts::commands::{CommandDescriptor, CommandGroupDescriptor, CommandTreeNode};
-use redhive_contracts::viewpack::ActionSpec;
 use redhive_contracts::{IconRef, TextKey};
 use std::collections::BTreeMap;
 
@@ -18,8 +17,8 @@ pub enum CommandHandler {
     Shell,
     /// Opens a view.
     Navigate(String),
-    /// Runs a module action (form → HTTP). `view` is set for row actions (they need the selected row).
-    Action { module_id: String, view: Option<String>, action: ActionSpec },
+    /// Handled by the app (Dragon DAW) – the id says what to do.
+    App,
 }
 
 #[derive(Debug, Clone)]

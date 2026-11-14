@@ -1,12 +1,9 @@
 //! The UI kit used by the host and by rendered view packs (Golden Hive's `UiKit`, `DataList`, `InputForm`,
 //! `SimpleChart`).
 
-pub mod chart;
-pub mod form;
-pub mod format;
 
 use crate::context::AppContext;
-use redhive_contracts::notifications::Severity;
+use redhive_contracts::ui::Severity;
 
 /// A button with icon, translated label and a rich tooltip (label + shortcut, description, disabled reason).
 pub fn command_button(ui: &mut egui::Ui, ctx: &AppContext, icon: &str, label_key: &str, command_id: Option<&str>, enabled: bool) -> egui::Response {
