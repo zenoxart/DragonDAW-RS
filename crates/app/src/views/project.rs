@@ -89,6 +89,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
 
         ui.separator();
+        ui.heading("Surround");
+        let cur = st.session.project.surround;
+        ui.horizontal(|ui| {
+            let mut f = cur;
+            ui.selectable_value(&mut f, None, "Stereo");
+            ui.selectable_value(&mut f, Some(SurroundFormat::S5_1), "5.1");
+            ui.selectable_value(&mut f, Some(SurroundFormat::S7_1), "7.1");
+            if f != cur {
+                st.session.edit("Surround format", |p| p.surround = f);
+            }
+        });
+        if cur.is_some() {
+            ui.label(RichText::new("Each top-level mixer channel gets a surround panner on its strip. Monitoring stays stereo; File › Export writes the surround mix as a multichannel WAV (master inserts are not applied to it).").small().color(theme::TEXT_DIM));
+        }
+
+        ui.separator();
         ui.heading("Metronome");
         let met = st.session.project.metronome;
         ui.horizontal(|ui| {

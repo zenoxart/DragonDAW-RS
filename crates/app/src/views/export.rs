@@ -21,6 +21,7 @@ pub struct ExportDialog {
     rx: Option<mpsc::Receiver<Result<ExportReport, String>>>,
     result: Option<Result<ExportReport, String>>,
     with_video: bool,
+    surround: bool,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -35,7 +36,7 @@ impl ExportDialog {
         let name = if p.meta.name.is_empty() { "Untitled".to_string() } else { p.meta.name.clone() };
         let dir = dirs_documents().join("DragonDAW Exports");
         let path = if stems { dir.join(format!("{name} stems")) } else { dir.join(format!("{name}.wav")) };
-        ExportDialog { opts: ExportOptions { stems, ..Default::default() }, path, norm: Norm::None, peak: -0.3, lufs: p.loudness_target, progress: Arc::new(AtomicU32::new(0)), rx: None, result: None, with_video: p.video.is_some() && !stems }
+        ExportDialog { opts: ExportOptions { stems, ..Default::default() }, path, norm: Norm::None, peak: -0.3, lufs: p.loudness_target, progress: Arc::new(AtomicU32::new(0)), rx: None, result: None, with_video: p.video.is_some() && !stems, surround: false }
     }
 
     /// Shows the dialog; returns `false` when it should close.
@@ -148,6 +149,11 @@ impl ExportDialog {
                     ui.checkbox(&mut self.opts.stems, "stems");
                 });
                 ui.end_row();
+                if let (Some(f), false) = (st.session.project.surround, self.opts.stems) {
+                    ui.label("Surround");
+                    ui.checkbox(&mut self.surround, format!("write the {} mix as a multichannel WAV", if f == dragon_engine::model::SurroundFormat::S5_1 { "5.1" } else { "7.1" }));
+                    ui.end_row();
+                }
                 if st.session.project.video.is_some() && !self.opts.stems {
                     ui.label("Video");
                     ui.checkbox(&mut self.with_video, "also write the video with this mix (.mp4, picture copied)");
@@ -181,10 +187,16 @@ impl ExportDialog {
         let opts = self.opts.clone();
         let progress = self.progress.clone();
         let video = if self.with_video && !self.opts.stems { project.video.clone() } else { None };
+        let surround = self.surround && project.surround.is_some() && !self.opts.stems;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = dragon_engine::export::export_with(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed));
+            let r = if surround {
+                let path = path.with_extension("wav");
+                dragon_engine::surround::export_surround(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed)).map(|_| ExportReport { files: vec![path], loudness: dragon_engine::dsp::loudness::LoudnessStats { integrated: -70.0, true_peak_db: -180.0, sample_peak_db: -180.0 }, seconds: 0.0 })
+            } else {
+                dragon_engine::export::export_with(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed))
+            };
             let r = r.map_err(|e| e.to_string()).and_then(|mut rep| {
                 if let Some(v) = video {
                     let out = path.with_extension("mp4");

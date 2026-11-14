@@ -13,7 +13,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let all: Vec<MixerChannel> = std::iter::once(st.session.project.mixer.master.clone()).chain(st.session.project.mixer.channels.iter().cloned()).collect();
     let names: Vec<(Id, String, ChannelKind)> = all.iter().map(|m| (m.id, m.name.clone(), m.kind)).collect();
     let master = st.session.project.mixer.master.id;
-    egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             for m in &all {
                 strip(ui, st, m, m.id == master, &names, &meters);
@@ -188,6 +188,12 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, is_master: bool, names: 
                     widgets::apply(st, &r, "Stereo width", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.width = w));
                 });
             }
+            // Surround panner (top-level channels of a surround project).
+            if let (Some(_), false, false) = (st.session.project.surround, is_master, vca) {
+                if m.output.is_none() {
+                    surround_pad(ui, st, id, m.surround, width);
+                }
+            }
             // Fader + meter.
             ui.horizontal(|ui| {
                 let mut v = m.volume;
@@ -261,6 +267,45 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, is_master: bool, names: 
     if resp.response.contains_pointer() && ui.input(|i| i.pointer.primary_clicked()) {
         st.ui.mixer = id;
     }
+}
+
+fn surround_pad(ui: &mut Ui, st: &mut State, id: Id, sp: SurroundPan, width: f32) {
+    let size = width - 12.0;
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click_and_drag());
+    let p = ui.painter();
+    p.rect_filled(rect, 4.0, theme::BG);
+    p.circle_stroke(rect.center(), size * 0.45, egui::Stroke::new(1.0_f32, theme::GRID));
+    // Speakers.
+    if let Some(f) = st.session.project.surround {
+        for (a, n) in dragon_engine::surround::layout(f).iter().zip(dragon_engine::surround::channel_names(f)) {
+            if let Some(a) = a {
+                let rad = a.to_radians();
+                let pos = rect.center() + egui::vec2(rad.sin(), -rad.cos()) * size * 0.45;
+                p.text(pos, egui::Align2::CENTER_CENTER, *n, egui::FontId::proportional(8.0), theme::TEXT_DIM);
+            }
+        }
+    }
+    let to_pos = |x: f32, y: f32| rect.center() + egui::vec2(x, -y) * size * 0.42;
+    p.circle_filled(to_pos(sp.x, sp.y), 5.0, theme::ACCENT_2);
+    if let Some(pos) = r.interact_pointer_pos().filter(|_| r.dragged() || r.clicked()) {
+        let d = (pos - rect.center()) / (size * 0.42);
+        let (x, y) = (d.x.clamp(-1.0, 1.0), (-d.y).clamp(-1.0, 1.0));
+        st.session.gesture("Surround pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| {
+            c.surround.x = x;
+            c.surround.y = y;
+        }));
+    }
+    if r.double_clicked() {
+        st.session.edit("Surround pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.surround = SurroundPan::default()));
+    }
+    ui.horizontal(|ui| {
+        let mut lfe = sp.lfe;
+        let r = ui.add(egui::Slider::new(&mut lfe, 0.0..=1.0).text(RichText::new("LFE").small()).show_value(false));
+        widgets::apply(st, &r, "LFE send", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.surround.lfe = lfe));
+    });
+    let mut spread = sp.spread;
+    let r = ui.add(egui::Slider::new(&mut spread, 0.0..=180.0).text(RichText::new("spread").small()).show_value(false));
+    widgets::apply(st, &r, "Surround spread", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.surround.spread = spread));
 }
 
 fn is_master_id(st: &State, id: Id) -> bool {

@@ -80,7 +80,8 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Stem separation | ✅ (DSP, not AI) | Tools › Separate: harmonic/percussive median filtering + centre extraction → drums, harmonic, centre stems |
 | Control surfaces (Mackie Control) | ✅ | Options › Control surface: faders, V-pots, mute / solo / arm / select, transport, banks; motor faders and LEDs |
 | Video track | ✅ (needs ffmpeg) | File › Import video, View › Video (frame at the playhead with timecode), soundtrack as a clip, export the video with the mix |
-| Surround / Dolby Atmos | ❌ | the engine is stereo throughout; multichannel buses and ADM export would be a separate project |
+| Surround 5.1 / 7.1 | ✅ (export) | Project › Surround; per-channel XY panner with spread and LFE send (2D VBAP); multichannel WAV export (`surround.rs`). Monitoring is stereo; master inserts are not applied to the surround mix |
+| Dolby Atmos (objects, ADM BWF) | ❌ | needs height speakers, object metadata and the ADM format; not attempted |
 
 ## P4 – out of scope for an offline app
 

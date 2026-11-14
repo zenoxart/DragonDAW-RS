@@ -631,14 +631,43 @@ pub struct MixerChannel {
     pub vca: Option<Id>,
     /// Audio input for monitoring / recording straight into the mixer.
     pub input: Option<InputSource>,
+    /// Position in the surround field (used when the project has a surround format).
+    #[serde(default)]
+    pub surround: SurroundPan,
     /// Mix group (linked faders).
     pub group: Option<Id>,
 }
 
 impl MixerChannel {
     pub fn new(id: Id, name: &str, color: Rgb) -> Self {
-        MixerChannel { id, name: name.into(), color, kind: ChannelKind::Audio, volume: 0.8, pan: 0.0, muted: false, solo: false, solo_safe: false, phase_invert: false, swap_lr: false, width: 1.0, inserts: Vec::new(), sends: Vec::new(), output: None, vca: None, input: None, group: None }
+        MixerChannel { id, name: name.into(), color, kind: ChannelKind::Audio, volume: 0.8, pan: 0.0, muted: false, solo: false, solo_safe: false, phase_invert: false, swap_lr: false, width: 1.0, inserts: Vec::new(), sends: Vec::new(), output: None, vca: None, input: None, group: None, surround: SurroundPan::default() }
     }
+}
+
+/// Surround position of a mixer channel: `x` −1 (left) … 1 (right), `y` −1 (rear) … 1 (front), the spread of
+/// its two stereo sides in degrees, and how much of it goes to the LFE.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SurroundPan {
+    pub x: f32,
+    pub y: f32,
+    pub spread: f32,
+    pub lfe: f32,
+}
+
+impl Default for SurroundPan {
+    fn default() -> Self {
+        SurroundPan { x: 0.0, y: 1.0, spread: 30.0, lfe: 0.0 }
+    }
+}
+
+/// Speaker layouts for surround mixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SurroundFormat {
+    /// L R C LFE Ls Rs (SMPTE / WAVE channel order).
+    S5_1,
+    /// L R C LFE Lb Rb Ls Rs.
+    S7_1,
 }
 
 /// Insert slots per channel.
@@ -821,6 +850,8 @@ pub struct Project {
     pub next_id: Id,
     /// Video for scoring / post: shown in sync with the playhead, can be exported with the mix.
     pub video: Option<VideoRef>,
+    /// Surround format of the mix (`None` = stereo).
+    pub surround: Option<SurroundFormat>,
 }
 
 impl Default for Project {
@@ -846,6 +877,7 @@ impl Default for Project {
             loudness_target: -14.0,
             next_id: 1,
             video: None,
+            surround: None,
         }
     }
 }
