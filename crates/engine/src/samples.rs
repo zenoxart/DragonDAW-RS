@@ -114,6 +114,8 @@ pub fn decode(path: &Path) -> Result<AudioData> {
             Ok(p) => p,
             Err(SErr::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(SErr::ResetRequired) => break,
+            // Some demuxers report the end of the stream as an error; keep what was decoded.
+            Err(_) if !l.is_empty() => break,
             Err(e) => return Err(EngineError::Decode(e.to_string())),
         };
         if packet.track_id() != track_id {

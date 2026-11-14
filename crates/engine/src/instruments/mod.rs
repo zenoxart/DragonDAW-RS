@@ -5,8 +5,8 @@ mod drums;
 mod sampler;
 mod synth;
 
-pub use drums::DrumPads;
-pub use sampler::Sampler;
+pub use drums::{default_pads, DrumPads};
+pub use sampler::{detect_slices as sampler_slices, Sampler};
 pub use synth::Synth;
 
 use crate::model::Instrument as Model;
