@@ -27,14 +27,13 @@ pub struct DockManager {
     pub named: BTreeMap<String, DockState<Tab>>,
 }
 
-/// The default layout: navigation left, start page in the document well, output + notifications at the
-/// bottom, the workflow inbox on the right.
+/// The default layout of Dragon DAW: browser left, playlist / channel rack / piano roll in the document
+/// well, mixer at the bottom.
 pub fn default_layout() -> DockState<Tab> {
-    let mut state = DockState::new(vec![Tab::new("shell.start")]);
+    let mut state = DockState::new(vec![Tab::new("dragon.playlist"), Tab::new("dragon.rack"), Tab::new("dragon.piano")]);
     let surface = state.main_surface_mut();
-    let [docs, _nav] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::new("shell.navigation")]);
-    let [docs, _right] = surface.split_right(docs, 0.76, vec![Tab::new("workflows.inbox")]);
-    let [_docs, _bottom] = surface.split_below(docs, 0.74, vec![Tab::new("shell.notifications"), Tab::new("shell.output")]);
+    let [docs, _browser] = surface.split_left(NodeIndex::root(), 0.17, vec![Tab::new("dragon.browser")]);
+    let [_docs, _bottom] = surface.split_below(docs, 0.66, vec![Tab::new("dragon.mixer"), Tab::new("dragon.master")]);
     state
 }
 

@@ -12,7 +12,7 @@ pub struct KWeighting {
 
 fn k_filters(rate: f32) -> (Biquad, Biquad) {
     // Stage 1: high shelf, +4 dB above ~1.5 kHz (coefficients derived like libebur128).
-    let f0 = 1681.974_5_f64;
+    let f0 = 1_681.974_5_f64;
     let g = 3.999_843_853_973_347_f64;
     let q = 0.707_175_236_955_419_6_f64;
     let k = (std::f64::consts::PI * f0 / rate as f64).tan();

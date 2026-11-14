@@ -2,6 +2,7 @@
 //! instruments implement the same trait in [`crate::plugins`].
 
 mod drums;
+pub mod kit;
 mod sampler;
 mod synth;
 

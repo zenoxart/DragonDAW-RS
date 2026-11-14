@@ -298,10 +298,18 @@ impl Song {
                 };
                 {
                     let mut g = e.lock().unwrap();
-                    if ins.plugin.is_none() {
-                        if let Some(def) = effects::find(&ins.effect) {
-                            for prm in def.params {
-                                g.set_param(prm.id, effects::value(def, &ins.params, prm.id));
+                    match &ins.plugin {
+                        None => {
+                            if let Some(def) = effects::find(&ins.effect) {
+                                for prm in def.params {
+                                    g.set_param(prm.id, effects::value(def, &ins.params, prm.id));
+                                }
+                            }
+                        }
+                        // Parameters edited in the host (generic editor, automation base values).
+                        Some(pl) => {
+                            for (id, v) in &pl.params {
+                                g.set_param(&id.to_string(), *v as f32);
                             }
                         }
                     }
@@ -398,6 +406,11 @@ impl Song {
                 Some(i) => {
                     let mut g = i.lock().unwrap();
                     g.update(&c.instrument, cx.cache);
+                    if let Instrument::Plugin(pl) = &c.instrument {
+                        for (id, v) in &pl.params {
+                            g.set_param(&id.to_string(), *v as f32);
+                        }
+                    }
                 }
                 None => warnings.push(format!("Instrument of '{}' could not be loaded", c.name)),
             }
@@ -1351,8 +1364,8 @@ fn add_input(buf: &mut (Vec<f32>, Vec<f32>), src: InputSource, input: &[&[f32]],
         }
         (Some(a), None) => {
             for k in 0..n {
-                buf.0[k] += a[k] * 0.7071;
-                buf.1[k] += a[k] * 0.7071;
+                buf.0[k] += a[k] * std::f32::consts::FRAC_1_SQRT_2;
+                buf.1[k] += a[k] * std::f32::consts::FRAC_1_SQRT_2;
             }
         }
         _ => {}

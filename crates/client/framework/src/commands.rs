@@ -163,7 +163,19 @@ impl CommandPool {
                     .descriptor
                     .placements
                     .first()
-                    .map(|p| p.path.split('/').filter(|s| !s.is_empty()).map(|seg| translate(&self.group_label(&p.menu, seg).0 .0)).collect::<Vec<_>>().join(" › "))
+                    .map(|p| {
+                        // Group labels are registered per full path (`edit/notes`), so look them up cumulatively.
+                        let mut acc = String::new();
+                        p.path
+                            .split('/')
+                            .filter(|s| !s.is_empty())
+                            .map(|seg| {
+                                acc = if acc.is_empty() { seg.to_string() } else { format!("{acc}/{seg}") };
+                                translate(&self.group_label(&p.menu, &acc).0 .0)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" › ")
+                    })
                     .unwrap_or_default();
                 let score = if q.is_empty() { 1 } else { fuzzy_score(&q, &format!("{} {}", label.to_lowercase(), path.to_lowercase()))? };
                 Some(SearchHit { command_id: c.descriptor.id.clone(), label, path, icon: c.descriptor.icon.clone(), score })

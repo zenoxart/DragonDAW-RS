@@ -55,7 +55,7 @@ impl InstrumentVoice for DrumPads {
         let (pl, pr) = pan_law((pad.pan + n.pan).clamp(-1.0, 1.0));
         let g = pad.gain * n.velocity;
         let step = note_ratio(pad.pitch + n.detune) * data.rate as f64 / self.rate as f64;
-        self.hits.push(Hit { pad: pi, data, pos: 0.0, step, gl: g * pl * 0.7071, gr: g * pr * 0.7071, fade: 1.0, fade_step: 0.0 });
+        self.hits.push(Hit { pad: pi, data, pos: 0.0, step, gl: g * pl * std::f32::consts::FRAC_1_SQRT_2, gr: g * pr * std::f32::consts::FRAC_1_SQRT_2, fade: 1.0, fade_step: 0.0 });
         if self.hits.len() > 64 {
             self.hits.remove(0);
         }

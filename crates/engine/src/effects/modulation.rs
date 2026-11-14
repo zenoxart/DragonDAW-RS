@@ -232,7 +232,7 @@ impl Effect for Phaser {
         for i in 0..l.len() {
             for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
                 let m = self.lfo[ch].next(self.speed, self.rate, LfoShape::Triangle);
-                if self.counter % 16 == 0 {
+                if self.counter.is_multiple_of(16) {
                     let f = self.center * 2f32.powf(m * self.depth * 2.0);
                     for s in 0..self.stages {
                         self.ap[ch][s].set(BiquadKind::AllPass, f * (1.0 + s as f32 * 0.15), 0.6, 0.0, self.rate);

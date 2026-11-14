@@ -241,7 +241,9 @@ impl ClapPlugin {
             if !r.state.is_empty() && !state_ext.is_null() {
                 let mut ctx: (Vec<u8>, usize) = (r.state.clone(), 0);
                 let stream = clap_istream { ctx: &mut ctx as *mut _ as *mut c_void, read: Some(istream_read) };
-                (*state_ext).load.map(|l| l(plugin, &stream));
+                if let Some(l) = (*state_ext).load {
+                    l(plugin, &stream);
+                }
             }
             if !(*plugin).activate.map(|a| a(plugin, rate as f64, 1, max_block as u32)).unwrap_or(false) {
                 return Err(EngineError::Plugin("activate failed".into()));
@@ -301,7 +303,9 @@ impl ClapPlugin {
             if !self.processing {
                 self.processing = (*self.plugin).start_processing.map(|f| f(self.plugin)).unwrap_or(true);
             }
-            (*self.plugin).process.map(|f| f(self.plugin, &process));
+            if let Some(f) = (*self.plugin).process {
+                f(self.plugin, &process);
+            }
         }
         self.steady += n as i64;
     }
@@ -357,11 +361,17 @@ impl ClapPlugin {
                 }
                 self.gui_open = g.show.map(|f| f(self.plugin)).unwrap_or(false);
                 if !self.gui_open {
-                    g.destroy.map(|f| f(self.plugin));
+                    if let Some(f) = g.destroy {
+                        f(self.plugin);
+                    }
                 }
             } else if !open && self.gui_open {
-                g.hide.map(|f| f(self.plugin));
-                g.destroy.map(|f| f(self.plugin));
+                if let Some(f) = g.hide {
+                    f(self.plugin);
+                }
+                if let Some(f) = g.destroy {
+                    f(self.plugin);
+                }
                 self.gui_open = false;
             }
         }
@@ -381,10 +391,16 @@ impl Drop for ClapPlugin {
                 self.set_editor(false);
             }
             if self.processing {
-                (*self.plugin).stop_processing.map(|f| f(self.plugin));
+                if let Some(f) = (*self.plugin).stop_processing {
+                    f(self.plugin);
+                }
             }
-            (*self.plugin).deactivate.map(|f| f(self.plugin));
-            (*self.plugin).destroy.map(|f| f(self.plugin));
+            if let Some(f) = (*self.plugin).deactivate {
+                f(self.plugin);
+            }
+            if let Some(f) = (*self.plugin).destroy {
+                f(self.plugin);
+            }
         }
     }
 }

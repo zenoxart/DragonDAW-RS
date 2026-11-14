@@ -1,90 +1,92 @@
-# Red Hive – architecture
+# Dragon DAW – architecture
 
 ## Principles
 
-1. **Errors are values.** Every operation returns `Res<T> = Result<T, Error>`. An `Error` carries a kind
-   (validation, not-found, forbidden, conflict, unavailable, …), a stable code, a *text key* for the UI,
-   field errors and metadata. Over HTTP it becomes RFC 7807 problem details (`ApiError`); the client turns it
-   back into the same `Error` and shows the localized text.
-2. **Railway use cases.** Handlers follow *validate → authorize → load → decide → persist (+ outbox event in the
-   same transaction) → project*. Validation collects *all* field errors (`Validator`).
-3. **Contracts first.** `redhive-contracts` is shared by every service, the client and the CLI: DTOs,
-   module manifests and their contract surface, view packs, the workflow model and expression language.
-4. **The server drives the UI.** Modules never ship native client code. They ship a *view pack* –
-   declarative dashboards, lists, forms and report runners bound to their own REST endpoints. That keeps the
-   host safe and makes hot-swapping a module trivial.
-5. **Everything is an event.** Changes write an outbox row in their transaction; a dispatcher posts it to the
-   notification point which stores, fans out (SSE, WNS, subscribers such as the workflow service) and replays.
+1. **The project is plain data.** `dragon_engine::model::Project` is a serde-serialisable tree: tracks with
+   clips and take lanes, rack channels with their instruments, patterns with steps and notes, the mixer and
+   automation lanes. It holds no handles, threads or caches. That makes undo a snapshot, makes saving a
+   `serde_json` call and keeps every editor a plain function of the model.
+2. **Compile, then render.** `Song::compile(&Project, …)` turns the model into an immutable `Song`. That
+   includes the mixer strips in topological order (outputs, sends and sidechains), delay lines for plugin delay
+   compensation, a tempo map, sample-accurate pattern events, audio clips with resolved timing and
+   time-stretched audio. The audio thread receives an `Arc<Song>` and swaps it between blocks, so the UI never
+   locks the audio thread.
+3. **One renderer.** `Renderer` renders blocks of 128 frames (`AUTOMATION_BLOCK`). It is used for playback,
+   export, stems, bounce-in-place and the CLI, so what you hear is what you export.
+4. **Processors outlive compiles.** The `Pool` keeps effect, instrument and plugin instances keyed by model id
+   (and by kind, so replacing an effect makes a new instance). Recompiling after a knob turn keeps reverb
+   tails, voices and loaded plugins.
+5. **Errors are values.** The engine returns `Result<T, EngineError>`; the shared crates keep Red Hive's
+   `Res<T>` / `Error` for the framework.
 
-## Services
+## Crates
 
-| Service | Responsibility | Main routes |
-|---|---|---|
-| api-gateway | single entry point, routing table from the registry, rate limit, correlation ids | `/*`, `/api/gateway/routes` |
-| identity-service | sign-in, refresh, profile, password, avatar, roles/permissions, delegated tokens | `/api/identity/*` |
-| configuration-service | scoped settings | `/api/config/*` |
-| module-registry | catalog, assignment per user, versions, publish (contract diff + impact + rollout), enable/withdraw | `/api/modules/*` |
-| module-delivery | package storage, ECDSA P-256 signing, download, signing key | `/api/packages/*` |
-| update-orchestrator | staged rollouts Pilot → Broad → Complete / Held / Cancelled, version per user | `/api/updates/rollouts/*` |
-| notification-point | event store, SSE stream with catch-up, channels, subscriber cursors, WNS | `/api/notifications/*` |
-| workflow-service | definitions, instances, inbox, triggers, impact reports, templates, command events | `/api/workflows/*` |
-| ai-agent | proposals for AI steps, guardrails, kill switch, audit | `/api/ai/*` |
-| document-service | documents and invoices (submit/approve/reject/pay), stats | `/api/documents/*` |
-| reporting-service | report catalogue, runs | `/api/reports/*` |
-| user-service | user administration, roles, organization | `/api/users/*` |
-
-All services share `redhive-backend-core`: options from the environment, PostgreSQL pool with retries,
-token validation (`RequestContext` extractor), internal calls (`x-redhive-internal-key`), `ServiceClient`,
-JSON extractors that answer with problem details, outbox writer and dispatcher, audit log, health endpoints
-(`/health/live`, `/health/ready`).
-
-## Module lifecycle
-
-```
-publish manifest ─▶ check_manifest (prefixes, host version, dependencies)
-                 ─▶ diff_surfaces(old, new)   Compatible | Migratable | ReviewRequired | Breaking
-                 ─▶ workflow impact (dry run) Compatible | AutoMigrated | ReviewRequired | Broken
-                 ─▶ store version, apply automatic migrations (renames incl. expression rewriting)
-                 ─▶ start rollout: Pilot ─▶ Broad ─▶ Complete     (Held if workflows would break)
-                 ─▶ event modules.version.available ─▶ clients hot-swap
-```
-
-The client verifies every package: SHA-256 of the ZIP, signature over the hex digest with the server's
-public key, pinned per server on first use (a changed key is refused until the user trusts it).
-
-## Hot-swap in the client
-
-`modules.version.available` (for this user) → wait until the module has no running actions (max. a few
-seconds) → download and verify → unregister texts, icons, commands, views of the old version → register the
-new ones → mark open views dirty. If anything fails the previous version stays registered.
-
-## Workflows
-
-A workflow is a JSON definition: input schema, trigger, steps, AI policy. Steps reference values with a
-small, safe expression language (`vars.amount > 1000 && user.department == "Finance"`, `split`, `join`,
-`if`, …) – parsed, validated and evaluated without any code execution. The engine persists every
-instance; waits (user input, events, schedules, sub-workflows) survive restarts. Module steps are executed
-with a delegated token of the user the workflow runs as. With an AI policy, the agent may propose or execute
-steps; critical steps are turned into a confirmation task and then run *as the confirming person*.
-
-When a module changes, the impact analysis checks every workflow that references its commands, step types,
-input schemas or events; renames are migrated automatically, removed or newly required elements are reported
-and AI triggers of broken workflows are suspended.
-
-## Client
-
-`redhive-client-framework` contains the services, `redhive-host` the window:
-
-| Component | Purpose |
+| Crate | Role |
 |---|---|
-| `AppContext` | the composition root passed to every view: api, language, icons, commands, shortcuts, navigation, log, session, toasts |
-| `CommandPool` | commands with placements (main menu, toolbar, profile, navigation, wheel), permission checks, fuzzy search |
-| `ShortcutManager` | layered bindings (shell → module → preset → user), chords (`Ctrl+K, Ctrl+S`), scopes, conflicts, recording |
-| `NavigationRegistry` + `NavigationWheel` | every view, MRU, the radial Ctrl+Tab switcher |
-| `DockManager` / `WindowManager` | VS-style layout, named layouts, detached OS windows with monitor-aware placement |
-| `NotificationHub` | SSE with reconnect and catch-up by sequence |
-| `modules` / `HotSwapManager` | load, verify, register, swap |
-| `views` | renders view packs (dashboards, lists, forms, report runner) with responsive size classes |
-| `WorkflowsUi` | inbox, list, designer, runs, impact and AI panels, recorder |
+| `dragon-engine` | Everything audio. No UI dependency. Features: `device` (cpal + midir), `plugins` (libloading + clap-sys + vst3). |
+| `dragon-daw` | The egui app on top of the Red Hive framework. |
+| `dragon-cli` | `dragon` tool: render, loudness, analyse, isolated plugin scans. |
+| `dragon-test-plugins` | A CLAP gain effect, a CLAP sine instrument and a VST3 gain effect, built as one `cdylib` for the host tests. |
+| `redhive-client-framework` | Docking, command pool, shortcuts, palette search, navigation, i18n, widgets. |
+| `redhive-contracts`, `redhive-monads` | Command / shortcut / UI primitives; `Res`, `Error`, `Validator`. |
 
-Long-running work runs on a shared tokio runtime and is polled with `Promise<T>`; the UI never blocks.
+## Engine modules
+
+| Module | Content |
+|---|---|
+| `model` | Project, tracks, clips, takes, rack channels, instruments, patterns, notes (96 PPQ), mixer, automation, MIDI mappings |
+| `time` | Tempo map with tempo changes (beats ↔ seconds ↔ frames), bar/beat and timecode formatting |
+| `samples` | Decoding (symphonia), resampling (rubato), a shared sample cache, waveform peaks, WAV writing with TPDF dither |
+| `dsp` | dB helpers, pan law, smoothers, biquads, SVF, DAHDSR envelopes, delay lines, LFOs, envelope followers, BS.1770 loudness and true peak, WSOLA time-stretch / pitch-shift |
+| `effects` | The 19 stock effects behind one `Effect` trait (parameters, latency, gain reduction, tempo, sidechain) |
+| `instruments` | Sampler, synth and drum pads behind `InstrumentVoice`, plus the built-in Dragon Kit |
+| `render` | `Pool`, `Song::compile`, `Renderer`, meters, live events (notes, previews), the offline renderer |
+| `edit` | Split, duplicate, delete, shuffle, normalise, takes and comping, scales, quantize, legato, transpose, chords, progressions, arpeggiator, strum, flam, humanize, steps → notes, slicing to the rack |
+| `history` | Snapshot undo / redo with labels and a dirty flag |
+| `project_io` | Save (relative paths, numbered backups), load and repair, missing files, collect files, autosave with crash detection, recent projects |
+| `export` | Mix, stems, WAV / FLAC, loudness / peak normalisation, bounce-in-place, all with a plugin-aware pool |
+| `midi` | MIDI message parsing, CC mapping, SMF import / export, the retro-capture buffer |
+| `analysis` | BPM (onset autocorrelation) and key (chroma + key profiles) detection |
+| `device` | Output stream with a command channel, input capture into a recorder thread, recorded takes with latency, shared transport, MIDI inputs |
+| `plugins` | Folder scan, isolated scan, CLAP host, VST3 host, `Host` as the pool's plugin factory |
+
+## Real-time path
+
+```text
+UI thread                                   audio thread (cpal callback)
+─────────                                   ────────────────────────────
+edit ─► Session (undo snapshot)
+       └─► Song::compile ─► Arc<Song> ──►   Command::SetSong ─► Renderer::set_song
+transport buttons ───────────────────►      Command::Play / Pause / Seek / Record
+typing keyboard / MIDI ──────────────►      Command::Live(NoteOn …)
+                                            Renderer::render(block)
+meters / transport ◄─────────── Mutex snapshots (Meters, SharedTransport)
+recorder thread ◄────────────── input blocks (armed tracks) ─► WAV files ─► takes
+```
+
+The app recompiles at most every 40 ms while you drag a control, and right away otherwise. Plugin parameters
+edited in the host are re-applied on every compile. Plugin state is captured into the model on save and export.
+
+## Plugin hosting
+
+- **CLAP**: `clap_entry` → plugin factory → `create_plugin` / `init` / `activate`. Audio ports, params
+  (plain ↔ normalised), latency, state and GUI extensions. Notes and parameter values go out as input events.
+  The GUI opens as a floating window.
+- **VST3**: `GetPluginFactory` → `IComponent` + `IAudioProcessor`. The `IEditController` is either the same
+  object or a separate class, connected through `IConnectionPoint`. The host implements `IHostApplication`,
+  `IParameterChanges` / `IParamValueQueue`, `IEventList` and an `IBStream` memory stream. Component and
+  controller state are packed into one blob in the project.
+- **Scanning** runs `dragon scan-plugin` in a child process per file, with a timeout. Loaded libraries are never
+  unloaded while the app runs.
+
+## The desktop shell
+
+The Red Hive framework supplies the parts every desktop app needs:
+
+- the `CommandPool`: every action is a command, and the menus and the palette are generated from it,
+- the `ShortcutManager`: layered, chorded and rebindable, with reserved shell gestures,
+- the `DockManager`: egui_dock with a saved layout,
+- `Paths`: config, local data, projects and autosave folders,
+- toasts, the log and i18n.
+
+Dragon DAW registers its commands in `crates/app/src/commands.rs` and its views in `crates/app/src/views`.

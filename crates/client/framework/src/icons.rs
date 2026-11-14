@@ -105,14 +105,7 @@ mod glyph_tests {
     fn all_icons_have_glyphs() {
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |_| {});
-        let mut names: Vec<(String, String)> = super::SHELL.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../modules");
-        for m in ["document-management", "reporting", "user-management"] {
-            let pack: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(m).join("client/views.json")).unwrap()).unwrap();
-            for (k, v) in pack["icons"].as_object().cloned().unwrap_or_default() {
-                names.push((format!("{m}:{k}"), v.as_str().unwrap_or_default().to_string()));
-            }
-        }
+        let names: Vec<(String, String)> = super::SHELL.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         let font = egui::FontId::proportional(14.0);
         let missing: Vec<String> = names
             .iter()
@@ -124,7 +117,7 @@ mod glyph_tests {
         let mut chars = std::collections::BTreeSet::new();
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = vec![];
-        for dir in [base.join("src"), base.join("src/widgets"), base.join("../host/src")] {
+        for dir in [base.join("src"), base.join("src/widgets"), base.join("../../app/src"), base.join("../../app/src/views")] {
             for e in std::fs::read_dir(dir).unwrap().flatten() {
                 if e.path().extension().is_some_and(|x| x == "rs") {
                     files.push(e.path());

@@ -24,7 +24,7 @@ fn chars(s: &[c_char]) -> String {
 }
 
 fn wide(s: &[TChar]) -> String {
-    let v: Vec<u16> = s.iter().take_while(|c| **c != 0).map(|c| *c as u16).collect();
+    let v: Vec<u16> = s.iter().take_while(|c| **c != 0).copied().collect();
     String::from_utf16_lossy(&v)
 }
 
@@ -554,7 +554,10 @@ impl Vst3Plugin {
     }
 
     /// Attaches the editor to a native parent window handle (HWND / NSView / X11 window id).
-    pub fn attach_editor(&mut self, parent: *mut c_void) -> Option<(i32, i32)> {
+    ///
+    /// # Safety
+    /// `parent` must be a valid native window handle of the platform for as long as the editor is open.
+    pub unsafe fn attach_editor(&mut self, parent: *mut c_void) -> Option<(i32, i32)> {
         if self.view.is_none() && !self.set_editor(true) {
             return None;
         }

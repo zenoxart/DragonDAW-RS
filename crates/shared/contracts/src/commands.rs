@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(chord.to_string(), "Ctrl+K, Ctrl+S");
         assert_eq!(KeyGesture::parse("Ctrl+/").unwrap().display(false), "Ctrl+/");
         assert!(KeyGesture::parse("").is_none());
-        assert!(KeyStroke::parse("F1").unwrap().is_plain() == false);
+        assert!(!KeyStroke::parse("F1").unwrap().is_plain());
         assert!(KeyStroke::parse("A").unwrap().is_plain());
     }
 

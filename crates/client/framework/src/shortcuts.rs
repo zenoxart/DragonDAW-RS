@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn reserved_conflicts_and_overrides() {
         let dir = std::env::temp_dir().join(format!("rh-sc-{}", std::process::id()));
-        let paths = Paths { config: dir.clone(), local: dir.clone(), modules: dir.clone() };
+        let paths = Paths { config: dir.clone(), local: dir.clone(), projects: dir.clone(), autosave: dir.clone() };
         let _ = std::fs::create_dir_all(&dir);
         let mut pool = CommandPool::default();
         pool.register("shell", d("shell.palette", "Ctrl+Shift+P"), CommandHandler::Shell);

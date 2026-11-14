@@ -86,7 +86,7 @@ impl InstrumentVoice for Sampler {
         let vel = n.velocity.clamp(0.0, 1.0);
         let pos = if self.params.reverse { end - 1.0 } else { start };
         self.last_rate = ratio;
-        self.voices.push(Voice { note: n.note, pos, rate: ratio, target_rate: ratio, start, end, gain_l: vel * pl * 0.7071, gain_r: vel * pr * 0.7071, env, released: false, done: false });
+        self.voices.push(Voice { note: n.note, pos, rate: ratio, target_rate: ratio, start, end, gain_l: vel * pl * std::f32::consts::FRAC_1_SQRT_2, gain_r: vel * pr * std::f32::consts::FRAC_1_SQRT_2, env, released: false, done: false });
     }
 
     fn note_off(&mut self, note: u8) {

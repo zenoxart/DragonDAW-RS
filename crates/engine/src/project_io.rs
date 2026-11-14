@@ -165,7 +165,7 @@ impl Autosave {
             .filter(|e| e.path().extension().is_some_and(|x| x == EXTENSION))
             .filter_map(|e| e.metadata().ok().and_then(|m| m.modified().ok()).map(|t| (e.path(), t)))
             .collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.sort_by_key(|b| std::cmp::Reverse(b.1));
         v
     }
 

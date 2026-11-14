@@ -21,6 +21,9 @@
 //! | [`device`] | Audio/MIDI devices, real-time engine, recording (feature `device`) |
 //! | [`plugins`] | CLAP and VST3 hosting (feature `plugins`) |
 
+// DSP code indexes several parallel buffers by sample position; iterator chains would obscure it.
+#![allow(clippy::needless_range_loop, clippy::should_implement_trait, clippy::type_complexity)]
+
 pub mod analysis;
 pub mod dsp;
 pub mod edit;

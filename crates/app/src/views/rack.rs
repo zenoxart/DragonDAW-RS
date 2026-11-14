@@ -1,0 +1,317 @@
+//! Channel rack: instrument channels with the step sequencer for the selected pattern, swing, pattern
+//! length, channel volume / pan / mute / solo, mixer routing and per-step velocity.
+
+use super::widgets::{self, knob};
+use crate::state::State;
+use crate::theme;
+use dragon_engine::device::Command as Cmd;
+use dragon_engine::model::*;
+use dragon_engine::render::PlayMode;
+use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use std::path::PathBuf;
+
+pub fn show(ui: &mut Ui, st: &mut State) {
+    let pat = st.ui.pattern;
+    let Some(pattern) = st.session.project.pattern(pat).cloned() else {
+        ui.label("No pattern – add one with Add › Pattern.");
+        return;
+    };
+    // ---- header
+    ui.horizontal(|ui| {
+        let mut name = pattern.name.clone();
+        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(110.0)).changed() {
+            st.session.gesture("Rename pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.name = name.clone()));
+        }
+        if ui.button("▶ Pattern").on_hover_text("Loop this pattern").clicked() {
+            st.ui.pattern_mode = true;
+            st.audio.send(Cmd::Stop);
+            st.audio.send(Cmd::Play(PlayMode::Pattern(pat)));
+        }
+        ui.separator();
+        ui.label("Steps");
+        let mut steps = pattern.steps;
+        let r = ui.add(egui::DragValue::new(&mut steps).range(1..=64));
+        widgets::apply(st, &r, "Pattern length", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.steps = steps));
+        let mut swing = pattern.swing;
+        let r = knob(ui, &mut swing, 0.0, 1.0, 0.0, "swing", widgets::pct);
+        widgets::apply(st, &r, "Swing", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.swing = swing));
+        ui.separator();
+        ui.menu_button("+ Channel", |ui| {
+            for (id, label) in [("add.sampler", "Sampler…"), ("add.synth", "Synth"), ("add.drums", "Drum pads")] {
+                if ui.button(label).clicked() {
+                    st.ctx.run(&format!("dragon.{id}"), serde_json::Value::Null);
+                    ui.close_menu();
+                }
+            }
+            ui.separator();
+            let plugins: Vec<_> = st.settings.plugins.iter().filter(|p| p.instrument).cloned().collect();
+            if plugins.is_empty() {
+                ui.label(RichText::new("No instrument plugins scanned").small());
+            }
+            for info in plugins {
+                if ui.button(format!("{} ({:?})", info.name, info.format)).clicked() {
+                    let r = info.to_ref();
+                    let name = info.name.clone();
+                    st.ui.channel = Some(st.session.edit("Add plugin instrument", |p| p.add_channel(&name, Instrument::Plugin(r))));
+                    ui.close_menu();
+                }
+            }
+        });
+        if ui.button("Clone pattern").clicked() {
+            let id = st.session.edit("Clone pattern", |p| {
+                let id = p.next_id();
+                let mut c = p.pattern(pat).cloned().unwrap();
+                c.id = id;
+                c.name = format!("{} copy", c.name);
+                p.patterns.push(c);
+                id
+            });
+            st.ui.pattern = id;
+        }
+        if ui.button("Clear").clicked() {
+            st.session.edit("Clear pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.channels.clear()));
+        }
+    });
+    if st.session.in_gesture() && !ui.ctx().input(|i| i.pointer.any_down()) && !ui.ctx().wants_keyboard_input() {
+        st.session.end_gesture();
+    }
+    ui.separator();
+
+    // ---- rows
+    let channels: Vec<RackChannel> = st.session.project.channels.clone();
+    let mixers: Vec<(Id, String)> = st.session.project.mixer.channels.iter().map(|m| (m.id, m.name.clone())).collect();
+    let steps = pattern.steps as usize;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for c in &channels {
+            let cid = c.id;
+            let selected = st.ui.channel == Some(cid);
+            let row = ui.horizontal(|ui| {
+                ui.set_height(30.0);
+                if widgets::toggle(ui, !c.muted, "⚫", theme::OK).on_hover_text("Mute").clicked() {
+                    st.session.edit("Mute channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.muted = !c.muted));
+                }
+                let mut pan = c.pan;
+                let r = mini_knob(ui, &mut pan, -1.0, 1.0, "pan");
+                widgets::apply(st, &r, "Channel pan", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.pan = pan));
+                let mut vol = c.volume;
+                let r = mini_knob(ui, &mut vol, 0.0, 1.25, "vol");
+                widgets::apply(st, &r, "Channel volume", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.volume = vol));
+                let mx = mixers.iter().find(|m| m.0 == c.mixer).map(|m| m.1.clone()).unwrap_or("–".into());
+                ui.add_sized([62.0, 20.0], egui::Label::new(RichText::new(format!("➡{}", short(&mx, 7))).small()).truncate()).on_hover_text("Mixer channel (right-click the name for routing)");
+                ui.menu_button(RichText::new("…").small(), |ui| {
+                    for (id, n) in &mixers {
+                        if ui.selectable_label(*id == c.mixer, n).clicked() {
+                            let id = *id;
+                            st.session.edit("Route channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.mixer = id));
+                            ui.close_menu();
+                        }
+                    }
+                });
+                let name_btn = egui::Button::new(RichText::new(short(&c.name, 14)).color(if selected { Color32::BLACK } else { Color32::WHITE })).fill(if selected { theme::rgb(c.color) } else { theme::rgb(c.color).gamma_multiply(0.35) }).min_size(Vec2::new(118.0, 24.0));
+                let nb = ui.add(name_btn).on_hover_text(format!("{} – {}\nclick: select · double-click: settings · right-click: menu", c.name, c.instrument.kind_name()));
+                if nb.clicked() {
+                    st.ui.channel = Some(cid);
+                    st.ui.piano_channel = Some(cid);
+                }
+                if nb.double_clicked() && !st.ui.instrument_windows.contains(&cid) {
+                    st.ui.instrument_windows.push(cid);
+                }
+                nb.context_menu(|ui| channel_menu(ui, st, c));
+                // Steps or notes indicator.
+                let pc = pattern.channels.get(&cid);
+                let has_notes = pc.map(|x| !x.notes.is_empty()).unwrap_or(false);
+                if has_notes {
+                    let (rect, r) = ui.allocate_exact_size(Vec2::new(steps as f32 * 22.0, 24.0), Sense::click());
+                    mini_roll(ui.painter(), rect, &pc.unwrap().notes, pattern.length_beats());
+                    if r.double_clicked() || r.clicked() {
+                        st.ui.piano_channel = Some(cid);
+                        st.ui.channel = Some(cid);
+                        st.ctx.open("dragon.piano", None);
+                    }
+                } else {
+                    step_row(ui, st, pat, cid, pc.map(|x| x.steps.clone()).unwrap_or_default(), steps);
+                }
+            });
+            if let Some(path) = row.response.dnd_release_payload::<PathBuf>() {
+                let path = (*path).clone();
+                st.session.edit("Replace sample", |p| {
+                    if let Some(ch) = p.channel_mut(cid) {
+                        match &mut ch.instrument {
+                            Instrument::Sampler(s) => s.path = path,
+                            other => *other = Instrument::Sampler(SamplerParams { path, ..Default::default() }),
+                        }
+                    }
+                });
+            }
+        }
+        // Drop zone for new samplers.
+        let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::hover());
+        ui.painter().rect_stroke(rect.shrink(2.0), 4.0, Stroke::new(1.0_f32, if r.dnd_hover_payload::<PathBuf>().is_some() { theme::ACCENT_2 } else { theme::GRID }), egui::StrokeKind::Inside);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Drop a sample here to add a sampler channel", egui::FontId::proportional(11.0), theme::TEXT_DIM);
+        if let Some(path) = r.dnd_release_payload::<PathBuf>() {
+            st.add_sampler(&path);
+        }
+    });
+}
+
+fn short(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
+    }
+}
+
+fn mini_knob(ui: &mut Ui, v: &mut f32, min: f32, max: f32, what: &str) -> egui::Response {
+    let (rect, mut r) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click_and_drag());
+    if r.dragged() {
+        *v = (*v - r.drag_delta().y / 120.0 * (max - min)).clamp(min, max);
+        r.mark_changed();
+    }
+    if r.double_clicked() {
+        *v = if min < 0.0 { 0.0 } else { 0.8 };
+        r.mark_changed();
+    }
+    let n = (*v - min) / (max - min);
+    let c = rect.center();
+    let p = ui.painter();
+    p.circle_filled(c, 8.0, theme::PANEL_2);
+    let a = std::f32::consts::PI * (0.75 + 1.5 * n);
+    p.line_segment([c, Pos2::new(c.x + 7.0 * a.cos(), c.y + 7.0 * a.sin())], Stroke::new(2.0_f32, theme::ACCENT_2));
+    let txt = if what == "pan" { widgets::pan_fmt(*v) } else { widgets::db_fmt(*v) };
+    r.on_hover_text(format!("{what}: {txt}"))
+}
+
+fn step_row(ui: &mut Ui, st: &mut State, pat: Id, cid: Id, cur: Vec<Step>, steps: usize) {
+    for i in 0..steps {
+        let s = cur.get(i).copied().unwrap_or_default();
+        let beat_group = (i / 4) % 2 == 0;
+        let (rect, r) = ui.allocate_exact_size(Vec2::new(20.0, 24.0), Sense::click_and_drag());
+        let off = if beat_group { Color32::from_gray(58) } else { Color32::from_gray(44) };
+        let on = theme::ACCENT.lerp_to_gamma(theme::ACCENT_2, s.velocity.clamp(0.0, 1.0));
+        ui.painter().rect_filled(rect.shrink(1.5), 3.0, if s.on { on } else { off });
+        if s.on && s.velocity < 0.99 {
+            let h = (rect.height() - 6.0) * s.velocity;
+            ui.painter().rect_filled(Rect::from_min_max(Pos2::new(rect.right() - 4.0, rect.bottom() - 3.0 - h), Pos2::new(rect.right() - 2.0, rect.bottom() - 3.0)), 0.0, Color32::WHITE);
+        }
+        // Click toggles, right-click clears, drag over steps paints, Alt+wheel sets velocity.
+        let painting = ui.input(|i| i.pointer.primary_down()) && r.hovered() && ui.ctx().dragged_id().is_some();
+        let toggle = r.clicked() || r.drag_started();
+        if toggle || r.secondary_clicked() || (painting && !s.on) {
+            let val = if r.secondary_clicked() { false } else if toggle { !s.on } else { true };
+            let edit = |p: &mut Project| {
+                if let Some(pt) = p.pattern_mut(pat) {
+                    let pc = pt.channels.entry(cid).or_default();
+                    if pc.steps.len() < steps {
+                        pc.steps.resize(steps, Step::default());
+                    }
+                    pc.steps[i].on = val;
+                }
+            };
+            if painting && !toggle {
+                st.session.gesture("Paint steps", edit);
+            } else {
+                st.session.edit("Toggle step", edit);
+            }
+            if val {
+                st.audio.send(Cmd::Live(dragon_engine::render::LiveEvent::NoteOn { channel: cid, note: 60, velocity: s.velocity.max(0.1) }));
+                st.audio.send(Cmd::Live(dragon_engine::render::LiveEvent::NoteOff { channel: cid, note: 60 }));
+            }
+        }
+        if s.on && r.hovered() {
+            let wheel = ui.input(|i| if i.modifiers.alt { i.smooth_scroll_delta.y } else { 0.0 });
+            if wheel != 0.0 {
+                let v = (s.velocity + wheel / 400.0).clamp(0.05, 1.0);
+                st.session.gesture("Step velocity", |p| {
+                    if let Some(x) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&cid)).and_then(|pc| pc.steps.get_mut(i)) {
+                        x.velocity = v;
+                    }
+                });
+            }
+        }
+        r.on_hover_text(format!("Step {} · velocity {:.0}% (Alt+wheel)", i + 1, s.velocity * 100.0));
+    }
+}
+
+fn mini_roll(p: &egui::Painter, rect: Rect, notes: &[Note], len_beats: f64) {
+    p.rect_filled(rect, 3.0, theme::PANEL_2);
+    let (lo, hi) = notes.iter().fold((127u8, 0u8), |(l, h), n| (l.min(n.pitch), h.max(n.pitch)));
+    let span = hi.saturating_sub(lo).max(12) as f32;
+    let len = (len_beats * PPQ as f64).max(1.0) as f32;
+    for n in notes {
+        let x0 = rect.left() + n.start as f32 / len * rect.width();
+        let x1 = rect.left() + n.end() as f32 / len * rect.width();
+        let y = rect.bottom() - 3.0 - (n.pitch - lo) as f32 / span * (rect.height() - 6.0);
+        p.line_segment([Pos2::new(x0, y), Pos2::new(x1.max(x0 + 2.0), y)], Stroke::new(2.0_f32, theme::ACCENT_2));
+    }
+}
+
+fn channel_menu(ui: &mut Ui, st: &mut State, c: &RackChannel) {
+    let cid = c.id;
+    if ui.button("Settings…").clicked() {
+        if !st.ui.instrument_windows.contains(&cid) {
+            st.ui.instrument_windows.push(cid);
+        }
+        ui.close_menu();
+    }
+    if ui.button("Open in piano roll").clicked() {
+        st.ui.piano_channel = Some(cid);
+        st.ctx.open("dragon.piano", None);
+        ui.close_menu();
+    }
+    if ui.button("Convert steps to notes").clicked() {
+        let pat = st.ui.pattern;
+        st.session.edit("Steps to notes", |p| {
+            if let Some(pc) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&cid)) {
+                dragon_engine::edit::steps_to_notes(pc, 60);
+            }
+        });
+        ui.close_menu();
+    }
+    if ui.button("Fill every 2 / 4 steps").clicked() {
+        let pat = st.ui.pattern;
+        st.session.edit("Fill steps", |p| {
+            if let Some(pt) = p.pattern_mut(pat) {
+                let n = pt.steps as usize;
+                let pc = pt.channels.entry(cid).or_default();
+                pc.steps.resize(n, Step::default());
+                let every = if pc.steps.iter().step_by(4).all(|s| s.on) { 2 } else { 4 };
+                for (i, s) in pc.steps.iter_mut().enumerate() {
+                    s.on = i % every == 0;
+                }
+            }
+        });
+        ui.close_menu();
+    }
+    if ui.button("Solo").clicked() {
+        st.session.edit("Solo channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.solo = !c.solo));
+        ui.close_menu();
+    }
+    if ui.button("Duplicate").clicked() {
+        st.session.edit("Duplicate channel", |p| {
+            if let Some(mut ch) = p.channel(cid).cloned() {
+                ch.id = p.next_id();
+                ch.name = format!("{} 2", ch.name);
+                p.channels.push(ch);
+            }
+        });
+        ui.close_menu();
+    }
+    if ui.button("MIDI learn volume").clicked() {
+        st.ui.midi_learn = Some(Target::ChannelVolume(cid));
+        ui.close_menu();
+    }
+    ui.separator();
+    if ui.button("Delete channel").clicked() {
+        st.session.edit("Delete channel", |p| {
+            p.channels.retain(|c| c.id != cid);
+            for pt in p.patterns.iter_mut() {
+                pt.channels.remove(&cid);
+            }
+        });
+        if st.ui.channel == Some(cid) {
+            st.ui.channel = st.session.project.channels.first().map(|c| c.id);
+        }
+        ui.close_menu();
+    }
+}

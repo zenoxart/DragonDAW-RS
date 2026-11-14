@@ -1,0 +1,776 @@
+//! Everything the views share: framework context, the open session, the audio backend, settings and
+//! UI selection state – plus the actions that touch several of them (files, recording, import).
+
+use crate::audio::Audio;
+use crate::session::Session;
+use dragon_engine::device::{Command, DeviceConfig, MidiInputs, RecordTarget};
+use dragon_engine::midi::RetroBuffer;
+use dragon_engine::model::*;
+use dragon_engine::plugins::PluginInfo;
+use dragon_engine::project_io::{self, Autosave};
+use dragon_engine::render::{LiveEvent, PlayMode};
+use dragon_engine::time::TempoMap;
+use redhive_client_framework::AppContext;
+use redhive_contracts::ui::Severity;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub device: DeviceConfig,
+    pub plugin_folders: Vec<PathBuf>,
+    pub plugins: Vec<PluginInfo>,
+    pub recent: Vec<PathBuf>,
+    pub browser_folders: Vec<PathBuf>,
+    pub autosave_minutes: u32,
+    pub undo_limit: usize,
+    pub ui_scale: f32,
+    pub show_splash: bool,
+    pub reduced_motion: bool,
+    pub follow_playhead: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            device: DeviceConfig::default(),
+            plugin_folders: Vec::new(),
+            plugins: Vec::new(),
+            recent: Vec::new(),
+            browser_folders: Vec::new(),
+            autosave_minutes: 3,
+            undo_limit: 200,
+            ui_scale: 1.0,
+            show_splash: true,
+            reduced_motion: false,
+            follow_playhead: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    Draw,
+    Paint,
+    Select,
+    Slice,
+    Erase,
+    Mute,
+}
+
+impl Tool {
+    pub const ALL: [(Tool, &'static str, &'static str); 6] = [(Tool::Draw, "✏", "Draw"), (Tool::Paint, "🎨", "Paint"), (Tool::Select, "⬛", "Select"), (Tool::Slice, "✂", "Slice"), (Tool::Erase, "🗙", "Erase"), (Tool::Mute, "🔇", "Mute")];
+}
+
+pub struct UiState {
+    pub pattern: Id,
+    pub channel: Option<Id>,
+    pub piano_channel: Option<Id>,
+    pub mixer: Id,
+    pub clips: Vec<Id>,
+    pub notes: Vec<usize>,
+    pub tool: Tool,
+    pub snap: f64,
+    pub playlist_zoom: f32,
+    pub piano_zoom: f32,
+    pub key_height: f32,
+    pub scale_root: u8,
+    pub scale: Option<usize>,
+    pub chord: usize,
+    pub typing_keyboard: bool,
+    pub octave: i32,
+    pub held_keys: Vec<(egui::Key, u8)>,
+    pub effect_windows: Vec<(Id, Id)>,
+    pub instrument_windows: Vec<Id>,
+    pub palette: Option<String>,
+    pub pl_x: f64,
+    pub pl_y: f32,
+    pub pr_x: f64,
+    pub pr_y: f32,
+    pub pl_drag: Option<crate::views::playlist::Drag>,
+    pub pr_drag: Option<crate::views::piano_roll::Drag>,
+    pub waveforms: std::collections::HashMap<PathBuf, std::sync::Arc<Vec<(f32, f32)>>>,
+    pub clip_window: Option<Id>,
+    pub pattern_mode: bool,
+    pub export: Option<crate::views::export::ExportDialog>,
+    pub recovery: Option<Vec<(PathBuf, std::time::SystemTime)>>,
+    pub about: bool,
+    pub midi_learn: Option<Target>,
+    pub last_note_len: u32,
+    pub tap_times: Vec<Instant>,
+    pub record_started: Option<Instant>,
+    pub status: String,
+    pub plugin_scan: Option<redhive_client_framework::runtime::Promise<(Vec<PluginInfo>, Vec<String>)>>,
+}
+
+impl UiState {
+    fn new(p: &Project) -> Self {
+        UiState {
+            pattern: p.patterns.first().map(|x| x.id).unwrap_or(0),
+            channel: p.channels.first().map(|c| c.id),
+            piano_channel: p.channels.first().map(|c| c.id),
+            mixer: p.mixer.master.id,
+            clips: Vec::new(),
+            notes: Vec::new(),
+            tool: Tool::Draw,
+            snap: 0.25,
+            playlist_zoom: 28.0,
+            piano_zoom: 96.0,
+            key_height: 14.0,
+            scale_root: 0,
+            scale: None,
+            chord: 0,
+            typing_keyboard: false,
+            octave: 5,
+            held_keys: Vec::new(),
+            effect_windows: Vec::new(),
+            instrument_windows: Vec::new(),
+            palette: None,
+            pl_x: 0.0,
+            pl_y: 0.0,
+            pr_x: 0.0,
+            pr_y: 60.0 * 14.0,
+            pl_drag: None,
+            pr_drag: None,
+            waveforms: Default::default(),
+            clip_window: None,
+            pattern_mode: false,
+            export: None,
+            recovery: None,
+            about: false,
+            midi_learn: None,
+            last_note_len: PPQ,
+            tap_times: Vec::new(),
+            record_started: None,
+            status: String::new(),
+            plugin_scan: None,
+        }
+    }
+}
+
+pub struct State {
+    pub ctx: AppContext,
+    pub session: Session,
+    pub audio: Audio,
+    pub ui: UiState,
+    pub settings: Settings,
+    pub midi: Option<MidiInputs>,
+    pub retro: RetroBuffer,
+    pub autosave: Autosave,
+    pub last_autosave: Instant,
+    pub crashed_last_time: bool,
+    pub kit: Vec<(String, u8, PathBuf)>,
+}
+
+/// The built-in drum kit (synthesised on first run into the app's data folder).
+pub fn default_kit(paths: &redhive_client_framework::context::Paths) -> Vec<(String, u8, PathBuf)> {
+    dragon_engine::instruments::kit::ensure_default_kit(&paths.local.join("Dragon Kit")).unwrap_or_default()
+}
+
+/// Drum pads loaded with the built-in kit.
+pub fn kit_pads(kit: &[(String, u8, PathBuf)]) -> Vec<Pad> {
+    let mut pads = dragon_engine::instruments::default_pads();
+    for pad in pads.iter_mut() {
+        if let Some((_, _, path)) = kit.iter().find(|k| k.1 == pad.note) {
+            pad.layers = vec![PadLayer { path: path.clone(), velocity_low: 0.0, velocity_high: 1.0 }];
+        }
+    }
+    pads
+}
+
+/// A starter project: kick / clap / hat / snare samplers with a first beat, a bass and a lead synth, a
+/// reverb bus and a limiter on the master – press play and it sounds.
+pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
+    let mut p = Project::new_default();
+    p.meta.name = "Untitled".into();
+    let pat = p.patterns[0].id;
+    let beat: &[(&str, &[usize])] = &[("Kick", &[0, 4, 8, 12]), ("Clap", &[4, 12]), ("Closed hat", &[2, 6, 10, 14]), ("Snare", &[])];
+    for (name, steps) in beat {
+        let Some((_, _, path)) = kit.iter().find(|k| k.0 == *name) else { continue };
+        let ch = p.add_channel(name, Instrument::Sampler(SamplerParams { path: path.clone(), ..Default::default() }));
+        let mut st = vec![Step::default(); 16];
+        for s in *steps {
+            st[*s].on = true;
+        }
+        if let Some(pt) = p.pattern_mut(pat) {
+            pt.channels.insert(ch, PatternChannel { steps: st, notes: Vec::new() });
+        }
+    }
+    let bass = SynthParams { osc: [Oscillator { wave: Waveform::Saw, level: 0.8, ..Default::default() }, Oscillator { wave: Waveform::Square, level: 0.4, coarse: -12, ..Default::default() }, Oscillator { level: 0.0, ..Default::default() }], cutoff: 900.0, polyphony: 1, ..Default::default() };
+    p.add_channel("Bass", Instrument::Synth(bass));
+    p.add_channel("Lead", Instrument::Synth(SynthParams { unison: 3, detune: 0.15, ..Default::default() }));
+    let bus = p.add_mixer_channel("Reverb");
+    let ins = p.next_id();
+    if let Some(m) = p.mixer.get_mut(bus) {
+        let def = dragon_engine::effects::find("reverb").unwrap();
+        m.inserts.push(Insert { id: ins, effect: "reverb".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new() });
+    }
+    let lim = p.next_id();
+    p.mixer.master.inserts.push(Insert { id: lim, effect: "limiter".into(), enabled: true, mix: 1.0, params: dragon_engine::effects::find("limiter").unwrap().defaults(), sidechain: None, plugin: None, preset: String::new() });
+    // The beat on the first track, four bars.
+    if let Some(t) = p.tracks.first().map(|t| t.id) {
+        if let Some(tr) = p.track_mut(t) {
+            tr.name = "Beat".into();
+        }
+        let mixer = p.track(t).map(|tr| tr.mixer);
+        if let Some(m) = mixer.and_then(|m| p.mixer.get_mut(m)) {
+            m.name = "Beat".into();
+        }
+        for bar in 0..4 {
+            let id = p.next_id();
+            let color = p.patterns[0].color;
+            if let Some(tr) = p.track_mut(t) {
+                tr.clips.push(Clip { id, name: "Pattern 1".into(), start: bar as f64 * 4.0, length: 4.0, muted: false, color, kind: ClipKind::Pattern { pattern: pat } });
+            }
+        }
+    }
+    p
+}
+
+impl State {
+    pub fn new(ctx: AppContext, settings: Settings) -> Self {
+        let kit = default_kit(&ctx.paths);
+        let mut session = Session::new(starter_project(&kit), None);
+        session.history.limit = settings.undo_limit;
+        let song = session.compile(48000.0);
+        let audio = Audio::start(&settings.device, song);
+        let midi = Some(MidiInputs::open(&settings.device.midi_inputs, Some(audio.shared_transport())));
+        let autosave = Autosave::new(ctx.paths.autosave.clone());
+        let crashed = !autosave.begin_session();
+        let ui = UiState::new(&session.project);
+        let mut st = State { ctx, session, audio, ui, settings, midi, retro: RetroBuffer::new(120.0), autosave, last_autosave: Instant::now(), crashed_last_time: crashed, kit };
+        st.session.force_recompile();
+        if st.crashed_last_time {
+            let list = st.autosave.list();
+            if !list.is_empty() {
+                st.ui.recovery = Some(list);
+            }
+        }
+        st
+    }
+
+    pub fn save_settings(&self) {
+        self.ctx.paths.save_json("settings.json", &self.settings);
+    }
+
+    pub fn toast(&mut self, text: impl Into<String>, s: Severity) {
+        self.ctx.toast(text, s);
+    }
+
+    // ------------------------------------------------------------------------------------ transport
+
+    pub fn transport(&self) -> dragon_engine::render::TransportState {
+        self.audio.transport().state
+    }
+
+    pub fn beat_now(&self) -> f64 {
+        self.audio.transport().beat_now()
+    }
+
+    pub fn play_mode(&self) -> PlayMode {
+        if self.ui.song_mode() {
+            PlayMode::Song
+        } else {
+            PlayMode::Pattern(self.ui.pattern)
+        }
+    }
+
+    pub fn toggle_play(&mut self) {
+        let t = self.transport();
+        if self.audio.is_recording() {
+            self.stop_recording();
+        } else if t.playing {
+            self.audio.send(Command::Pause);
+        } else {
+            self.audio.send(Command::Play(self.play_mode()));
+        }
+    }
+
+    pub fn stop(&mut self) {
+        if self.audio.is_recording() {
+            self.stop_recording();
+        }
+        self.audio.send(Command::Stop);
+        self.audio.send(Command::Live(LiveEvent::AllNotesOff));
+    }
+
+    pub fn seek(&mut self, beat: f64) {
+        self.audio.send(Command::Seek(beat.max(0.0)));
+    }
+
+    pub fn live_note(&mut self, on: bool, note: u8, velocity: f32) {
+        let Some(ch) = self.ui.channel.or(self.ui.piano_channel) else { return };
+        self.audio.send(Command::Live(if on { LiveEvent::NoteOn { channel: ch, note, velocity } } else { LiveEvent::NoteOff { channel: ch, note } }));
+        let t = self.audio.transport();
+        let secs = t.state.seconds + if t.state.playing { t.at.elapsed().as_secs_f64() } else { 0.0 };
+        self.retro.push(secs.max(0.0) + self.ui.record_started.map(|_| 0.0).unwrap_or(0.0), note, velocity, on);
+    }
+
+    // ------------------------------------------------------------------------------------ recording
+
+    pub fn start_recording(&mut self) {
+        let armed: Vec<(Id, InputSource, String)> = self.session.project.tracks.iter().filter(|t| t.armed).map(|t| (t.id, t.input.unwrap_or(InputSource { left: 0, right: Some(1) }), t.name.clone())).collect();
+        if armed.is_empty() {
+            // No armed audio track: record notes into the pattern while the song plays (live MIDI recording).
+            self.ui.record_started = Some(Instant::now());
+            self.retro = RetroBuffer::new(600.0);
+            let count_in = self.session.project.metronome.count_in_bars;
+            self.audio.send(Command::Record { count_in_bars: count_in });
+            self.toast("Recording notes – play the typing keyboard or a MIDI controller", Severity::Info);
+            return;
+        }
+        if !self.audio.can_record() {
+            self.toast("No audio input device is open – choose one in Options › Audio", Severity::Warning);
+            return;
+        }
+        let dir = self.recordings_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let stamp = chrono_like_stamp();
+        let targets: Vec<RecordTarget> = armed.iter().map(|(id, src, name)| RecordTarget { track: *id, source: *src, path: dir.join(format!("{} {stamp}.wav", sanitize(name))) }).collect();
+        let count_in = self.session.project.metronome.count_in_bars;
+        self.audio.start_recording(targets, count_in);
+        self.ui.record_started = Some(Instant::now());
+    }
+
+    pub fn stop_recording(&mut self) {
+        self.ui.record_started = None;
+        let takes = self.audio.stop_recording();
+        if takes.is_empty() {
+            // Note recording: capture what was played into the selected pattern.
+            let bpm = self.session.project.bpm;
+            let notes = self.retro.capture(bpm);
+            if let (false, Some(ch)) = (notes.is_empty(), self.ui.piano_channel.or(self.ui.channel)) {
+                let pat = self.ui.pattern;
+                self.session.edit("Record notes", |p| {
+                    if let Some(pt) = p.pattern_mut(pat) {
+                        pt.channels.entry(ch).or_default().notes.extend(notes);
+                    }
+                });
+                self.toast("Recorded notes into the pattern", Severity::Success);
+            }
+            return;
+        }
+        let n = takes.len();
+        self.session.edit("Record audio", |p| {
+            let tm = TempoMap::from_project(p);
+            for t in takes {
+                let has_clips = p.track(t.track).map(|tr| tr.clips.iter().any(|c| c.end() > t.start_beat)).unwrap_or(false);
+                if has_clips {
+                    let k = p.track(t.track).map(|tr| tr.takes.len() + 1).unwrap_or(1);
+                    dragon_engine::edit::push_take(p, t.track, &format!("Take {k}"));
+                }
+                let secs = t.frames as f64 / t.rate as f64 - t.latency;
+                let s0 = tm.beat_to_seconds(t.start_beat);
+                let len = tm.seconds_to_beat(s0 + secs.max(0.0)) - t.start_beat;
+                let id = p.next_id();
+                let name = t.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                if let Some(tr) = p.track_mut(t.track) {
+                    tr.clips.push(Clip { id, name, start: t.start_beat, length: len.max(0.01), muted: false, color: tr.color, kind: ClipKind::Audio(AudioClip { source: t.path, offset: t.latency, ..Default::default() }) });
+                }
+            }
+        });
+        self.toast(format!("Recorded {n} take(s)"), Severity::Success);
+    }
+
+    pub fn recordings_dir(&self) -> PathBuf {
+        match &self.session.path {
+            Some(p) => p.parent().unwrap_or(Path::new(".")).join("Recordings"),
+            None => self.ctx.paths.projects.join("Recordings"),
+        }
+    }
+
+    // ------------------------------------------------------------------------------------ files
+
+    pub fn new_project(&mut self) {
+        self.replace_session(Session::new(starter_project(&self.kit), None));
+    }
+
+    pub fn replace_session(&mut self, mut s: Session) {
+        self.stop();
+        s.history.limit = self.settings.undo_limit;
+        self.ui = UiState::new(&s.project);
+        self.session = s;
+        self.session.force_recompile();
+    }
+
+    pub fn open_path(&mut self, path: &Path) {
+        match project_io::load(path) {
+            Ok(p) => {
+                let missing = project_io::missing_files(&p);
+                self.replace_session(Session::new(p, Some(path.to_path_buf())));
+                self.add_recent(path);
+                if !missing.is_empty() {
+                    self.toast(format!("{} audio file(s) are missing – see Project › Missing files", missing.len()), Severity::Warning);
+                }
+            }
+            Err(e) => self.toast(format!("Cannot open {}: {e}", path.display()), Severity::Error),
+        }
+    }
+
+    pub fn open_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Dragon project", &["dragon"]).set_directory(&self.ctx.paths.projects).pick_file() {
+            self.open_path(&p);
+        }
+    }
+
+    pub fn save(&mut self, save_as: bool) -> bool {
+        let path = match (&self.session.path, save_as) {
+            (Some(p), false) => p.clone(),
+            _ => {
+                let name = format!("{}.dragon", if self.session.project.meta.name.is_empty() { "Untitled" } else { &self.session.project.meta.name });
+                match rfd::FileDialog::new().add_filter("Dragon project", &["dragon"]).set_directory(&self.ctx.paths.projects).set_file_name(name).save_file() {
+                    Some(p) => p.with_extension("dragon"),
+                    None => return false,
+                }
+            }
+        };
+        self.session.end_gesture();
+        self.capture_plugin_states();
+        match project_io::save(&self.session.project, &path, 5) {
+            Ok(()) => {
+                self.session.set_path(path.clone());
+                self.session.history.mark_saved();
+                self.add_recent(&path);
+                self.ui.status = format!("Saved {}", path.display());
+                true
+            }
+            Err(e) => {
+                self.toast(format!("Save failed: {e}"), Severity::Error);
+                false
+            }
+        }
+    }
+
+    /// Copies every loaded plugin's internal state into the project (so it is saved with it).
+    pub fn capture_plugin_states(&mut self) {
+        let mut states: Vec<(Id, Option<Id>, Vec<u8>)> = Vec::new();
+        for m in self.session.project.mixer.all() {
+            for i in m.inserts.iter().filter(|i| i.plugin.is_some()) {
+                if let Some(s) = self.session.pool.effect_by_id(i.id).and_then(|e| e.lock().ok().and_then(|mut g| g.save_state())) {
+                    states.push((m.id, Some(i.id), s));
+                }
+            }
+        }
+        for c in self.session.project.channels.iter().filter(|c| matches!(c.instrument, Instrument::Plugin(_))) {
+            if let Some(s) = self.session.pool.instrument_by_id(c.id).and_then(|e| e.lock().ok().and_then(|mut g| g.save_state())) {
+                states.push((c.id, None, s));
+            }
+        }
+        if states.is_empty() {
+            return;
+        }
+        // Not an undo step: state capture does not change what the user edited.
+        let p = &mut self.session.project;
+        for (owner, ins, data) in states {
+            match ins {
+                Some(i) => {
+                    if let Some(r) = p.mixer.get_mut(owner).and_then(|m| m.inserts.iter_mut().find(|x| x.id == i)).and_then(|x| x.plugin.as_mut()) {
+                        r.state = data;
+                    }
+                }
+                None => {
+                    if let Some(Instrument::Plugin(r)) = p.channel_mut(owner).map(|c| &mut c.instrument) {
+                        r.state = data;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn add_recent(&mut self, p: &Path) {
+        self.settings.recent.retain(|x| x != p);
+        self.settings.recent.insert(0, p.to_path_buf());
+        self.settings.recent.truncate(12);
+        self.save_settings();
+    }
+
+    pub fn autosave_tick(&mut self) {
+        let mins = self.settings.autosave_minutes;
+        if mins == 0 || !self.session.history.is_dirty() || self.session.in_gesture() {
+            return;
+        }
+        if self.last_autosave.elapsed().as_secs() >= mins as u64 * 60 {
+            self.last_autosave = Instant::now();
+            let name = self.session.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
+            match self.autosave.save(&self.session.project, &name) {
+                Ok(_) => self.ui.status = "Autosaved".into(),
+                Err(e) => self.ctx.log.warn("autosave", e.to_string()),
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------ import
+
+    /// Puts an audio file on a track at `beat` (the first empty track when `track` is `None`).
+    pub fn add_audio_clip(&mut self, path: &Path, track: Option<Id>, beat: f64) {
+        let data = match self.session.cache.get(path, self.audio.rate()) {
+            Ok(d) => d,
+            Err(e) => {
+                self.toast(format!("Cannot read {}: {e}", path.display()), Severity::Error);
+                return;
+            }
+        };
+        let secs = data.duration();
+        let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let src = path.to_path_buf();
+        let sel = self.session.edit("Add audio clip", |p| {
+            let tid = track.or_else(|| p.tracks.iter().find(|t| t.clips.is_empty()).map(|t| t.id)).unwrap_or_else(|| p.add_track(&name));
+            let tm = TempoMap::from_project(p);
+            let s0 = tm.beat_to_seconds(beat);
+            let len = tm.seconds_to_beat(s0 + secs) - beat;
+            let id = p.next_id();
+            if let Some(t) = p.track_mut(tid) {
+                t.clips.push(Clip { id, name, start: beat, length: len.max(0.01), muted: false, color: t.color, kind: ClipKind::Audio(AudioClip { source: src, ..Default::default() }) });
+            }
+            id
+        });
+        self.ui.clips = vec![sel];
+    }
+
+    /// Loads a sample into a new sampler channel of the rack.
+    pub fn add_sampler(&mut self, path: &Path) {
+        let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let src = path.to_path_buf();
+        let id = self.session.edit("Add sampler", |p| p.add_channel(&name, Instrument::Sampler(SamplerParams { path: src, ..Default::default() })));
+        self.ui.channel = Some(id);
+    }
+
+    pub fn import_midi(&mut self, path: &Path) {
+        match dragon_engine::midi::import(path) {
+            Ok(m) => {
+                let n = m.tracks.len();
+                let pat = self.session.edit("Import MIDI", |p| {
+                    let pat = p.add_pattern();
+                    if let Some(b) = m.bpm {
+                        p.bpm = b;
+                    }
+                    for (name, notes) in m.tracks {
+                        let ch = p.add_channel(if name.is_empty() { "MIDI" } else { &name }, Instrument::Synth(SynthParams::default()));
+                        if let Some(pt) = p.pattern_mut(pat) {
+                            pt.channels.entry(ch).or_default().notes = notes;
+                        }
+                    }
+                    pat
+                });
+                self.ui.pattern = pat;
+                self.toast(format!("Imported {n} MIDI track(s) into a new pattern"), Severity::Success);
+            }
+            Err(e) => self.toast(format!("MIDI import failed: {e}"), Severity::Error),
+        }
+    }
+
+    pub fn preview(&mut self, path: &Path) {
+        match self.session.cache.get(path, self.audio.rate()) {
+            Ok(d) => self.audio.send(Command::Live(LiveEvent::Preview(d))),
+            Err(e) => self.ui.status = format!("Cannot preview: {e}"),
+        }
+    }
+
+    /// Applies an incoming MIDI message: notes to the selected channel, CC to mappings / MIDI learn.
+    pub fn handle_midi(&mut self) {
+        let Some(m) = &self.midi else { return };
+        let msgs: Vec<_> = m.rx.try_iter().collect();
+        let mut mapped = false;
+        for t in msgs {
+            use dragon_engine::midi::MidiMessage as M;
+            match t.message {
+                M::NoteOn { note, velocity, .. } if velocity > 0 => self.live_note(true, note, velocity as f32 / 127.0),
+                M::NoteOn { note, .. } | M::NoteOff { note, .. } => self.live_note(false, note, 0.0),
+                M::Control { channel, controller, value } => {
+                    if let Some(target) = self.ui.midi_learn.take() {
+                        let (min, max) = dragon_engine::midi::target_range(&target);
+                        self.session.edit("MIDI learn", |p| {
+                            p.midi_mappings.retain(|x| !(x.channel == channel && x.controller == controller));
+                            p.midi_mappings.push(MidiMapping { channel, controller, target, min, max });
+                        });
+                        self.toast(format!("Mapped CC {controller}"), Severity::Success);
+                        continue;
+                    }
+                    let maps: Vec<MidiMapping> = self.session.project.midi_mappings.iter().filter(|x| x.channel == channel && x.controller == controller).cloned().collect();
+                    for mp in maps {
+                        mapped = true;
+                        let v = dragon_engine::midi::map_cc(value, mp.min, mp.max);
+                        self.session.gesture("MIDI control", |p| set_target(p, &mp.target, v));
+                    }
+                }
+                M::Start | M::Continue => self.audio.send(Command::Play(self.play_mode())),
+                M::Stop => self.audio.send(Command::Pause),
+                _ => {}
+            }
+        }
+        if mapped {
+            self.session.end_gesture();
+        }
+    }
+}
+
+/// Frames per waveform overview bucket.
+pub const WAVE_BUCKET: usize = 256;
+
+impl State {
+    /// Waveform overview of a file (min/max per [`WAVE_BUCKET`] frames, mono), cached.
+    pub fn waveform(&mut self, path: &Path) -> Option<std::sync::Arc<Vec<(f32, f32)>>> {
+        if let Some(w) = self.ui.waveforms.get(path) {
+            return Some(w.clone());
+        }
+        let d = self.session.cache.get(path, self.audio.rate()).ok()?;
+        let n = d.frames().div_ceil(WAVE_BUCKET);
+        let mut v = Vec::with_capacity(n);
+        for b in 0..n {
+            let (s, e) = (b * WAVE_BUCKET, ((b + 1) * WAVE_BUCKET).min(d.frames()));
+            let (mut lo, mut hi) = (0.0f32, 0.0f32);
+            for i in s..e {
+                let x = (d.l[i] + d.r[i]) * 0.5;
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+            v.push((lo, hi));
+        }
+        let w = std::sync::Arc::new(v);
+        self.ui.waveforms.insert(path.to_path_buf(), w.clone());
+        Some(w)
+    }
+}
+
+impl UiState {
+    pub fn song_mode(&self) -> bool {
+        !self.pattern_mode
+    }
+}
+
+/// Writes a value to whatever an automation / MIDI target points at.
+pub fn set_target(p: &mut Project, t: &Target, v: f32) {
+    match t {
+        Target::MixerVolume(id) => {
+            if let Some(m) = p.mixer.get_mut(*id) {
+                m.volume = v;
+            }
+        }
+        Target::MixerPan(id) => {
+            if let Some(m) = p.mixer.get_mut(*id) {
+                m.pan = v;
+            }
+        }
+        Target::MixerWidth(id) => {
+            if let Some(m) = p.mixer.get_mut(*id) {
+                m.width = v;
+            }
+        }
+        Target::MixerMute(id) => {
+            if let Some(m) = p.mixer.get_mut(*id) {
+                m.muted = v > 0.5;
+            }
+        }
+        Target::SendLevel { channel, target } => {
+            if let Some(s) = p.mixer.get_mut(*channel).and_then(|m| m.sends.iter_mut().find(|s| s.target == *target)) {
+                s.level = v;
+            }
+        }
+        Target::InsertParam { channel, insert, param } => {
+            if let Some(i) = p.mixer.get_mut(*channel).and_then(|m| m.inserts.iter_mut().find(|i| i.id == *insert)) {
+                i.params.insert(param.clone(), v);
+            }
+        }
+        Target::InsertMix { channel, insert } => {
+            if let Some(i) = p.mixer.get_mut(*channel).and_then(|m| m.inserts.iter_mut().find(|i| i.id == *insert)) {
+                i.mix = v;
+            }
+        }
+        Target::ChannelVolume(id) => {
+            if let Some(c) = p.channel_mut(*id) {
+                c.volume = v;
+            }
+        }
+        Target::ChannelPan(id) => {
+            if let Some(c) = p.channel_mut(*id) {
+                c.pan = v;
+            }
+        }
+        Target::ChannelPitch(id) => {
+            if let Some(c) = p.channel_mut(*id) {
+                c.pitch = v;
+            }
+        }
+        Target::SynthCutoff(id) => {
+            if let Some(Instrument::Synth(s)) = p.channel_mut(*id).map(|c| &mut c.instrument) {
+                s.cutoff = v;
+            }
+        }
+        Target::SynthResonance(id) => {
+            if let Some(Instrument::Synth(s)) = p.channel_mut(*id).map(|c| &mut c.instrument) {
+                s.resonance = v;
+            }
+        }
+        Target::PluginParam { channel, insert, param } => {
+            let r = match insert {
+                Some(i) => p.mixer.get_mut(*channel).and_then(|m| m.inserts.iter_mut().find(|x| x.id == *i)).and_then(|x| x.plugin.as_mut()),
+                None => match p.channel_mut(*channel).map(|c| &mut c.instrument) {
+                    Some(Instrument::Plugin(r)) => Some(r),
+                    _ => None,
+                },
+            };
+            if let Some(r) = r {
+                r.params.insert(*param, v as f64);
+            }
+        }
+        Target::Tempo => p.bpm = v as f64,
+    }
+}
+
+pub fn target_name(p: &Project, t: &Target) -> String {
+    let mx = |id: &Id| p.mixer.get(*id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into());
+    let ch = |id: &Id| p.channel(*id).map(|c| c.name.clone()).unwrap_or_else(|| "?".into());
+    match t {
+        Target::MixerVolume(id) => format!("{} volume", mx(id)),
+        Target::MixerPan(id) => format!("{} pan", mx(id)),
+        Target::MixerWidth(id) => format!("{} width", mx(id)),
+        Target::MixerMute(id) => format!("{} mute", mx(id)),
+        Target::SendLevel { channel, target } => format!("{} ➡ {} send", mx(channel), mx(target)),
+        Target::InsertParam { channel, param, .. } => format!("{} {param}", mx(channel)),
+        Target::InsertMix { channel, .. } => format!("{} effect mix", mx(channel)),
+        Target::ChannelVolume(id) => format!("{} volume", ch(id)),
+        Target::ChannelPan(id) => format!("{} pan", ch(id)),
+        Target::ChannelPitch(id) => format!("{} pitch", ch(id)),
+        Target::SynthCutoff(id) => format!("{} cutoff", ch(id)),
+        Target::SynthResonance(id) => format!("{} resonance", ch(id)),
+        Target::PluginParam { channel, param, .. } => format!("{} param {param}", ch(channel)),
+        Target::Tempo => "Tempo".into(),
+    }
+}
+
+pub fn sanitize(s: &str) -> String {
+    s.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect()
+}
+
+fn chrono_like_stamp() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("{secs}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starter_project_makes_a_beat() {
+        let dir = std::env::temp_dir().join(format!("dragon-kit-{}", std::process::id()));
+        let kit = dragon_engine::instruments::kit::ensure_default_kit(&dir).unwrap();
+        let p = starter_project(&kit);
+        assert!(p.channels.len() >= 6, "kick, clap, hat, snare, bass, lead");
+        let cache = dragon_engine::samples::SampleCache::default();
+        let opts = dragon_engine::export::ExportOptions { range: dragon_engine::export::ExportRange::Song, tail: 0.5, ..Default::default() };
+        let mut pool = dragon_engine::render::Pool::new();
+        let mix = dragon_engine::export::render_mix(&p, &cache, &opts, &mut pool, &mut |_| {});
+        // Four bars at 140 BPM ≈ 6.9 s.
+        assert!(mix.duration() > 6.5, "{}", mix.duration());
+        assert!(mix.peak() > 0.2, "the beat should be audible, peak {}", mix.peak());
+        // The first kick is at 0 s, the clap on beat 2 (≈ 0.43 s).
+        let rate = mix.rate as f64;
+        let clap_at = (60.0 / p.bpm * rate) as usize;
+        let window = |s: usize| mix.l[s..s + 2000].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(window(0) > 0.2 && window(clap_at) > 0.1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

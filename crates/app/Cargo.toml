@@ -23,3 +23,4 @@ egui = "0.31"
 egui_dock = { version = "0.16", features = ["serde"] }
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
