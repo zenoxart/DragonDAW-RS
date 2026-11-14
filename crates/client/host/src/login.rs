@@ -28,7 +28,10 @@ impl LoginState {
                     self.password.clear();
                     return Some(s);
                 }
-                Err(e) => self.error = Some(e),
+                Err(e) => {
+                    app.log.warn("security", format!("sign-in failed: {} {:?}", e.code, e.message));
+                    self.error = Some(e);
+                }
             }
         }
         let mut result: Option<Option<Session>> = None;
@@ -81,6 +84,12 @@ impl LoginState {
                 if let Some(e) = &self.error {
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new(app.lang.error(e)).color(egui::Color32::from_rgb(229, 57, 53)));
+                    // technical detail (code + server/transport message) for troubleshooting
+                    let detail = match &e.message {
+                        Some(m) if !m.trim().is_empty() => format!("{} – {}", e.code, m.trim()),
+                        _ => e.code.clone(),
+                    };
+                    ui.add(egui::Label::new(egui::RichText::new(detail).small().weak()).selectable(true));
                 }
                 ui.add_space(16.0);
                 ui.label(egui::RichText::new(app.t("shell:login.hint")).small().weak());

@@ -15,7 +15,6 @@ egui_dock = { version = "0.16", features = ["serde"] }
 egui_extras = { version = "0.31", default-features = false }
 futures.workspace = true
 p256.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -24,6 +23,17 @@ tracing.workspace = true
 uuid.workspace = true
 zip.workspace = true
 dirs = "6"
+
+# TLS: Windows' own SChannel on Windows (no C compiler needed to build the client), rustls elsewhere.
+[target.'cfg(windows)'.dependencies.reqwest]
+version = "0.12"
+default-features = false
+features = ["json", "stream", "native-tls"]
+
+[target.'cfg(not(windows))'.dependencies.reqwest]
+version = "0.12"
+default-features = false
+features = ["json", "stream", "rustls-tls"]
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
