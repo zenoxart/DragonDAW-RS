@@ -1,0 +1,18 @@
+[package]
+name = "dragon-test-plugins"
+description = "Tiny CLAP and VST3 plugins used to test Dragon DAW's plugin host."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clap-sys = "0.5"
+vst3 = "0.3"
+
+[dev-dependencies]
+dragon-engine = { workspace = true }
+tempfile = "3"

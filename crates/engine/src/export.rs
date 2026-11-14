@@ -213,8 +213,14 @@ pub fn write_flac(path: &Path, d: &AudioData, bits: u32, mono: bool, dither: boo
 /// Exports the mix (or stems) to `path` (for stems: `path` is a folder or a file whose stem prefixes the
 /// stem names).
 pub fn export(p: &Project, cache: &SampleCache, path: &Path, opts: &ExportOptions, progress: &mut dyn FnMut(f32)) -> Result<ExportReport> {
+    export_with(p, cache, path, opts, &mut Pool::new, progress)
+}
+
+/// [`export`] with a pool factory, so third-party plugins can be rendered
+/// (e.g. `&mut || Pool::with_plugins(Box::new(plugins::Host))`).
+pub fn export_with(p: &Project, cache: &SampleCache, path: &Path, opts: &ExportOptions, make_pool: &mut dyn FnMut() -> Pool, progress: &mut dyn FnMut(f32)) -> Result<ExportReport> {
     if !opts.stems {
-        let mut pool = Pool::new();
+        let mut pool = make_pool();
         let mix = render_mix(p, cache, opts, &mut pool, progress);
         let (d, st) = finish(mix, opts);
         write(path, &d, opts)?;
@@ -232,7 +238,7 @@ pub fn export(p: &Project, cache: &SampleCache, path: &Path, opts: &ExportOption
         for c in q.mixer.channels.iter_mut() {
             c.solo = c.id == *id;
         }
-        let mut pool = Pool::new();
+        let mut pool = make_pool();
         let mix = render_mix(&q, cache, &ExportOptions { normalize_peak: None, loudness_target: None, ..opts.clone() }, &mut pool, &mut |x| progress((k as f32 + x) / count as f32));
         if mix.peak() < 1e-5 {
             continue; // silent channel
@@ -251,6 +257,11 @@ pub fn export(p: &Project, cache: &SampleCache, path: &Path, opts: &ExportOption
 /// Bounce in place: renders one track's mixer channel (soloed, pre-master effects included) to a file and
 /// returns the audio (used for freeze / commit).
 pub fn bounce_track(p: &Project, cache: &SampleCache, track: Id, path: &Path, rate: u32) -> Result<f64> {
+    bounce_track_with(p, cache, track, path, rate, Pool::new())
+}
+
+/// [`bounce_track`] rendering with the given pool (plugins included).
+pub fn bounce_track_with(p: &Project, cache: &SampleCache, track: Id, path: &Path, rate: u32, mut pool: Pool) -> Result<f64> {
     let t = p.track(track).ok_or_else(|| EngineError::Project("no such track".into()))?;
     let mut q = p.clone();
     for c in q.mixer.channels.iter_mut() {
@@ -265,7 +276,6 @@ pub fn bounce_track(p: &Project, cache: &SampleCache, track: Id, path: &Path, ra
         return Err(EngineError::Project("the track is empty".into()));
     }
     let opts = ExportOptions { format: ExportFormat::Wav(BitDepth::Float32), rate, render_rate: rate, range: ExportRange::Range(Range::new(start, end)), tail: 1.0, dither: false, ..Default::default() };
-    let mut pool = Pool::new();
     let d = render_mix(&q, cache, &opts, &mut pool, &mut |_| {});
     write(path, &d, &opts)?;
     Ok(start)

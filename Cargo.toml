@@ -6,6 +6,7 @@ members = [
     "crates/client/framework",
     "crates/engine",
     "crates/app",
+    "crates/test-plugins",
     "tools/dragon-cli",
 ]
 default-members = [

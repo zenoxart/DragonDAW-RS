@@ -4,7 +4,7 @@
 use crate::samples::AudioData;
 use rustfft::{num_complex::Complex, FftPlanner};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Analysis {
     pub bpm: Option<f64>,
     pub bpm_confidence: f32,

@@ -36,6 +36,19 @@ pub trait InstrumentVoice: Send {
     fn active_voices(&self) -> usize;
     /// Sets a modulated parameter (automation) by name.
     fn set_param(&mut self, _id: &str, _value: f32) {}
+    /// Parameters of a hosted plugin instrument.
+    fn plugin_params(&self) -> Vec<crate::effects::PluginParam> {
+        Vec::new()
+    }
+    fn plugin_param(&self, _id: u32) -> Option<f64> {
+        None
+    }
+    fn save_state(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    fn editor(&mut self, _open: bool) -> bool {
+        false
+    }
 }
 
 /// Creates the engine instrument for a model (plugins are created by the plugin host).

@@ -3,6 +3,7 @@
 //! `id → value` parameter maps.
 
 mod color;
+pub use color::DragonParticle;
 mod dynamics;
 mod eq;
 mod modulation;
@@ -115,6 +116,33 @@ pub trait Effect: Send {
     }
     /// Project tempo (for synced effects).
     fn set_tempo(&mut self, _bpm: f64) {}
+    /// Parameters of a hosted third-party plugin (empty for built-ins, which use [`EffectDef::params`]).
+    fn plugin_params(&self) -> Vec<PluginParam> {
+        Vec::new()
+    }
+    /// Current normalized value of a plugin parameter.
+    fn plugin_param(&self, _id: u32) -> Option<f64> {
+        None
+    }
+    /// Opaque plugin state for saving in the project.
+    fn save_state(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Opens (`true`) or closes the plugin's own editor window; returns whether it is open.
+    fn editor(&mut self, _open: bool) -> bool {
+        false
+    }
+}
+
+/// A parameter of a hosted plugin (values are normalized 0 … 1 on the host side).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginParam {
+    pub id: u32,
+    pub name: String,
+    pub default: f64,
+    /// Discrete steps (0 = continuous).
+    pub steps: u32,
+    pub automatable: bool,
 }
 
 pub struct EffectDef {

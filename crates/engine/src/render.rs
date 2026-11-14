@@ -141,6 +141,7 @@ struct SEvent {
 }
 
 struct CChannel {
+    #[allow(dead_code)]
     id: Id,
     strip: usize,
     volume: f32,
@@ -762,6 +763,11 @@ impl Renderer {
         self.song = song;
     }
 
+    /// `true` while the recording count-in is running.
+    pub fn counting_in(&self) -> bool {
+        self.transport.recording && self.count_in > 0.0
+    }
+
     pub fn push_live(&mut self, e: LiveEvent) {
         self.live.push(e);
     }
@@ -889,7 +895,7 @@ impl Renderer {
             PlayMode::Song => song.loop_range.map(|r| (r.start, r.end)).unwrap_or((f64::NAN, f64::NAN)),
         };
         let mut wrap_at: Option<usize> = None;
-        if playing && loop_end.is_finite() && b0 < loop_end && b1 >= loop_end && !self.transport.recording {
+        if playing && loop_end.is_finite() && b0 >= 0.0 && b0 < loop_end && b1 >= loop_end {
             let t_end = song.tempo.beat_to_seconds(loop_end);
             wrap_at = Some((((t_end - t0) * self.rate as f64).round() as usize).min(n));
         }
