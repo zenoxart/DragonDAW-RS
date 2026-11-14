@@ -1,0 +1,5 @@
+target
+artifacts
+.git
+deployment/docker/.env
+*.log

@@ -1,0 +1,2 @@
+# Error carries field errors and metadata on purpose (rich problem details).
+large-error-threshold = 512

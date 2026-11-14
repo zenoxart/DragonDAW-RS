@@ -1,0 +1,391 @@
+{
+  "moduleId": "document-management",
+  "version": "1.1.0",
+  "displayName": "documents:module.name",
+  "description": "Documents, versions and invoice approval.",
+  "icon": "documents.home",
+  "accentColor": "#C62828",
+  "minHostVersion": "1.0.0",
+  "contractsVersion": 1,
+  "prefix": "documents",
+  "client": {
+    "package": "document-management-1.1.0.zip",
+    "viewPack": "views.json",
+    "hotSwap": "supported"
+  },
+  "backend": {
+    "service": "http://document-service:8080",
+    "apiVersion": "v1",
+    "route": "/api/documents"
+  },
+  "permissions": [
+    "documents.view",
+    "documents.edit",
+    "documents.approve"
+  ],
+  "dependencies": [
+    {
+      "moduleId": "user-management",
+      "versionRange": ">=1.0.0 <3.0.0"
+    }
+  ],
+  "languages": [
+    "en",
+    "de"
+  ],
+  "defaultLanguage": "en",
+  "contractSurface": {
+    "backendApiVersion": "v1",
+    "commands": [
+      {
+        "id": "documents.invoice.create",
+        "workflowCapable": true
+      },
+      {
+        "id": "documents.invoice.submit",
+        "workflowCapable": true,
+        "aiAllowed": true,
+        "endpoint": "/api/documents/workflow-steps/documents.submitInvoice"
+      },
+      {
+        "id": "documents.invoice.approve",
+        "workflowCapable": true
+      },
+      {
+        "id": "documents.dispatch",
+        "workflowCapable": true,
+        "aiAllowed": true,
+        "endpoint": "/api/documents/workflow-steps/documents.send"
+      }
+    ],
+    "inputSchemas": [
+      {
+        "schemaId": "documents.invoiceReview",
+        "version": 1,
+        "fields": [
+          {
+            "name": "invoiceId",
+            "type": "text",
+            "label": "documents:field.invoiceId",
+            "required": true,
+            "readOnly": true
+          },
+          {
+            "name": "supplier",
+            "type": "text",
+            "label": "documents:field.supplier"
+          },
+          {
+            "name": "amount",
+            "type": "money",
+            "label": "documents:field.amount",
+            "required": true,
+            "min": 0,
+            "span": "half"
+          },
+          {
+            "name": "costCenter",
+            "type": "entityRef",
+            "label": "documents:field.costCenter",
+            "lookup": "/api/documents/lookups/cost-centers",
+            "span": "half"
+          },
+          {
+            "name": "recommendation",
+            "type": "choice",
+            "label": "documents:field.recommendation",
+            "required": true,
+            "options": [
+              {
+                "value": "approve",
+                "label": "documents:recommendation.approve"
+              },
+              {
+                "value": "reject",
+                "label": "documents:recommendation.reject"
+              },
+              {
+                "value": "clarify",
+                "label": "documents:recommendation.clarify"
+              }
+            ]
+          },
+          {
+            "name": "comment",
+            "type": "multiLine",
+            "label": "documents:field.comment",
+            "maxLength": 500
+          }
+        ]
+      }
+    ],
+    "stepTypes": [
+      {
+        "id": "documents.lookupInvoice",
+        "version": 1,
+        "title": "documents:step.lookupInvoice",
+        "headless": true,
+        "endpoint": "/api/documents/workflow-steps/documents.lookupInvoice",
+        "input": {
+          "schemaId": "documents.lookupInvoice",
+          "fields": [
+            {
+              "name": "invoiceId",
+              "type": "text",
+              "label": "documents:field.invoiceId",
+              "required": true
+            }
+          ]
+        },
+        "outputs": [
+          "invoiceId",
+          "number",
+          "supplier",
+          "amount",
+          "currency",
+          "costCenter",
+          "status",
+          "submittedBy",
+          "dueOn"
+        ]
+      },
+      {
+        "id": "documents.submitInvoice",
+        "version": 1,
+        "title": "documents:step.submitInvoice",
+        "headless": true,
+        "endpoint": "/api/documents/workflow-steps/documents.submitInvoice",
+        "input": {
+          "schemaId": "documents.submitInvoice",
+          "fields": [
+            {
+              "name": "invoiceId",
+              "type": "text",
+              "label": "documents:field.invoiceId",
+              "required": true
+            }
+          ]
+        },
+        "outputs": [
+          "invoiceId",
+          "number",
+          "status"
+        ]
+      },
+      {
+        "id": "documents.approveInvoice",
+        "version": 1,
+        "title": "documents:step.approveInvoice",
+        "headless": true,
+        "endpoint": "/api/documents/workflow-steps/documents.approveInvoice",
+        "input": {
+          "schemaId": "documents.approveInvoice",
+          "fields": [
+            {
+              "name": "invoiceId",
+              "type": "text",
+              "label": "documents:field.invoiceId",
+              "required": true
+            },
+            {
+              "name": "comment",
+              "type": "multiLine",
+              "label": "documents:field.comment",
+              "maxLength": 500
+            }
+          ]
+        },
+        "outputs": [
+          "status",
+          "decidedBy"
+        ]
+      },
+      {
+        "id": "documents.rejectInvoice",
+        "version": 2,
+        "title": "documents:step.rejectInvoice",
+        "headless": true,
+        "endpoint": "/api/documents/workflow-steps/documents.rejectInvoice",
+        "input": {
+          "schemaId": "documents.rejectInvoice",
+          "fields": [
+            {
+              "name": "invoiceId",
+              "type": "text",
+              "label": "documents:field.invoiceId",
+              "required": true
+            },
+            {
+              "name": "comment",
+              "type": "multiLine",
+              "label": "documents:field.comment",
+              "required": true,
+              "maxLength": 500
+            },
+            {
+              "name": "reasonCode",
+              "type": "choice",
+              "label": "documents:field.reasonCode",
+              "required": true,
+              "options": [
+                {
+                  "value": "duplicate",
+                  "label": "documents:reason.duplicate"
+                },
+                {
+                  "value": "wrongAmount",
+                  "label": "documents:reason.wrongAmount"
+                },
+                {
+                  "value": "other",
+                  "label": "documents:reason.other"
+                }
+              ]
+            }
+          ]
+        },
+        "outputs": [
+          "status",
+          "decidedBy"
+        ]
+      },
+      {
+        "id": "documents.send",
+        "version": 1,
+        "title": "documents:step.send",
+        "headless": true,
+        "endpoint": "/api/documents/workflow-steps/documents.send",
+        "input": {
+          "schemaId": "documents.send",
+          "fields": [
+            {
+              "name": "documentId",
+              "type": "text",
+              "label": "documents:field.document",
+              "required": true
+            },
+            {
+              "name": "recipient",
+              "type": "text",
+              "label": "documents:field.recipient",
+              "required": true
+            }
+          ]
+        },
+        "outputs": [
+          "sent",
+          "recipient"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "documents.created",
+        "payloadVersion": 1,
+        "fields": [
+          "documentId",
+          "title",
+          "category",
+          "status",
+          "version"
+        ]
+      },
+      {
+        "type": "documents.updated",
+        "payloadVersion": 1,
+        "fields": [
+          "documentId",
+          "title",
+          "category",
+          "status",
+          "version"
+        ]
+      },
+      {
+        "type": "documents.invoice.created",
+        "payloadVersion": 1,
+        "fields": [
+          "invoiceId",
+          "number",
+          "supplier",
+          "amount",
+          "currency",
+          "costCenter",
+          "status",
+          "category"
+        ]
+      },
+      {
+        "type": "documents.invoice.submitted",
+        "payloadVersion": 1,
+        "fields": [
+          "invoiceId",
+          "number",
+          "supplier",
+          "amount",
+          "currency",
+          "costCenter",
+          "status",
+          "category",
+          "submittedBy",
+          "dueOn"
+        ]
+      },
+      {
+        "type": "documents.invoice.approved",
+        "payloadVersion": 1,
+        "fields": [
+          "invoiceId",
+          "number",
+          "supplier",
+          "amount",
+          "status",
+          "decidedByName",
+          "documentId"
+        ]
+      },
+      {
+        "type": "documents.invoice.rejected",
+        "payloadVersion": 1,
+        "fields": [
+          "invoiceId",
+          "number",
+          "supplier",
+          "amount",
+          "status",
+          "decidedByName",
+          "comment"
+        ]
+      },
+      {
+        "type": "documents.invoice.paid",
+        "payloadVersion": 1,
+        "fields": [
+          "invoiceId",
+          "number",
+          "amount"
+        ]
+      }
+    ],
+    "templates": [
+      "invoice-approval",
+      "send-approved-invoices",
+      "invoice-archiving"
+    ],
+    "migrations": [
+      {
+        "kind": "command",
+        "from": "documents.send",
+        "to": "documents.dispatch"
+      },
+      {
+        "kind": "inputSchema",
+        "from": "documents.invoiceReview",
+        "to": "documents.invoiceReview",
+        "fieldRenames": {
+          "note": "comment"
+        }
+      }
+    ]
+  }
+}

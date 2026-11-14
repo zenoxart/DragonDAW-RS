@@ -1,0 +1,63 @@
+{
+  "moduleId": "user-management",
+  "version": "1.0.0",
+  "displayName": "users:module.name",
+  "description": "Users, departments and role assignment.",
+  "icon": "users.home",
+  "accentColor": "#6A1B9A",
+  "minHostVersion": "1.0.0",
+  "contractsVersion": 1,
+  "prefix": "users",
+  "client": { "package": "user-management-1.0.0.zip", "viewPack": "views.json", "hotSwap": "supported" },
+  "backend": { "service": "http://user-service:8080", "apiVersion": "v1", "route": "/api/users" },
+  "permissions": ["users.view", "users.edit", "users.roles"],
+  "dependencies": [],
+  "languages": ["en", "de"],
+  "defaultLanguage": "en",
+  "contractSurface": {
+    "backendApiVersion": "v1",
+    "commands": [
+      { "id": "users.create", "workflowCapable": true },
+      { "id": "users.edit", "workflowCapable": true }
+    ],
+    "inputSchemas": [
+      {
+        "schemaId": "users.onboarding",
+        "version": 1,
+        "fields": [
+          { "name": "displayName", "type": "text", "label": "users:field.displayName", "required": true, "maxLength": 100 },
+          { "name": "userName", "type": "text", "label": "users:field.userName", "required": true, "pattern": "^[a-z][a-z0-9.\\-]{2,40}$", "span": "half" },
+          { "name": "email", "type": "text", "label": "users:field.email", "required": true, "span": "half" },
+          { "name": "departmentId", "type": "entityRef", "label": "users:field.department", "required": true, "lookup": "/api/users/lookups/departments", "span": "half" },
+          { "name": "jobTitle", "type": "text", "label": "users:field.jobTitle", "span": "half" },
+          { "name": "role", "type": "choice", "label": "users:field.role", "required": true, "default": "Viewer",
+            "options": [
+              { "value": "Viewer", "label": "Viewer" }, { "value": "Clerk", "label": "Clerk" },
+              { "value": "Analyst", "label": "Analyst" }, { "value": "Approver", "label": "Approver" }
+            ] }
+        ]
+      }
+    ],
+    "stepTypes": [
+      {
+        "id": "users.createUser", "version": 1, "title": "users:step.createUser", "headless": true,
+        "endpoint": "/api/users/workflow-steps/users.createUser",
+        "input": { "schemaId": "users.createUser", "fields": [
+          { "name": "displayName", "type": "text", "label": "users:field.displayName", "required": true },
+          { "name": "userName", "type": "text", "label": "users:field.userName", "required": true },
+          { "name": "email", "type": "text", "label": "users:field.email", "required": true },
+          { "name": "departmentId", "type": "text", "label": "users:field.department" },
+          { "name": "jobTitle", "type": "text", "label": "users:field.jobTitle" },
+          { "name": "role", "type": "text", "label": "users:field.role" }
+        ] },
+        "outputs": ["userId", "userName", "temporaryPassword"]
+      }
+    ],
+    "events": [
+      { "type": "users.created", "payloadVersion": 1, "fields": ["userId", "userName", "displayName", "role"] },
+      { "type": "users.updated", "payloadVersion": 1, "fields": ["userId", "displayName", "isActive"] }
+    ],
+    "templates": ["employee-onboarding"],
+    "migrations": []
+  }
+}

@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.env
+deployment/docker/.env
+*.log
+/artifacts

@@ -1,0 +1,33 @@
+[package]
+name = "redhive-client-framework"
+description = "Red Hive desktop client framework (egui): app context, commands, shortcuts, docking, navigation wheel, notifications, module loader, hot-swap, workflows."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+redhive-monads.workspace = true
+redhive-contracts.workspace = true
+base64.workspace = true
+chrono.workspace = true
+egui = "0.31"
+egui_dock = { version = "0.16", features = ["serde"] }
+egui_extras = { version = "0.31", default-features = false }
+futures.workspace = true
+p256.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+zip.workspace = true
+dirs = "6"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+notify-rust = "4"
+
+[dev-dependencies]
+rand.workspace = true

@@ -1,0 +1,89 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/shared/monads",
+    "crates/shared/contracts",
+    "crates/backend/core",
+    "crates/backend/api-gateway",
+    "crates/backend/identity-service",
+    "crates/backend/configuration-service",
+    "crates/backend/module-registry-service",
+    "crates/backend/module-delivery-service",
+    "crates/backend/update-orchestrator",
+    "crates/backend/notification-point",
+    "crates/backend/workflow-service",
+    "crates/backend/ai-agent-service",
+    "modules/document-management/backend",
+    "modules/reporting/backend",
+    "modules/user-management/backend",
+    "crates/client/framework",
+    "crates/client/host",
+    "tools/redhive-cli",
+]
+default-members = [
+    "crates/shared/monads",
+    "crates/shared/contracts",
+    "crates/backend/core",
+    "crates/backend/api-gateway",
+    "crates/backend/identity-service",
+    "crates/backend/configuration-service",
+    "crates/backend/module-registry-service",
+    "crates/backend/module-delivery-service",
+    "crates/backend/update-orchestrator",
+    "crates/backend/notification-point",
+    "crates/backend/workflow-service",
+    "crates/backend/ai-agent-service",
+    "modules/document-management/backend",
+    "modules/reporting/backend",
+    "modules/user-management/backend",
+    "tools/redhive-cli",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["ZenoxArt"]
+repository = "https://github.com/zenoxart/RedHiveFramework"
+rust-version = "1.85"
+
+[workspace.dependencies]
+redhive-monads = { path = "crates/shared/monads" }
+redhive-contracts = { path = "crates/shared/contracts" }
+redhive-backend-core = { path = "crates/backend/core" }
+redhive-client-framework = { path = "crates/client/framework" }
+
+anyhow = "1"
+async-stream = "0.3"
+axum = { version = "0.8", features = ["macros"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+hmac = "0.12"
+http = "1"
+jsonwebtoken = "9"
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+rust_decimal = { version = "1", features = ["serde-with-float"] }
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "macros", "rust_decimal"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

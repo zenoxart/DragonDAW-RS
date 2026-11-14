@@ -1,0 +1,21 @@
+{
+  "id": "50000000-0000-0000-0000-000000000005",
+  "version": 1,
+  "name": "Daily sales briefing",
+  "description": "Runs the sales-by-region report every morning for the analysts.",
+  "origin": "moduleTemplate",
+  "owningModule": "reporting",
+  "ownerId": "10000000-0000-0000-0000-000000000001",
+  "status": "active",
+  "startStepId": "run",
+  "steps": [
+    { "id": "run", "kind": "moduleStep", "title": "Run the sales report", "stepTypeId": "reports.runReport",
+      "parameters": { "reportId": "'sales-by-region'", "parameters": "'{\"from\": \"2026-01-01\", \"to\": \"2026-12-31\"}'" } }
+  ],
+  "transitions": [{ "from": "run", "to": "end" }],
+  "triggers": [
+    { "id": "morning", "kind": "schedule", "schedule": "daily:06:30", "executor": "human", "runAs": "10000000-0000-0000-0000-000000000004" },
+    { "id": "manual", "kind": "manual" }
+  ],
+  "aiPolicy": { "autonomy": "off" }
+}

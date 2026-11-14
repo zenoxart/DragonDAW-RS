@@ -1,0 +1,125 @@
+# Red Hive – complete backend: PostgreSQL + 11 services + API gateway.
+#   cp .env.example .env   (change the secrets!)
+#   docker compose up --build
+# The desktop client connects to http://localhost:${REDHIVE_PORT:-8080}.
+name: redhive
+
+x-service: &service
+  image: redhive/backend:${REDHIVE_VERSION:-latest}
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+x-env: &env
+  DATABASE_URL: postgres://${POSTGRES_USER:-redhive}:${POSTGRES_PASSWORD:-redhive}@postgres:5432/${POSTGRES_DB:-redhive}
+  REDHIVE__JWT_KEY: ${REDHIVE_JWT_KEY:?set REDHIVE_JWT_KEY in .env}
+  REDHIVE__INTERNAL_KEY: ${REDHIVE_INTERNAL_KEY:?set REDHIVE_INTERNAL_KEY in .env}
+  REDHIVE__LOG_FORMAT: json
+  RUST_LOG: ${RUST_LOG:-info}
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-redhive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-redhive}
+      POSTGRES_DB: ${POSTGRES_DB:-redhive}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-redhive} -d ${POSTGRES_DB:-redhive}"]
+      interval: 5s
+      retries: 20
+
+  api-gateway:
+    <<: *service
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile
+    command: ["redhive-api-gateway"]
+    environment:
+      <<: *env
+      REDHIVE__RATE_LIMIT_PER_MINUTE: ${REDHIVE_RATE_LIMIT_PER_MINUTE:-600}
+    ports:
+      - "${REDHIVE_PORT:-8080}:8080"
+
+  identity-service:
+    <<: *service
+    command: ["redhive-identity-service"]
+    environment:
+      <<: *env
+
+  configuration-service:
+    <<: *service
+    command: ["redhive-configuration-service"]
+    environment:
+      <<: *env
+
+  module-registry:
+    <<: *service
+    command: ["redhive-module-registry-service"]
+    environment:
+      <<: *env
+
+  module-delivery:
+    <<: *service
+    command: ["redhive-module-delivery-service"]
+    environment:
+      <<: *env
+      REDHIVE__SIGNING_KEY: ${REDHIVE_SIGNING_KEY:-}
+
+  update-orchestrator:
+    <<: *service
+    command: ["redhive-update-orchestrator"]
+    environment:
+      <<: *env
+
+  notification-point:
+    <<: *service
+    command: ["redhive-notification-point"]
+    environment:
+      <<: *env
+      REDHIVE__WNS__PACKAGE_SID: ${REDHIVE_WNS_PACKAGE_SID:-}
+      REDHIVE__WNS__CLIENT_SECRET: ${REDHIVE_WNS_CLIENT_SECRET:-}
+
+  workflow-service:
+    <<: *service
+    command: ["redhive-workflow-service"]
+    environment:
+      <<: *env
+
+  ai-agent:
+    <<: *service
+    command: ["redhive-ai-agent-service"]
+    environment:
+      <<: *env
+      REDHIVE__AI__PROVIDER: ${REDHIVE_AI_PROVIDER:-rules}
+      REDHIVE__AI__ENDPOINT: ${REDHIVE_AI_ENDPOINT:-}
+      REDHIVE__AI__API_KEY: ${REDHIVE_AI_API_KEY:-}
+      REDHIVE__AI__MODEL: ${REDHIVE_AI_MODEL:-}
+      REDHIVE__AI__REVIEW_LIMIT: ${REDHIVE_AI_REVIEW_LIMIT:-20000}
+
+  document-service:
+    <<: *service
+    command: ["redhive-document-service"]
+    environment:
+      <<: *env
+
+  reporting-service:
+    <<: *service
+    command: ["redhive-reporting-service"]
+    environment:
+      <<: *env
+
+  user-service:
+    <<: *service
+    command: ["redhive-user-service"]
+    environment:
+      <<: *env
+
+
+volumes:
+  pgdata:

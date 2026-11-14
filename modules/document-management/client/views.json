@@ -1,0 +1,254 @@
+{
+  "moduleId": "document-management",
+  "version": "1.0.0",
+  "icons": { "home": "📂", "invoice": "📄", "library": "📁", "approve": "✅", "reject": "⛔", "submit": "📨", "pay": "💶", "add": "➕", "edit": "✏", "archive": "📦", "version": "⤴" },
+  "groups": [
+    { "menu": "shell.mainmenu", "path": "documents", "label": "documents:menu", "icon": "documents.home", "order": 20 },
+    { "menu": "shell.navigation", "path": "documents", "label": "documents:module.name", "icon": "documents.home", "order": 20 }
+  ],
+  "views": [
+    {
+      "key": "documents.home", "title": "documents:view.home", "icon": "documents.home", "home": true, "permission": "documents.view",
+      "liveEvents": ["documents.*"], "order": 0,
+      "body": {
+        "kind": "dashboard", "endpoint": "/api/documents/stats",
+        "cards": [
+          { "label": "documents:card.submitted", "value": "invoices.submitted", "format": "number", "icon": "documents.submit", "navigate": "documents.invoices" },
+          { "label": "documents:card.openAmount", "value": "invoices.openAmount", "format": "money", "icon": "documents.pay" },
+          { "label": "documents:card.overdue", "value": "invoices.overdue", "format": "number", "icon": "documents.invoice", "navigate": "documents.invoices" },
+          { "label": "documents:card.activeDocuments", "value": "documents.active", "format": "number", "icon": "documents.library", "navigate": "documents.library" }
+        ],
+        "chart": { "title": "documents:chart.byCostCenter", "items": "byCostCenter", "labelField": "label", "valueField": "value", "kind": "bar", "format": "money" },
+        "lists": [
+          { "title": "documents:list.awaitingApproval", "items": "awaitingApproval", "navigate": "documents.invoices",
+            "columns": [
+              { "field": "number", "label": "documents:field.number" },
+              { "field": "supplier", "label": "documents:field.supplier", "width": 2 },
+              { "field": "amount", "label": "documents:field.amount", "format": "money", "currencyField": "currency" },
+              { "field": "submittedByName", "label": "documents:field.submittedBy" }
+            ] }
+        ]
+      }
+    },
+    {
+      "key": "documents.invoices", "title": "documents:view.invoices", "icon": "documents.invoice", "permission": "documents.view",
+      "liveEvents": ["documents.invoice.*"], "order": 1,
+      "body": {
+        "kind": "list", "endpoint": "/api/documents/invoices", "items": "items", "search": true,
+        "filters": [{ "param": "status", "label": "documents:field.status", "options": [
+          { "value": "all", "label": "documents:status.all" }, { "value": "draft", "label": "documents:status.draft" },
+          { "value": "submitted", "label": "documents:status.submitted" }, { "value": "approved", "label": "documents:status.approved" },
+          { "value": "rejected", "label": "documents:status.rejected" }, { "value": "paid", "label": "documents:status.paid" }
+        ] }],
+        "columns": [
+          { "field": "number", "label": "documents:field.number" },
+          { "field": "supplier", "label": "documents:field.supplier", "width": 2 },
+          { "field": "amount", "label": "documents:field.amount", "format": "money", "currencyField": "currency" },
+          { "field": "dueOn", "label": "documents:field.dueOn", "format": "date" },
+          { "field": "costCenter", "label": "documents:field.costCenter" },
+          { "field": "status", "label": "documents:field.status", "format": "badge" }
+        ],
+        "detail": [
+          { "field": "number", "label": "documents:field.number" },
+          { "field": "supplier", "label": "documents:field.supplier" },
+          { "field": "amount", "label": "documents:field.amount", "format": "money", "currencyField": "currency" },
+          { "field": "issuedOn", "label": "documents:field.issuedOn", "format": "date" },
+          { "field": "dueOn", "label": "documents:field.dueOn", "format": "date" },
+          { "field": "costCenter", "label": "documents:field.costCenter" },
+          { "field": "status", "label": "documents:field.status", "format": "badge" },
+          { "field": "submittedByName", "label": "documents:field.submittedBy" },
+          { "field": "submittedAt", "label": "documents:field.submittedAt", "format": "dateTime" },
+          { "field": "decidedByName", "label": "documents:field.decidedBy" },
+          { "field": "decidedAt", "label": "documents:field.decidedAt", "format": "dateTime" },
+          { "field": "comment", "label": "documents:field.comment" }
+        ],
+        "toolbarActions": [
+          { "id": "create", "label": "documents:action.createInvoice", "icon": "documents.add", "permission": "documents.edit", "method": "POST",
+            "endpoint": "/api/documents/invoices", "command": "documents.invoice.create", "success": "documents:success.created",
+            "form": { "schemaId": "documents.invoice", "fields": [
+              { "name": "supplier", "type": "text", "label": "documents:field.supplier", "required": true, "maxLength": 200 },
+              { "name": "amount", "type": "money", "label": "documents:field.amount", "required": true, "min": 0, "span": "half" },
+              { "name": "currency", "type": "choice", "label": "documents:field.currency", "default": "EUR", "span": "half",
+                "options": [{ "value": "EUR", "label": "EUR" }, { "value": "CHF", "label": "CHF" }, { "value": "USD", "label": "USD" }] },
+              { "name": "issuedOn", "type": "date", "label": "documents:field.issuedOn", "required": true, "span": "half" },
+              { "name": "dueOn", "type": "date", "label": "documents:field.dueOn", "required": true, "span": "half" },
+              { "name": "costCenter", "type": "entityRef", "label": "documents:field.costCenter", "required": true, "lookup": "/api/documents/lookups/cost-centers" },
+              { "name": "comment", "type": "multiLine", "label": "documents:field.comment", "maxLength": 500 }
+            ] } }
+        ],
+        "rowActions": [
+          { "id": "edit", "label": "documents:action.edit", "icon": "documents.edit", "permission": "documents.edit", "method": "PUT",
+            "endpoint": "/api/documents/invoices/{id}", "visibleWhen": "row.status == 'draft' || row.status == 'rejected'",
+            "prefill": { "supplier": "row.supplier", "amount": "row.amount", "currency": "row.currency", "issuedOn": "row.issuedOn", "dueOn": "row.dueOn", "costCenter": "row.costCenter", "comment": "row.comment" },
+            "body": { "rowVersion": "row.rowVersion" },
+            "form": { "schemaId": "documents.invoice", "fields": [
+              { "name": "supplier", "type": "text", "label": "documents:field.supplier", "required": true, "maxLength": 200 },
+              { "name": "amount", "type": "money", "label": "documents:field.amount", "required": true, "min": 0, "span": "half" },
+              { "name": "currency", "type": "choice", "label": "documents:field.currency", "span": "half",
+                "options": [{ "value": "EUR", "label": "EUR" }, { "value": "CHF", "label": "CHF" }, { "value": "USD", "label": "USD" }] },
+              { "name": "issuedOn", "type": "date", "label": "documents:field.issuedOn", "required": true, "span": "half" },
+              { "name": "dueOn", "type": "date", "label": "documents:field.dueOn", "required": true, "span": "half" },
+              { "name": "costCenter", "type": "entityRef", "label": "documents:field.costCenter", "required": true, "lookup": "/api/documents/lookups/cost-centers" },
+              { "name": "comment", "type": "multiLine", "label": "documents:field.comment", "maxLength": 500 }
+            ] }, "success": "documents:success.saved" },
+          { "id": "submit", "label": "documents:action.submit", "icon": "documents.submit", "permission": "documents.edit", "method": "POST",
+            "endpoint": "/api/documents/invoices/{id}/submit", "visibleWhen": "row.status == 'draft' || row.status == 'rejected'",
+            "confirm": "documents:confirm.submit", "command": "documents.invoice.submit", "success": "documents:success.submitted" },
+          { "id": "approve", "label": "documents:action.approve", "icon": "documents.approve", "permission": "documents.approve", "method": "POST",
+            "endpoint": "/api/documents/invoices/{id}/approve", "visibleWhen": "row.status == 'submitted' && row.submittedBy != user.id",
+            "command": "documents.invoice.approve", "body": { "rowVersion": "row.rowVersion" },
+            "form": { "schemaId": "documents.decision", "fields": [{ "name": "comment", "type": "multiLine", "label": "documents:field.comment", "maxLength": 500 }] },
+            "success": "documents:success.approved" },
+          { "id": "reject", "label": "documents:action.reject", "icon": "documents.reject", "permission": "documents.approve", "method": "POST",
+            "endpoint": "/api/documents/invoices/{id}/reject", "visibleWhen": "row.status == 'submitted' && row.submittedBy != user.id",
+            "body": { "rowVersion": "row.rowVersion" },
+            "form": { "schemaId": "documents.rejection", "fields": [{ "name": "comment", "type": "multiLine", "label": "documents:field.reason", "required": true, "maxLength": 500 }] },
+            "success": "documents:success.rejected" },
+          { "id": "pay", "label": "documents:action.pay", "icon": "documents.pay", "permission": "documents.approve", "method": "POST",
+            "endpoint": "/api/documents/invoices/{id}/pay", "visibleWhen": "row.status == 'approved'", "confirm": "documents:confirm.pay", "success": "documents:success.paid" }
+        ]
+      }
+    },
+    {
+      "key": "documents.library", "title": "documents:view.library", "icon": "documents.library", "permission": "documents.view",
+      "liveEvents": ["documents.created", "documents.updated"], "order": 2,
+      "body": {
+        "kind": "list", "endpoint": "/api/documents", "items": "items", "search": true,
+        "filters": [
+          { "param": "category", "label": "documents:field.category", "options": [
+            { "value": "all", "label": "documents:status.all" }, { "value": "contract", "label": "documents:category.contract" },
+            { "value": "report", "label": "documents:category.report" }, { "value": "invoice", "label": "documents:category.invoice" },
+            { "value": "other", "label": "documents:category.other" } ] },
+          { "param": "status", "label": "documents:field.status", "options": [
+            { "value": "all", "label": "documents:status.all" }, { "value": "draft", "label": "documents:status.draft" },
+            { "value": "active", "label": "documents:status.active" }, { "value": "archived", "label": "documents:status.archived" } ] }
+        ],
+        "columns": [
+          { "field": "title", "label": "documents:field.title", "width": 3 },
+          { "field": "category", "label": "documents:field.category", "format": "badge" },
+          { "field": "status", "label": "documents:field.status", "format": "badge" },
+          { "field": "ownerName", "label": "documents:field.owner" },
+          { "field": "currentVersion", "label": "documents:field.version", "format": "number", "width": 0.6 },
+          { "field": "updatedAt", "label": "documents:field.updatedAt", "format": "dateTime" }
+        ],
+        "detail": [
+          { "field": "title", "label": "documents:field.title" },
+          { "field": "fileName", "label": "documents:field.fileName" },
+          { "field": "sizeBytes", "label": "documents:field.size", "format": "bytes" },
+          { "field": "tags", "label": "documents:field.tags", "format": "list" },
+          { "field": "createdAt", "label": "documents:field.createdAt", "format": "dateTime" }
+        ],
+        "toolbarActions": [
+          { "id": "create", "label": "documents:action.createDocument", "icon": "documents.add", "permission": "documents.edit", "method": "POST",
+            "endpoint": "/api/documents", "command": "documents.create", "success": "documents:success.created",
+            "body": { "tags": "split(form.tags, ',')" },
+            "form": { "schemaId": "documents.document", "fields": [
+              { "name": "title", "type": "text", "label": "documents:field.title", "required": true, "maxLength": 200 },
+              { "name": "category", "type": "choice", "label": "documents:field.category", "required": true, "default": "contract", "span": "half",
+                "options": [{ "value": "contract", "label": "documents:category.contract" }, { "value": "report", "label": "documents:category.report" }, { "value": "other", "label": "documents:category.other" }] },
+              { "name": "fileName", "type": "text", "label": "documents:field.fileName", "required": true, "span": "half" },
+              { "name": "sizeBytes", "type": "number", "label": "documents:field.size", "min": 0, "default": 0, "span": "half" },
+              { "name": "tags", "type": "text", "label": "documents:field.tags", "span": "half" }
+            ] } }
+        ],
+        "rowActions": [
+          { "id": "version", "label": "documents:action.newVersion", "icon": "documents.version", "permission": "documents.edit", "method": "POST",
+            "endpoint": "/api/documents/{id}/versions", "visibleWhen": "row.status != 'archived'", "body": { "rowVersion": "row.rowVersion" },
+            "form": { "schemaId": "documents.version", "fields": [
+              { "name": "fileName", "type": "text", "label": "documents:field.fileName", "required": true },
+              { "name": "sizeBytes", "type": "number", "label": "documents:field.size", "min": 0, "default": 0 },
+              { "name": "comment", "type": "text", "label": "documents:field.comment" }
+            ] }, "success": "documents:success.saved" },
+          { "id": "archive", "label": "documents:action.archive", "icon": "documents.archive", "permission": "documents.edit", "method": "POST",
+            "endpoint": "/api/documents/{id}/archive", "visibleWhen": "row.status != 'archived'", "confirm": "documents:confirm.archive", "success": "documents:success.saved" },
+          { "id": "activate", "label": "documents:action.activate", "icon": "documents.version", "permission": "documents.edit", "method": "POST",
+            "endpoint": "/api/documents/{id}/activate", "visibleWhen": "row.status != 'active'", "success": "documents:success.saved" }
+        ]
+      }
+    }
+  ],
+  "commands": [
+    {
+      "descriptor": { "id": "documents.invoice.new", "label": "documents:action.createInvoice", "icon": "documents.add", "permission": "documents.edit",
+        "placements": [{ "menu": "shell.mainmenu", "path": "documents", "section": 1, "order": 0 }, { "menu": "shell.toolbar", "path": "", "section": 5, "order": 0 }],
+        "shortcuts": [{ "gesture": "Ctrl+Shift+N", "scope": "global" }], "workflowCapable": true, "moduleId": "document-management" },
+      "run": { "kind": "navigate", "view": "documents.invoices" }
+    }
+  ],
+  "texts": {
+    "en": {
+      "module.name": "Documents", "menu": "Documents",
+      "view.home": "Documents overview", "view.invoices": "Invoices", "view.library": "Document library",
+      "card.submitted": "Awaiting approval", "card.openAmount": "Open amount", "card.overdue": "Overdue", "card.activeDocuments": "Active documents",
+      "chart.byCostCenter": "Invoice volume by cost centre", "list.awaitingApproval": "Invoices awaiting approval",
+      "field.number": "Number", "field.supplier": "Supplier", "field.amount": "Amount", "field.currency": "Currency", "field.issuedOn": "Issued on",
+      "field.dueOn": "Due on", "field.costCenter": "Cost centre", "field.status": "Status", "field.submittedBy": "Submitted by",
+      "field.submittedAt": "Submitted at", "field.decidedBy": "Decided by", "field.decidedAt": "Decided at", "field.comment": "Comment",
+      "field.reason": "Reason", "field.title": "Title", "field.category": "Category", "field.owner": "Owner", "field.version": "Version",
+      "field.updatedAt": "Updated", "field.fileName": "File name", "field.size": "Size", "field.tags": "Tags (comma separated)",
+      "field.createdAt": "Created", "field.invoiceId": "Invoice", "field.recommendation": "Recommendation", "field.note": "Note",
+      "field.document": "Document", "field.recipient": "Recipient",
+      "status.all": "All", "status.draft": "Draft", "status.submitted": "Submitted", "status.approved": "Approved", "status.rejected": "Rejected",
+      "status.paid": "Paid", "status.active": "Active", "status.archived": "Archived",
+      "category.contract": "Contract", "category.report": "Report", "category.invoice": "Invoice", "category.other": "Other",
+      "recommendation.approve": "Approve", "recommendation.reject": "Reject", "recommendation.clarify": "Needs clarification",
+      "action.createInvoice": "New invoice", "action.createDocument": "New document", "action.edit": "Edit", "action.submit": "Submit",
+      "action.approve": "Approve", "action.reject": "Reject", "action.pay": "Mark as paid", "action.newVersion": "Upload new version",
+      "action.archive": "Archive", "action.activate": "Activate",
+      "confirm.submit": "Submit this invoice for approval?", "confirm.pay": "Mark this invoice as paid?", "confirm.archive": "Archive this document?",
+      "success.created": "Created.", "success.saved": "Saved.", "success.submitted": "Invoice submitted for approval.",
+      "success.approved": "Invoice approved.", "success.rejected": "Invoice rejected.", "success.paid": "Invoice marked as paid.",
+      "notification.submitted": "Invoice {number} from {supplier} ({amount}) awaits approval",
+      "notification.approved": "Invoice {number} ({amount}) was approved", "notification.rejected": "Invoice {number} was rejected",
+      "invoice.notFound": "The invoice does not exist.", "invoice.notSubmitted": "Only submitted invoices can be approved or rejected.",
+      "invoice.selfApproval": "You cannot approve or reject an invoice you submitted yourself.",
+      "invoice.limitExceeded": "The amount ({amount}) exceeds your approval limit ({limit}).",
+      "invoice.reasonRequired": "Please give a reason for the rejection.", "invoice.notDraft": "Only draft or rejected invoices can be changed or submitted.",
+      "invoice.notApproved": "Only approved invoices can be paid.", "invoice.stillOpen": "The invoice is still open.",
+      "document.notFound": "The document does not exist.", "document.archived": "The document is archived.",
+      "recipient.invalid": "Please enter a valid e-mail address.",
+      "supplier.tooLong": "The supplier name is too long.", "amount.negative": "The amount must not be negative.", "amount.tooHigh": "The amount is too high.",
+      "currency.invalid": "Unknown currency.", "dueOn.beforeIssued": "The due date is before the issue date.",
+      "category.invalid": "Unknown category.", "sizeBytes.negative": "The size must not be negative.",
+      "step.lookupInvoice": "Load invoice", "step.submitInvoice": "Submit invoice", "step.approveInvoice": "Approve invoice",
+      "step.rejectInvoice": "Reject invoice", "step.archiveInvoice": "Archive invoice", "step.send": "Send document"
+    },
+    "de": {
+      "module.name": "Dokumente", "menu": "Dokumente",
+      "view.home": "Dokumentenübersicht", "view.invoices": "Rechnungen", "view.library": "Dokumentenablage",
+      "card.submitted": "Warten auf Freigabe", "card.openAmount": "Offener Betrag", "card.overdue": "Überfällig", "card.activeDocuments": "Aktive Dokumente",
+      "chart.byCostCenter": "Rechnungsvolumen nach Kostenstelle", "list.awaitingApproval": "Rechnungen zur Freigabe",
+      "field.number": "Nummer", "field.supplier": "Lieferant", "field.amount": "Betrag", "field.currency": "Währung", "field.issuedOn": "Rechnungsdatum",
+      "field.dueOn": "Fällig am", "field.costCenter": "Kostenstelle", "field.status": "Status", "field.submittedBy": "Eingereicht von",
+      "field.submittedAt": "Eingereicht am", "field.decidedBy": "Entschieden von", "field.decidedAt": "Entschieden am", "field.comment": "Kommentar",
+      "field.reason": "Begründung", "field.title": "Titel", "field.category": "Kategorie", "field.owner": "Besitzer", "field.version": "Version",
+      "field.updatedAt": "Geändert", "field.fileName": "Dateiname", "field.size": "Größe", "field.tags": "Schlagwörter (durch Komma getrennt)",
+      "field.createdAt": "Erstellt", "field.invoiceId": "Rechnung", "field.recommendation": "Empfehlung", "field.note": "Notiz",
+      "field.document": "Dokument", "field.recipient": "Empfänger",
+      "status.all": "Alle", "status.draft": "Entwurf", "status.submitted": "Eingereicht", "status.approved": "Freigegeben", "status.rejected": "Abgelehnt",
+      "status.paid": "Bezahlt", "status.active": "Aktiv", "status.archived": "Archiviert",
+      "category.contract": "Vertrag", "category.report": "Bericht", "category.invoice": "Rechnung", "category.other": "Sonstiges",
+      "recommendation.approve": "Freigeben", "recommendation.reject": "Ablehnen", "recommendation.clarify": "Klärung nötig",
+      "action.createInvoice": "Neue Rechnung", "action.createDocument": "Neues Dokument", "action.edit": "Bearbeiten", "action.submit": "Einreichen",
+      "action.approve": "Freigeben", "action.reject": "Ablehnen", "action.pay": "Als bezahlt markieren", "action.newVersion": "Neue Version hochladen",
+      "action.archive": "Archivieren", "action.activate": "Aktivieren",
+      "confirm.submit": "Diese Rechnung zur Freigabe einreichen?", "confirm.pay": "Diese Rechnung als bezahlt markieren?", "confirm.archive": "Dieses Dokument archivieren?",
+      "success.created": "Angelegt.", "success.saved": "Gespeichert.", "success.submitted": "Rechnung zur Freigabe eingereicht.",
+      "success.approved": "Rechnung freigegeben.", "success.rejected": "Rechnung abgelehnt.", "success.paid": "Rechnung als bezahlt markiert.",
+      "notification.submitted": "Rechnung {number} von {supplier} ({amount}) wartet auf Freigabe",
+      "notification.approved": "Rechnung {number} ({amount}) wurde freigegeben", "notification.rejected": "Rechnung {number} wurde abgelehnt",
+      "invoice.notFound": "Die Rechnung existiert nicht.", "invoice.notSubmitted": "Nur eingereichte Rechnungen können freigegeben oder abgelehnt werden.",
+      "invoice.selfApproval": "Eine selbst eingereichte Rechnung können Sie nicht freigeben oder ablehnen.",
+      "invoice.limitExceeded": "Der Betrag ({amount}) übersteigt Ihr Freigabelimit ({limit}).",
+      "invoice.reasonRequired": "Bitte geben Sie eine Begründung für die Ablehnung an.", "invoice.notDraft": "Nur Entwürfe oder abgelehnte Rechnungen können geändert oder eingereicht werden.",
+      "invoice.notApproved": "Nur freigegebene Rechnungen können bezahlt werden.", "invoice.stillOpen": "Die Rechnung ist noch offen.",
+      "document.notFound": "Das Dokument existiert nicht.", "document.archived": "Das Dokument ist archiviert.",
+      "recipient.invalid": "Bitte geben Sie eine gültige E-Mail-Adresse ein.",
+      "supplier.tooLong": "Der Lieferantenname ist zu lang.", "amount.negative": "Der Betrag darf nicht negativ sein.", "amount.tooHigh": "Der Betrag ist zu hoch.",
+      "currency.invalid": "Unbekannte Währung.", "dueOn.beforeIssued": "Das Fälligkeitsdatum liegt vor dem Rechnungsdatum.",
+      "category.invalid": "Unbekannte Kategorie.", "sizeBytes.negative": "Die Größe darf nicht negativ sein.",
+      "step.lookupInvoice": "Rechnung laden", "step.submitInvoice": "Rechnung einreichen", "step.approveInvoice": "Rechnung freigeben",
+      "step.rejectInvoice": "Rechnung ablehnen", "step.archiveInvoice": "Rechnung archivieren", "step.send": "Dokument senden"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "moduleId": "reporting",
+  "version": "1.0.0",
+  "icons": { "home": "📊", "runs": "🕘" },
+  "groups": [
+    { "menu": "shell.mainmenu", "path": "reports", "label": "reports:menu", "icon": "reports.home", "order": 30 },
+    { "menu": "shell.navigation", "path": "reports", "label": "reports:module.name", "icon": "reports.home", "order": 30 }
+  ],
+  "views": [
+    {
+      "key": "reports.catalog", "title": "reports:view.catalog", "icon": "reports.home", "home": true, "permission": "reports.view", "order": 0,
+      "body": { "kind": "reportRunner", "catalogEndpoint": "/api/reports/catalog", "runEndpoint": "/api/reports/{id}/run", "runsEndpoint": "/api/reports/runs" }
+    },
+    {
+      "key": "reports.runs", "title": "reports:view.runs", "icon": "reports.runs", "permission": "reports.view", "liveEvents": ["reports.ready"], "order": 1,
+      "body": {
+        "kind": "list", "endpoint": "/api/reports/runs", "items": "",
+        "columns": [
+          { "field": "reportId", "label": "reports:col.report", "width": 2 },
+          { "field": "requestedByName", "label": "reports:col.requestedBy" },
+          { "field": "status", "label": "reports:col.status", "format": "badge" },
+          { "field": "createdAt", "label": "reports:col.createdAt", "format": "dateTime" }
+        ],
+        "detail": [
+          { "field": "reportId", "label": "reports:col.report" },
+          { "field": "parameters", "label": "reports:col.parameters" },
+          { "field": "finishedAt", "label": "reports:col.finishedAt", "format": "dateTime" }
+        ]
+      }
+    }
+  ],
+  "commands": [],
+  "texts": {
+    "en": {
+      "module.name": "Reports", "menu": "Reports", "view.catalog": "Report catalogue", "view.runs": "My report runs",
+      "col.report": "Report", "col.requestedBy": "Requested by", "col.status": "Status", "col.createdAt": "Started", "col.finishedAt": "Finished",
+      "col.parameters": "Parameters", "col.region": "Region", "col.revenue": "Revenue", "col.units": "Units", "col.month": "Month",
+      "col.product": "Product", "col.bucket": "Due", "col.invoices": "Invoices", "col.amount": "Amount", "col.approver": "Approver",
+      "col.approved": "Approved", "col.rejected": "Rejected", "col.volume": "Volume",
+      "notification.ready": "Report \"{report}\" is ready", "report.notFound": "The report does not exist.", "run.notFound": "The report run does not exist.",
+      "step.runReport": "Run report", "field.report": "Report", "field.parameters": "Parameters (JSON)"
+    },
+    "de": {
+      "module.name": "Berichte", "menu": "Berichte", "view.catalog": "Berichtskatalog", "view.runs": "Meine Berichtsläufe",
+      "col.report": "Bericht", "col.requestedBy": "Angefordert von", "col.status": "Status", "col.createdAt": "Gestartet", "col.finishedAt": "Beendet",
+      "col.parameters": "Parameter", "col.region": "Region", "col.revenue": "Umsatz", "col.units": "Stück", "col.month": "Monat",
+      "col.product": "Produkt", "col.bucket": "Fälligkeit", "col.invoices": "Rechnungen", "col.amount": "Betrag", "col.approver": "Freigebende/r",
+      "col.approved": "Freigegeben", "col.rejected": "Abgelehnt", "col.volume": "Volumen",
+      "notification.ready": "Bericht „{report}“ ist fertig", "report.notFound": "Der Bericht existiert nicht.", "run.notFound": "Der Berichtslauf existiert nicht.",
+      "step.runReport": "Bericht ausführen", "field.report": "Bericht", "field.parameters": "Parameter (JSON)"
+    }
+  }
+}

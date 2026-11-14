@@ -1,0 +1,64 @@
+{
+  "id": "50000000-0000-0000-0000-000000000001",
+  "version": 1,
+  "name": "Invoice approval",
+  "description": "Submitted invoices are pre-checked by the AI agent, routed by its recommendation and approved by a person within their approval limit.",
+  "origin": "moduleTemplate",
+  "owningModule": "document-management",
+  "ownerId": "10000000-0000-0000-0000-000000000001",
+  "status": "active",
+  "startStepId": "lookup",
+  "steps": [
+    { "id": "lookup", "kind": "moduleStep", "title": "Load invoice data", "stepTypeId": "documents.lookupInvoice",
+      "parameters": { "invoiceId": "vars.invoiceId" } },
+    { "id": "review", "kind": "review", "title": "Review the invoice", "description": "Check supplier, amount and cost centre and recommend a decision.",
+      "tools": ["documents.lookupInvoice"],
+      "parameters": { "invoiceId": "vars.invoiceId", "supplier": "steps.lookup.supplier", "amount": "steps.lookup.amount", "costCenter": "steps.lookup.costCenter" },
+      "input": {
+        "schemaId": "documents.invoiceReview", "version": 1,
+        "fields": [
+          { "name": "invoiceId", "type": "text", "label": "documents:field.invoiceId", "required": true, "readOnly": true },
+          { "name": "supplier", "type": "text", "label": "documents:field.supplier" },
+          { "name": "amount", "type": "money", "label": "documents:field.amount", "required": true, "min": 0, "span": "half" },
+          { "name": "costCenter", "type": "entityRef", "label": "documents:field.costCenter", "lookup": "/api/documents/lookups/cost-centers", "span": "half" },
+          { "name": "recommendation", "type": "choice", "label": "documents:field.recommendation", "required": true,
+            "options": [
+              { "value": "approve", "label": "documents:recommendation.approve" },
+              { "value": "reject", "label": "documents:recommendation.reject" },
+              { "value": "clarify", "label": "documents:recommendation.clarify" }
+            ] },
+          { "name": "note", "type": "multiLine", "label": "documents:field.note", "maxLength": 500 }
+        ]
+      } },
+    { "id": "clarify", "kind": "approval", "title": "Decide on the invoice", "description": "The review recommends a clarification – approve or reject.",
+      "approvers": ["documents.approve"], "requiresHuman": true },
+    { "id": "approve", "kind": "moduleStep", "title": "Approve the invoice", "stepTypeId": "documents.approveInvoice", "critical": true,
+      "approvers": ["documents.approve"],
+      "parameters": { "invoiceId": "vars.invoiceId", "comment": "coalesce(vars.note, 'Approved in workflow')" } },
+    { "id": "reject", "kind": "moduleStep", "title": "Reject the invoice", "stepTypeId": "documents.rejectInvoice", "critical": true,
+      "approvers": ["documents.approve"],
+      "parameters": { "invoiceId": "vars.invoiceId", "comment": "coalesce(vars.note, steps.clarify.comment, 'Rejected in workflow')" } }
+  ],
+  "transitions": [
+    { "from": "lookup", "to": "review", "order": 0 },
+    { "from": "review", "to": "approve", "condition": "vars.recommendation == 'approve'", "order": 1 },
+    { "from": "review", "to": "reject", "condition": "vars.recommendation == 'reject'", "order": 2 },
+    { "from": "review", "to": "clarify", "order": 3 },
+    { "from": "clarify", "to": "approve", "condition": "last.decision == 'approve'", "order": 1 },
+    { "from": "clarify", "to": "reject", "order": 2 },
+    { "from": "approve", "to": "end", "order": 0 },
+    { "from": "reject", "to": "end", "order": 0 }
+  ],
+  "variables": [
+    { "name": "invoiceId", "type": "text" }, { "name": "recommendation", "type": "text" }, { "name": "note", "type": "text" }
+  ],
+  "triggers": [
+    { "id": "submitted", "kind": "event", "eventType": "documents.invoice.submitted", "filter": "payload.category == 'invoice'",
+      "payloadMapping": { "invoiceId": "payload.invoiceId" }, "deduplicationKey": "payload.invoiceId + ':' + payload.submittedBy",
+      "executor": "ai", "runAs": "10000000-0000-0000-0000-000000000002" }
+  ],
+  "aiPolicy": {
+    "autonomy": "approveCritical", "approvers": ["documents.approve"], "requiredConfidence": 0.7,
+    "maxRunsPerDay": 200, "maxStepsPerRun": 25, "maxTokensPerRun": 20000, "timeLimitMinutes": 30
+  }
+}
