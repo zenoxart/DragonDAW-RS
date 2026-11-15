@@ -1,8 +1,13 @@
 //! Algorithmic reverb: pre-delay → early reflections → 8-line feedback delay network with a Householder
 //! matrix, RT60-based feedback, damping and modulated lines; width and dry/wet.
+//!
+//! Early reflections and the late reverb are separate parts with their own level and their own EQ (low cut,
+//! high cut and a bell), so the early "room" can be bright and present while the tail is dark, or the other
+//! way round. The early size spaces the reflections, and the early feed sets how much of them excites the
+//! late network.
 
 use super::{Effect, EffectDef, ParamInfo};
-use crate::dsp::{DelayLine, Lfo, LfoShape, OnePole};
+use crate::dsp::{Biquad, BiquadKind, DelayLine, Lfo, LfoShape, OnePole};
 
 const LINES: usize = 8;
 const BASE_MS: [f32; LINES] = [29.7, 37.1, 41.1, 43.7, 53.3, 59.9, 67.1, 73.3];
@@ -14,12 +19,75 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::log("decay", "Decay", 0.1, 20.0, 2.2, "s"),
     ParamInfo::log("predelay", "Pre-delay", 0.1, 200.0, 12.0, "ms"),
     ParamInfo::log("damping", "Damping", 1000.0, 20000.0, 7000.0, "Hz"),
-    ParamInfo::log("lowcut", "Low cut", 20.0, 1000.0, 120.0, "Hz"),
-    ParamInfo::lin("early", "Early level", 0.0, 1.0, 0.4, ""),
+    ParamInfo::log("lowcut", "Input low cut", 20.0, 1000.0, 120.0, "Hz"),
     ParamInfo::lin("mod", "Modulation", 0.0, 1.0, 0.3, ""),
     ParamInfo::lin("width", "Width", 0.0, 1.5, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.25, ""),
+    // Early reflections.
+    ParamInfo::lin("early", "Early level", 0.0, 1.0, 0.4, ""),
+    ParamInfo::lin("er_size", "Early size", 0.2, 2.0, 1.0, ""),
+    ParamInfo::lin("er_feed", "Early feed", 0.0, 1.0, 0.25, ""),
+    ParamInfo::log("er_lo", "Early low cut", 20.0, 2000.0, 20.0, "Hz"),
+    ParamInfo::log("er_hi", "Early high cut", 1000.0, 20000.0, 20000.0, "Hz"),
+    ParamInfo::log("er_freq", "Early bell freq", 100.0, 10000.0, 1500.0, "Hz"),
+    ParamInfo::lin("er_gain", "Early bell gain", -12.0, 12.0, 0.0, "dB"),
+    // Late reverb.
+    ParamInfo::lin("late", "Late level", 0.0, 1.0, 1.0, ""),
+    ParamInfo::log("late_lo", "Late low cut", 20.0, 2000.0, 20.0, "Hz"),
+    ParamInfo::log("late_hi", "Late high cut", 1000.0, 20000.0, 20000.0, "Hz"),
+    ParamInfo::log("late_freq", "Late bell freq", 100.0, 10000.0, 1500.0, "Hz"),
+    ParamInfo::lin("late_gain", "Late bell gain", -12.0, 12.0, 0.0, "dB"),
 ];
+
+/// Low cut, high cut and bell for one part (stereo), skipped when neutral.
+#[derive(Clone)]
+struct PartEq {
+    lo: f32,
+    hi: f32,
+    freq: f32,
+    gain: f32,
+    f: [[Biquad; 3]; 2],
+}
+
+impl PartEq {
+    fn new(rate: f32) -> Self {
+        let mk = || [Biquad::new(BiquadKind::HighPass, 20.0, 0.707, 0.0, rate), Biquad::new(BiquadKind::LowPass, 20000.0f32.min(rate * 0.45), 0.707, 0.0, rate), Biquad::new(BiquadKind::Peak, 1500.0, 0.8, 0.0, rate)];
+        PartEq { lo: 20.0, hi: 20000.0, freq: 1500.0, gain: 0.0, f: [mk(), mk()] }
+    }
+
+    fn update(&mut self, rate: f32) {
+        let ny = rate * 0.45;
+        for ch in &mut self.f {
+            ch[0].set(BiquadKind::HighPass, self.lo.min(ny), 0.707, 0.0, rate);
+            ch[1].set(BiquadKind::LowPass, self.hi.min(ny), 0.707, 0.0, rate);
+            ch[2].set(BiquadKind::Peak, self.freq.min(ny), 0.8, self.gain, rate);
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let (lo, hi, bell) = (self.lo > 20.5, self.hi < 19_900.0, self.gain.abs() > 0.05);
+        let mut out = [l, r];
+        for (ch, x) in self.f.iter_mut().zip(out.iter_mut()) {
+            if lo {
+                *x = ch[0].process(*x);
+            }
+            if hi {
+                *x = ch[1].process(*x);
+            }
+            if bell {
+                *x = ch[2].process(*x);
+            }
+        }
+        (out[0], out[1])
+    }
+
+    fn reset(&mut self) {
+        for b in self.f.iter_mut().flatten() {
+            b.reset();
+        }
+    }
+}
 
 pub struct Reverb {
     rate: f32,
@@ -37,6 +105,11 @@ pub struct Reverb {
     damping: f32,
     lowcut_hz: f32,
     early_level: f32,
+    early_size: f32,
+    early_feed: f32,
+    late_level: f32,
+    early_eq: PartEq,
+    late_eq: PartEq,
     modulation: f32,
     width: f32,
     mix: f32,
@@ -49,7 +122,8 @@ impl Reverb {
         Reverb {
             rate,
             pre: [DelayLine::new((rate * 0.25) as usize), DelayLine::new((rate * 0.25) as usize)],
-            early: [DelayLine::new((rate * 0.06) as usize), DelayLine::new((rate * 0.06) as usize)],
+            // Room for the largest early size (2×) with the size control at its maximum.
+            early: [DelayLine::new((rate * 0.16) as usize), DelayLine::new((rate * 0.16) as usize)],
             lines: (0..LINES).map(|_| DelayLine::new(max)).collect(),
             damp: [OnePole::new(7000.0, rate); LINES],
             lowcut: [OnePole::new(120.0, rate); 2],
@@ -62,6 +136,11 @@ impl Reverb {
             damping: 7000.0,
             lowcut_hz: 120.0,
             early_level: 0.4,
+            early_size: 1.0,
+            early_feed: 0.25,
+            late_level: 1.0,
+            early_eq: PartEq::new(rate),
+            late_eq: PartEq::new(rate),
             modulation: 0.3,
             width: 1.0,
             mix: 0.25,
@@ -88,6 +167,8 @@ impl Reverb {
         for f in &mut self.lowcut {
             f.set(self.lowcut_hz, self.rate);
         }
+        self.early_eq.update(self.rate);
+        self.late_eq.update(self.rate);
     }
 }
 
@@ -101,6 +182,17 @@ impl Effect for Reverb {
             "damping" => self.damping = v,
             "lowcut" => self.lowcut_hz = v,
             "early" => self.early_level = v,
+            "er_size" => self.early_size = v,
+            "er_feed" => self.early_feed = v,
+            "er_lo" => self.early_eq.lo = v,
+            "er_hi" => self.early_eq.hi = v,
+            "er_freq" => self.early_eq.freq = v,
+            "er_gain" => self.early_eq.gain = v,
+            "late" => self.late_level = v,
+            "late_lo" => self.late_eq.lo = v,
+            "late_hi" => self.late_eq.hi = v,
+            "late_freq" => self.late_eq.freq = v,
+            "late_gain" => self.late_eq.gain = v,
             "mod" => self.modulation = v,
             "width" => self.width = v,
             "mix" => self.mix = v,
@@ -112,6 +204,8 @@ impl Effect for Reverb {
     fn reset(&mut self) {
         self.pre.iter_mut().chain(self.early.iter_mut()).chain(self.lines.iter_mut()).for_each(DelayLine::clear);
         self.damp.iter_mut().chain(self.lowcut.iter_mut()).for_each(OnePole::reset);
+        self.early_eq.reset();
+        self.late_eq.reset();
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
@@ -127,7 +221,7 @@ impl Effect for Reverb {
             let mut el = 0.0;
             let mut er = 0.0;
             for (k, (ms, g)) in EARLY_MS.iter().enumerate() {
-                let d = ms * 0.001 * self.rate * (0.5 + self.size);
+                let d = (ms * 0.001 * self.rate * (0.5 + self.size) * self.early_size).min(self.early[0].len() as f32 - 4.0);
                 if k % 2 == 0 {
                     el += self.early[0].read(d) * g;
                     er += self.early[1].read(d * 1.07) * g;
@@ -147,7 +241,7 @@ impl Effect for Reverb {
             let input = [pl, pr];
             for k in 0..LINES {
                 let fb = outs[k] - sum;
-                self.lines[k].write(fb + input[k % 2] * 0.35 + if k % 2 == 0 { el } else { er } * 0.1);
+                self.lines[k].write(fb + input[k % 2] * 0.35 + if k % 2 == 0 { el } else { er } * (self.early_feed * 0.4));
             }
             let mut wl = 0.0;
             let mut wr = 0.0;
@@ -158,8 +252,11 @@ impl Effect for Reverb {
                     wr += outs[k];
                 }
             }
-            wl = wl * 0.5 + el * self.early_level;
-            wr = wr * 0.5 + er * self.early_level;
+            // Each part through its own EQ, then mixed at its own level.
+            let (ll, lr) = self.late_eq.process(wl * 0.5, wr * 0.5);
+            let (eql, eqr) = self.early_eq.process(el, er);
+            wl = ll * self.late_level + eql * self.early_level;
+            wr = lr * self.late_level + eqr * self.early_level;
             let mid = (wl + wr) * 0.5;
             let side = (wl - wr) * 0.5 * self.width;
             l[i] = dl * (1.0 - self.mix) + (mid + side) * self.mix;
@@ -173,7 +270,7 @@ pub fn reverb_def() -> EffectDef {
         id: "reverb",
         name: "Reverb",
         category: "Space",
-        description: "Room/hall/plate reverb (8-line FDN) with pre-delay, early reflections, damping and width.",
+        description: "Room/hall/plate reverb (8-line FDN) with pre-delay, damping and width; early reflections and late reverb each have their own level and EQ.",
         params: PARAMS,
         uses_sidechain: false,
         create: |rate| {
@@ -186,6 +283,69 @@ pub fn reverb_def() -> EffectDef {
 
 #[cfg(test)]
 mod tests {
+    fn impulse_response(params: &[(&str, f32)]) -> Vec<f32> {
+        let mut p = std::collections::BTreeMap::new();
+        p.insert("mix".into(), 1.0);
+        for (k, v) in params {
+            p.insert(k.to_string(), *v);
+        }
+        let mut e = crate::effects::create("reverb", 48000.0, &p).unwrap();
+        let mut l = vec![0.0f32; 48000];
+        let mut r = l.clone();
+        l[0] = 1.0;
+        r[0] = 1.0;
+        e.process(&mut l, &mut r, None);
+        l
+    }
+
+    fn energy(x: &[f32]) -> f32 {
+        x.iter().map(|v| v * v).sum()
+    }
+
+    /// Energy above ~6 kHz (first difference ≈ high-pass).
+    fn bright(x: &[f32]) -> f32 {
+        x.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum()
+    }
+
+    #[test]
+    fn early_and_late_levels_are_independent() {
+        // Pre-delay 0.1 ms: early reflections arrive within ~60 ms, the late tail fills the rest.
+        let base = [("predelay", 0.1f32), ("decay", 2.0)];
+        let both = impulse_response(&base);
+        let no_early = impulse_response(&[base[0], base[1], ("early", 0.0)]);
+        let no_late = impulse_response(&[base[0], base[1], ("late", 0.0)]);
+        // Without the late part the tail (after 150 ms) is silent; without the early part the first 15 ms are.
+        assert!(energy(&no_late[7200..]) < energy(&both[7200..]) * 1e-4, "late level 0 removes the tail");
+        assert!(energy(&no_early[..700]) < energy(&both[..700]) * 0.05, "early level 0 removes the first reflections");
+        assert!(energy(&no_early[7200..]) > energy(&both[7200..]) * 0.3, "the tail stays");
+    }
+
+    #[test]
+    fn early_and_late_eq_act_on_their_own_part() {
+        let base = [("predelay", 0.1f32), ("decay", 2.0)];
+        let plain = impulse_response(&base);
+        let dark_late = impulse_response(&[base[0], base[1], ("late_hi", 1500.0)]);
+        let dark_early = impulse_response(&[base[0], base[1], ("er_hi", 1500.0)]);
+        let (early, late) = (..700, 7200..);
+        // Late high cut darkens the tail but leaves the first reflections.
+        assert!(bright(&dark_late[late.clone()]) < bright(&plain[late.clone()]) * 0.3);
+        assert!((bright(&dark_late[early]) / bright(&plain[early]) - 1.0).abs() < 0.05);
+        // Early high cut darkens the first reflections.
+        assert!(bright(&dark_early[early]) < bright(&plain[early]) * 0.3);
+        // Bell boosts: +12 dB at 1.5 kHz raises the energy of the part.
+        let boosted = impulse_response(&[base[0], base[1], ("late_gain", 12.0)]);
+        assert!(energy(&boosted[late.clone()]) > energy(&plain[late]) * 1.5);
+    }
+
+    #[test]
+    fn early_size_spreads_the_reflections() {
+        let base = [("predelay", 0.1f32), ("late", 0.0)];
+        let small = impulse_response(&[base[0], base[1], ("er_size", 0.3)]);
+        let large = impulse_response(&[base[0], base[1], ("er_size", 2.0)]);
+        let last = |x: &[f32]| x.iter().rposition(|v| v.abs() > 1e-4).unwrap_or(0);
+        assert!(last(&large) > last(&small) * 3, "{} vs {}", last(&large), last(&small));
+    }
+
     #[test]
     fn reverb_tail_decays() {
         let mut p = std::collections::BTreeMap::new();

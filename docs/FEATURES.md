@@ -11,15 +11,17 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Audio engine with low-latency output, driver / device / buffer choice | ✅ | `engine/device.rs`, Options › Audio (ASIO would need cpal's `asio` feature, which is off) |
 | Transport: play, pause, stop, seek, loop, song / pattern mode | ✅ | `render.rs`, transport bar |
 | Tempo, time signature, metronome, count-in | ✅ | transport bar, Project view |
-| Playlist with audio and pattern clips, snap, zoom | ✅ | `views/playlist.rs` |
-| Channel rack and step sequencer | ✅ | `views/rack.rs` |
-| Piano roll | ✅ | `views/piano_roll.rs` |
+| Playlist with audio and pattern clips, snap, zoom | ✅ | `views/playlist.rs`; Ctrl + right-drag zooms into a box (time and track height), Ctrl + right-click zooms out, animated; middle-drag pans; Alt + wheel track height |
+| Channel rack and step sequencer | ✅ | `views/rack.rs`; drop a sample (browser or desktop) on a channel to replace its sound |
+| Patterns: clone, make unique, split by channel, split at a bar, source pattern, delete | ✅ | the rack's Pattern menu and the ▼ menu of pattern clips (`edit::make_unique`, `split_by_channel`, `split_pattern_at`) |
+| Piano roll | ✅ | `views/piano_roll.rs`; drag selected notes (grabbed note snaps, Shift = copy, Alt = no snap), draw-and-drag, arrow-key nudge, Ctrl + right-drag zoom |
 | Sampler, synth, drum pads | ✅ | `engine/instruments` |
 | Built-in sounds | ✅ | Dragon Kit, synthesised on first run |
 | Audio recording of armed tracks with latency compensation | ✅ | `device.rs` (recorder thread), Transport › Record |
 | MIDI input (controllers, keyboards) and typing keyboard | ✅ | `device.rs` (`MidiInputs`), `views/keyboard.rs` |
-| Mixer with volume, pan, mute, solo, inserts, meters | ✅ | `views/mixer.rs` |
-| Stock EQ, compressor, limiter, reverb, delay | ✅ | `engine/effects` |
+| Mixer with volume, pan, mute, solo, inserts, meters | ✅ | `views/mixer.rs`: FL Studio layout – insert strips with route arrows (click: route the selected insert, right-click: route to this track only, send-level knob on routed arrows), effect slots of the selected insert on the right (used slots + one empty, up to 10; bypass LED, mix, drag to reorder, replace / sidechain / remove) |
+| Click-free parameter changes | ✅ | effect parameters glide (`effects::Smoothed`), faders / pan / sends / mix ramp per block, synth cutoff / resonance / gain smoothed |
+| Stock EQ, compressor, limiter, reverb, delay | ✅ | `engine/effects`; the reverb has separate early-reflection and late-reverb levels, early size and feed, and an EQ per part (low cut, high cut, bell) |
 | Undo / redo | ✅ | `history.rs`, undo history view |
 | Save / open projects | ✅ | `project_io.rs` |
 | Export WAV | ✅ | `export.rs`, export dialog, `dragon render` |
@@ -40,8 +42,9 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Loop recording into takes | 🟡 | each new recording pass moves the existing clips into a take lane; several loop cycles in one pass are kept as one long file |
 | Punch in / out | ✅ | ruler `Shift`+drag, transport |
 | Quantize, legato, transpose, humanize | ✅ | piano roll |
-| Scale highlighting and snap | ✅ | piano roll |
+| Scale highlighting and snap | ✅ | piano roll: key (C … B) and scale (26 scales and modes) picked separately; in-scale rows lit, roots marked |
 | Loudness metering (LUFS, true peak) | ✅ | Mastering view, `dsp/loudness.rs` |
+| Reference track comparison | ✅ | Mastering › Reference: load a song, drag to select a region, compare with the mix (song or loop): LUFS, short-term max, LRA, RMS, peak, true peak, crest, PLR, side/mid, correlation, third-octave tonal balance relative to loudness, suggestions, loudness-matched A/B (`reference.rs`) |
 | Export FLAC, stems, normalisation | ✅ | export dialog |
 | Autosave and crash recovery | ✅ | `project_io::Autosave`, recovery dialog |
 | Browser with preview and drag & drop | ✅ | `views/browser.rs` |

@@ -22,9 +22,14 @@ pub enum MixRange {
     Loop,
 }
 
+/// A decoded reference file with its waveform overview.
+type Loaded = (Arc<AudioData>, Vec<(f32, f32)>);
+/// What a reference analysis was computed for: the file and the region in seconds.
+type RegionKey = (PathBuf, (f64, f64));
+
 enum Job {
-    Loaded(PathBuf, Result<(Arc<AudioData>, Vec<(f32, f32)>), String>),
-    Reference((PathBuf, (f64, f64)), RegionAnalysis),
+    Loaded(PathBuf, Result<Loaded, String>),
+    Reference(RegionKey, RegionAnalysis),
     Mix(u64, RegionAnalysis),
 }
 
@@ -34,8 +39,8 @@ pub struct ReferenceState {
     overview: Vec<(f32, f32)>,
     loading: Option<PathBuf>,
     error: Option<String>,
-    ref_analysis: Option<((PathBuf, (f64, f64)), RegionAnalysis)>,
-    ref_pending: Option<(PathBuf, (f64, f64))>,
+    ref_analysis: Option<(RegionKey, RegionAnalysis)>,
+    ref_pending: Option<RegionKey>,
     mix_analysis: Option<(u64, RegionAnalysis)>,
     mix_running: Option<u64>,
     mix_progress: Arc<AtomicU32>,
@@ -47,6 +52,7 @@ pub struct ReferenceState {
 
 impl ReferenceState {
     /// The current reference and mix analyses, if any.
+    #[cfg(test)]
     pub fn results(&self) -> (Option<&RegionAnalysis>, Option<&RegionAnalysis>) {
         (self.ref_analysis.as_ref().map(|(_, a)| a), self.mix_analysis.as_ref().map(|(_, a)| a))
     }
@@ -193,7 +199,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             ui.label(RichText::new(format!("rendering {:.0} %", st.reference.mix_progress.load(Ordering::Relaxed) as f32 / 10.0)).small());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         } else if ui.button(if stale { "Analyse mix" } else { "Re-analyse mix" }).on_hover_text("Renders the mix offline (like an export) and measures it").clicked() {
-            start_mix(st, rev);
+            analyse_mix_now(st);
         }
         if stale && st.reference.mix_analysis.is_some() {
             ui.label(RichText::new("project changed since the analysis").small().color(theme::WARN));

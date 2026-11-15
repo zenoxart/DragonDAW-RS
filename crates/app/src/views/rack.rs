@@ -57,7 +57,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             }
         });
-        ui.menu_button("Pattern ▾", |ui| pattern_menu(ui, st, pat, None));
+        ui.menu_button("Pattern ⏷", |ui| pattern_menu(ui, st, pat, None));
         if ui.button("Clear").clicked() {
             st.session.edit("Clear pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.channels.clear()));
         }

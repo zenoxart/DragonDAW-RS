@@ -146,15 +146,15 @@ fn ctrl_right_drag_zooms_into_the_box_and_ctrl_right_click_zooms_out() {
     let g = h.rect("pr.grid");
     // One beat now spans the grid width (clamped to the max zoom).
     let expect = (g.width() / 1.0).min(800.0);
-    assert!((h.st.ui.piano_zoom - expect).abs() < 2.0, "zoom {} → {} (expected {expect})", z0, h.st.ui.piano_zoom);
-    assert!(h.st.ui.key_height > k0, "keys taller: {k0} → {}", h.st.ui.key_height);
+    assert!((h.st.ui.piano_zoom - expect).abs() < 2.0, "zoom {} -> {} (expected {expect})", z0, h.st.ui.piano_zoom);
+    assert!(h.st.ui.key_height > k0, "keys taller: {k0} -> {}", h.st.ui.key_height);
     assert!(h.notes().is_empty(), "Ctrl + right gesture must not draw or delete");
     let z1 = h.st.ui.piano_zoom;
     let g = h.rect("pr.grid");
     let p = g.center();
     h.click(piano, p, PointerButton::Secondary, Modifiers::CTRL);
     h.idle(piano, 40);
-    assert!(h.st.ui.piano_zoom < z1 * 0.6, "zoomed out: {z1} → {}", h.st.ui.piano_zoom);
+    assert!(h.st.ui.piano_zoom < z1 * 0.6, "zoomed out: {z1} -> {}", h.st.ui.piano_zoom);
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn playlist_area_zoom_sets_time_range_and_track_height() {
     let before = h.st.ui.pl_x;
     let c = t.center();
     h.drag(playlist, c, c + egui::vec2(200.0, 0.0), PointerButton::Middle, Modifiers::NONE);
-    assert!(h.st.ui.pl_x < before, "panned left: {before} → {}", h.st.ui.pl_x);
+    assert!(h.st.ui.pl_x < before, "panned left: {before} -> {}", h.st.ui.pl_x);
 }
 
 #[test]

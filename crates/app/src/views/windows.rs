@@ -104,11 +104,14 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     if def.id == "eq" {
         eq_curve(ui, &ins.params);
     }
-    // Group "Band 3 freq" / "Band 3 gain" … into one row per band; other parameters share a row.
+    // Group "Band 3 freq" / "Band 3 gain" … into one row per band, and parameters sharing a first word
+    // ("Early …", "Late …") into a section; other parameters share a row.
+    let first_word_count = |w: &str| def.params.iter().filter(|p| p.name.split(' ').next() == Some(w)).count();
     let group_of = |name: &str| -> String {
         let mut it = name.split(' ');
         match (it.next(), it.next()) {
             (Some(a), Some(b)) if b.chars().all(|c| c.is_ascii_digit()) => format!("{a} {b}"),
+            (Some(a), Some(_)) if first_word_count(a) >= 3 => a.to_string(),
             _ => String::new(),
         }
     };
@@ -121,6 +124,14 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         }
     }
     for (group, params) in groups {
+        // The reverb's early and late parts: a heading and the response of the part's EQ.
+        if def.id == "reverb" && (group == "Early" || group == "Late") {
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(if group == "Early" { "Early reflections" } else { "Late reverb" }).strong());
+                reverb_part_curve(ui, &ins.params, if group == "Early" { "er" } else { "late" });
+            });
+        }
         ui.horizontal_wrapped(|ui| {
             if !group.is_empty() {
                 ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().color(theme::ACCENT_2)));
@@ -222,6 +233,37 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         }
         ui.data_mut(|d| d.insert_temp(id, name));
     });
+}
+
+/// Frequency response of one reverb part's EQ (low cut, high cut, bell).
+fn reverb_part_curve(ui: &mut Ui, params: &BTreeMap<String, f32>, prefix: &str) {
+    use dragon_engine::dsp::{Biquad, BiquadKind};
+    let def = effects::find("reverb").unwrap();
+    let v = |id: &str| effects::value(def, params, &format!("{prefix}_{id}"));
+    let rate = 48000.0;
+    let (lo, hi, freq, gain) = (v("lo"), v("hi"), v("freq"), v("gain"));
+    let mut fs: Vec<Biquad> = Vec::new();
+    if lo > 20.5 {
+        fs.push(Biquad::new(BiquadKind::HighPass, lo, 0.707, 0.0, rate));
+    }
+    if hi < 19_900.0 {
+        fs.push(Biquad::new(BiquadKind::LowPass, hi, 0.707, 0.0, rate));
+    }
+    if gain.abs() > 0.05 {
+        fs.push(Biquad::new(BiquadKind::Peak, freq, 0.8, gain, rate));
+    }
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().clamp(120.0, 260.0), 40.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 3.0, theme::BG);
+    p.line_segment([rect.left_center(), rect.right_center()], egui::Stroke::new(1.0_f32, theme::GRID));
+    let pts: Vec<egui::Pos2> = (0..64)
+        .map(|k| {
+            let f = 20.0 * 1000f32.powf(k as f32 / 63.0);
+            let db: f32 = fs.iter().map(|b| b.response_db(f, rate)).sum::<f32>().clamp(-18.0, 18.0);
+            egui::pos2(rect.left() + rect.width() * k as f32 / 63.0, rect.center().y - db / 18.0 * rect.height() * 0.48)
+        })
+        .collect();
+    p.add(egui::Shape::line(pts, egui::Stroke::new(1.5_f32, if prefix == "er" { theme::ACCENT_2 } else { theme::PLAYHEAD })));
 }
 
 fn eq_curve(ui: &mut Ui, params: &BTreeMap<String, f32>) {
