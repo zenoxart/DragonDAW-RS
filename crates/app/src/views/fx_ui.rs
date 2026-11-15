@@ -124,7 +124,8 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "reverb" => reverb(&p, r, h, col),
         "saturator" | "bitcrusher" => shaper(&p, r, h, col),
         "chorus" | "flanger" | "phaser" | "tremolo" => lfo(&p, r, h, col),
-        "utility" | "imager" => stereo(&p, r, h, col),
+        "imager" => phase_meter(&p, r, h, col),
+        "utility" => stereo(&p, r, h, col),
         "tune" => tune(&p, r, h, col),
         "dragon_particle" => particle(&p, r, h, col),
         _ => {
@@ -635,6 +636,115 @@ fn stereo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(r.right_top() + Vec2::new(-8.0, 6.0), egui::Align2::RIGHT_TOP, "R", egui::FontId::proportional(11.0), theme::TEXT_DIM);
     let label = if mono { "mono".to_string() } else { format!("width {:.0}%", width * 100.0) };
     p.text(Pos2::new(r.center().x, r.top() + 6.0), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(11.0), theme::TEXT);
+}
+
+/// The stereo imager as a phase meter: a goniometer (mid vertical, side horizontal) of the output, a
+/// correlation meter from −1 (out of phase) to +1 (mono) and a left / right balance bar.
+fn phase_meter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    p.rect_filled(r, 6.0, Color32::from_rgb(0x10, 0x12, 0x16));
+    // Live data, or a synthetic signal with the set width in the gallery.
+    let demo: Vec<f32>;
+    let data: &[f32] = if h.tele.len() > 3 {
+        h.tele
+    } else {
+        let w = h.v("width");
+        let t = h.t();
+        let mut d = vec![0.0f32; 3];
+        let (mut lr, mut ll, mut rr) = (0.0f32, 0.0f32, 0.0f32);
+        for k in 0..192 {
+            let x = t * 3.0 + k as f32 * 0.07;
+            let m = (x * 2.3).sin() * 0.6 + (x * 5.1).sin() * 0.2;
+            let sd = ((x * 3.7).sin() * 0.35 + (x * 7.3).cos() * 0.15) * w;
+            let (l, rr_) = (m + sd, m - sd);
+            lr += l * rr_;
+            ll += l * l;
+            rr += rr_ * rr_;
+            d.push(l * 0.8);
+            d.push(rr_ * 0.8);
+        }
+        d[0] = (lr / (ll * rr).sqrt().max(1e-9)).clamp(-1.0, 1.0);
+        d[1] = ((rr - ll) / (rr + ll).max(1e-9)).clamp(-1.0, 1.0);
+        d[2] = w * 0.5;
+        demo = d;
+        &demo
+    };
+    let (corr, bal, sm) = (data[0], data[1], data[2]);
+    // ---- goniometer
+    let size = r.height() - 20.0;
+    let g = Rect::from_center_size(Pos2::new(r.left() + 10.0 + size / 2.0, r.center().y), Vec2::splat(size));
+    let c = g.center();
+    let rad = size / 2.0;
+    p.circle_stroke(c, rad, Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
+    p.circle_stroke(c, rad * 0.5, Stroke::new(1.0_f32, Color32::from_white_alpha(12)));
+    // Axes: M vertical, S horizontal, L / R on the diagonals.
+    let axis = Stroke::new(1.0_f32, Color32::from_white_alpha(22));
+    p.line_segment([Pos2::new(c.x, g.top()), Pos2::new(c.x, g.bottom())], axis);
+    p.line_segment([Pos2::new(g.left(), c.y), Pos2::new(g.right(), c.y)], axis);
+    let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+    p.line_segment([c + Vec2::new(-d, -d), c + Vec2::new(d, d)], axis);
+    p.line_segment([c + Vec2::new(d, -d), c + Vec2::new(-d, d)], axis);
+    let lab = |pos: Pos2, t: &str| p.text(pos, egui::Align2::CENTER_CENTER, t, egui::FontId::proportional(9.5), Color32::from_white_alpha(120));
+    lab(Pos2::new(c.x, g.top() + 7.0), "M");
+    lab(Pos2::new(g.left() + 7.0, c.y), "+S");
+    lab(Pos2::new(g.right() - 7.0, c.y), "−S");
+    lab(c + Vec2::new(-d - 6.0, -d - 6.0), "L");
+    lab(c + Vec2::new(d + 6.0, -d - 6.0), "R");
+    let pts: Vec<Pos2> = data[3..]
+        .chunks(2)
+        .map(|lr| {
+            let (l, rr) = (lr[0], lr[1]);
+            // Rotate 45°: mid up, side sideways; soft-limit so loud signals stay in the circle.
+            let m = (l + rr) * std::f32::consts::FRAC_1_SQRT_2;
+            let sd = (l - rr) * std::f32::consts::FRAC_1_SQRT_2;
+            let k = 1.0 / (1.0 + (m * m + sd * sd).sqrt() * 0.3);
+            Pos2::new(c.x - sd * k * rad * 0.9, c.y - m * k * rad * 0.9)
+        })
+        .collect();
+    let p2 = p.with_clip_rect(g.expand(2.0));
+    let n = pts.len().max(1);
+    for (i, w) in pts.windows(2).enumerate() {
+        let a = 0.15 + 0.85 * i as f32 / n as f32;
+        p2.line_segment([w[0], w[1]], Stroke::new(1.0_f32, col.gamma_multiply(a * 0.7)));
+    }
+    for q in pts.iter().step_by(3) {
+        p2.circle_filled(*q, 1.2, Color32::WHITE.gamma_multiply(0.5));
+    }
+    // ---- correlation meter
+    let x0 = g.right() + 24.0;
+    let mr = Rect::from_min_max(Pos2::new(x0, r.top() + 34.0), Pos2::new(r.right() - 14.0, r.top() + 56.0));
+    p.text(Pos2::new(mr.left(), mr.top() - 18.0), egui::Align2::LEFT_TOP, "PHASE CORRELATION", egui::FontId::proportional(9.5), theme::TEXT_DIM);
+    {
+        use egui::epaint::{Mesh, Vertex, WHITE_UV};
+        let mut mesh = Mesh::default();
+        let stops = [(0.0f32, Color32::from_rgb(0xf0, 0x52, 0x6a)), (0.5, Color32::from_rgb(0xf5, 0xc8, 0x42)), (1.0, Color32::from_rgb(0x5d, 0xe0, 0xa8))];
+        for w in stops.windows(2) {
+            let i = mesh.vertices.len() as u32;
+            let xa = mr.left() + w[0].0 * mr.width();
+            let xb = mr.left() + w[1].0 * mr.width();
+            for (pos, cc) in [(Pos2::new(xa, mr.top()), w[0].1), (Pos2::new(xb, mr.top()), w[1].1), (Pos2::new(xb, mr.bottom()), w[1].1), (Pos2::new(xa, mr.bottom()), w[0].1)] {
+                mesh.vertices.push(Vertex { pos, uv: WHITE_UV, color: cc.gamma_multiply(0.35) });
+            }
+            mesh.indices.extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
+        }
+        p.add(Shape::mesh(mesh));
+    }
+    let cx = mr.left() + (corr + 1.0) / 2.0 * mr.width();
+    p.rect_filled(Rect::from_center_size(Pos2::new(cx, mr.center().y), Vec2::new(4.0, mr.height() + 6.0)), 2.0, Color32::WHITE);
+    for (v, t) in [(-1.0f32, "−1"), (0.0, "0"), (1.0, "+1")] {
+        p.text(Pos2::new(mr.left() + (v + 1.0) / 2.0 * mr.width(), mr.bottom() + 3.0), egui::Align2::CENTER_TOP, t, egui::FontId::proportional(9.0), theme::TEXT_DIM);
+    }
+    let verdict = if corr < -0.1 { ("out of phase – mono will cancel", theme::REC) } else if corr < 0.3 { ("very wide", theme::WARN) } else if corr > 0.95 { ("mono", theme::TEXT_DIM) } else { ("healthy stereo", theme::OK) };
+    p.text(Pos2::new(mr.right(), mr.top() - 18.0), egui::Align2::RIGHT_TOP, format!("{corr:+.2}  {}", verdict.0), egui::FontId::proportional(10.0), verdict.1);
+    // ---- balance and width
+    let br = Rect::from_min_max(Pos2::new(x0, mr.bottom() + 40.0), Pos2::new(r.right() - 14.0, mr.bottom() + 52.0));
+    p.text(Pos2::new(br.left(), br.top() - 16.0), egui::Align2::LEFT_TOP, "BALANCE", egui::FontId::proportional(9.5), theme::TEXT_DIM);
+    p.rect_filled(br, 6.0, Color32::from_white_alpha(12));
+    let bx = br.center().x + bal * br.width() / 2.0;
+    p.rect_filled(Rect::from_min_max(Pos2::new(br.center().x.min(bx), br.top()), Pos2::new(br.center().x.max(bx), br.bottom())), 6.0, col);
+    p.line_segment([Pos2::new(br.center().x, br.top() - 2.0), Pos2::new(br.center().x, br.bottom() + 2.0)], Stroke::new(1.0_f32, Color32::WHITE));
+    p.text(Pos2::new(br.left(), br.bottom() + 3.0), egui::Align2::LEFT_TOP, "L", egui::FontId::proportional(9.0), theme::TEXT_DIM);
+    p.text(Pos2::new(br.right(), br.bottom() + 3.0), egui::Align2::RIGHT_TOP, "R", egui::FontId::proportional(9.0), theme::TEXT_DIM);
+    p.text(Pos2::new(x0, r.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, format!("width {:.0}% · side/mid {:.0}% · mono below {:.0} Hz", h.v("width") * 100.0, sm * 100.0, h.v("mono_below")), egui::FontId::proportional(10.5), theme::TEXT);
 }
 
 /// Dragon Tune, laid out like a modern vocal tuner: the detected note large with its cents offset, a

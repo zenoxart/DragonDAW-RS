@@ -297,11 +297,64 @@ pub fn utility_def() -> EffectDef {
 const IMAGER_PARAMS: &[ParamInfo] =
     &[ParamInfo::lin("width", "Width", 0.0, 2.0, 1.3, ""), ParamInfo::log("mono_below", "Mono below", 20.0, 500.0, 120.0, "Hz"), ParamInfo::lin("output", "Output", -12.0, 12.0, 0.0, "dB")];
 
+/// Points kept for the goniometer.
+pub const SCOPE_POINTS: usize = 192;
+
+/// A phase / stereo scope for displays: running correlation (−1 … +1), balance and the side/mid ratio,
+/// plus the most recent output samples for a goniometer. Layout of [`PhaseScope::data`]:
+/// `[correlation, balance, side/mid, l0, r0, l1, r1, …]`.
+pub struct PhaseScope {
+    lr: f32,
+    ll: f32,
+    rr: f32,
+    mm: f32,
+    ss: f32,
+    coef: f32,
+    decim: usize,
+    k: usize,
+    w: usize,
+    pub data: Vec<f32>,
+}
+
+impl PhaseScope {
+    pub fn new(rate: f32) -> Self {
+        PhaseScope { lr: 0.0, ll: 0.0, rr: 0.0, mm: 0.0, ss: 0.0, coef: (-1.0 / (0.3 * rate)).exp(), decim: ((rate / 4000.0) as usize).max(1), k: 0, w: 0, data: vec![0.0; 3 + SCOPE_POINTS * 2] }
+    }
+
+    #[inline]
+    pub fn push(&mut self, l: f32, r: f32) {
+        let a = 1.0 - self.coef;
+        self.lr = self.lr * self.coef + l * r * a;
+        self.ll = self.ll * self.coef + l * l * a;
+        self.rr = self.rr * self.coef + r * r * a;
+        let (m, s) = ((l + r) * 0.5, (l - r) * 0.5);
+        self.mm = self.mm * self.coef + m * m * a;
+        self.ss = self.ss * self.coef + s * s * a;
+        self.k += 1;
+        if self.k >= self.decim {
+            self.k = 0;
+            self.data[3 + self.w * 2] = l;
+            self.data[3 + self.w * 2 + 1] = r;
+            self.w = (self.w + 1) % SCOPE_POINTS;
+        }
+    }
+
+    /// Updates the summary values (call once per block).
+    pub fn finish(&mut self) {
+        let den = (self.ll * self.rr).sqrt();
+        self.data[0] = if den > 1e-9 { (self.lr / den).clamp(-1.0, 1.0) } else { 1.0 };
+        let tot = self.ll + self.rr;
+        self.data[1] = if tot > 1e-12 { ((self.rr - self.ll) / tot).clamp(-1.0, 1.0) } else { 0.0 };
+        self.data[2] = if self.mm > 1e-12 { (self.ss / self.mm).sqrt().min(4.0) } else { 0.0 };
+    }
+}
+
 pub struct Imager {
     rate: f32,
     width: f32,
     out: f32,
     lp: [Biquad; 2],
+    scope: PhaseScope,
 }
 
 impl Effect for Imager {
@@ -325,7 +378,12 @@ impl Effect for Imager {
             let side = (side - low_side) * self.width;
             l[i] = (mid + side) * self.out;
             r[i] = (mid - side) * self.out;
+            self.scope.push(l[i], r[i]);
         }
+        self.scope.finish();
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.scope.data
     }
 }
 
@@ -334,10 +392,10 @@ pub fn imager_def() -> EffectDef {
         id: "imager",
         name: "Stereo Imager",
         category: "Utility",
-        description: "Widens the stereo image and keeps the bass mono.",
+        description: "Widens the stereo image and keeps the bass mono; a goniometer and correlation meter show the phase relation of the result.",
         params: IMAGER_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Imager { rate, width: 1.3, out: 1.0, lp: [Biquad::new(BiquadKind::LowPass, 120.0, 0.707, 0.0, rate); 2] }),
+        create: |rate| Box::new(Imager { rate, width: 1.3, out: 1.0, lp: [Biquad::new(BiquadKind::LowPass, 120.0, 0.707, 0.0, rate); 2], scope: PhaseScope::new(rate) }),
     }
 }
 
@@ -474,5 +532,30 @@ pub fn dragon_particle_def() -> EffectDef {
             d.update();
             Box::new(d)
         },
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    /// Correlation: +1 for mono, −1 for polarity-inverted channels, ~0 for unrelated noise.
+    #[test]
+    fn phase_scope_correlation() {
+        let mut rng = crate::dsp::Rng::new(3);
+        for (mk, want) in [(0, 1.0f32), (1, -1.0), (2, 0.0)] {
+            let mut s = PhaseScope::new(48000.0);
+            for i in 0..48000 {
+                let x = (i as f32 * 0.05).sin();
+                let (l, r) = match mk {
+                    0 => (x, x),
+                    1 => (x, -x),
+                    _ => (rng.next_f32() * 2.0 - 1.0, rng.next_f32() * 2.0 - 1.0),
+                };
+                s.push(l, r);
+            }
+            s.finish();
+            assert!((s.data[0] - want).abs() < 0.1, "case {mk}: {}", s.data[0]);
+        }
     }
 }
