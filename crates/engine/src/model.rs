@@ -644,20 +644,21 @@ impl MixerChannel {
     }
 }
 
-/// Surround position of a mixer channel: `x` −1 (left) … 1 (right), `y` −1 (rear) … 1 (front), the spread of
-/// its two stereo sides in degrees, and how much of it goes to the LFE.
+/// Surround position of a mixer channel: `x` −1 (left) … 1 (right), `y` −1 (rear) … 1 (front), `z` 0 (ear level)
+/// … 1 (overhead), the spread of its two stereo sides in degrees, and how much of it goes to the LFE.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SurroundPan {
     pub x: f32,
     pub y: f32,
+    pub z: f32,
     pub spread: f32,
     pub lfe: f32,
 }
 
 impl Default for SurroundPan {
     fn default() -> Self {
-        SurroundPan { x: 0.0, y: 1.0, spread: 30.0, lfe: 0.0 }
+        SurroundPan { x: 0.0, y: 1.0, z: 0.0, spread: 30.0, lfe: 0.0 }
     }
 }
 
@@ -668,6 +669,8 @@ pub enum SurroundFormat {
     S5_1,
     /// L R C LFE Lb Rb Ls Rs.
     S7_1,
+    /// 7.1 plus four height speakers: L R C LFE Lb Rb Ls Rs Ltf Rtf Ltr Rtr (the Dolby Atmos 7.1.4 bed).
+    S7_1_4,
 }
 
 /// Insert slots per channel.

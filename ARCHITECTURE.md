@@ -49,7 +49,7 @@
 | `analysis` | BPM (onset autocorrelation) and key (chroma + key profiles) detection, audio-to-MIDI, HPSS + centre stem separation |
 | `device` | Output stream with a command channel, input capture into a recorder thread, recorded takes with latency, shared transport, MIDI inputs |
 | `plugins` | Folder scan, isolated scan, CLAP host, VST3 host, native editor windows (`window`), `Host` as the pool's plugin factory |
-| `surround` | 5.1 / 7.1 speaker layouts, 2D VBAP, the surround mix from per-channel stems, multichannel WAV |
+| `surround` | 5.1 / 7.1 / 7.1.4 speaker layouts, VBAP with a height layer, the surround mix from per-channel stems, multichannel WAV, ADM BWF (Atmos objects) |
 | `video` | ffprobe / ffmpeg wrappers: probe, frame at a time, soundtrack extraction, muxing the mix into the video |
 
 ## Real-time path

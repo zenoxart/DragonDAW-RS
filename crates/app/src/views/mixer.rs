@@ -286,7 +286,7 @@ fn surround_pad(ui: &mut Ui, st: &mut State, id: Id, sp: SurroundPan, width: f32
         }
     }
     let to_pos = |x: f32, y: f32| rect.center() + egui::vec2(x, -y) * size * 0.42;
-    p.circle_filled(to_pos(sp.x, sp.y), 5.0, theme::ACCENT_2);
+    p.circle_filled(to_pos(sp.x, sp.y), 4.0 + sp.z * 3.0, theme::ACCENT_2);
     if let Some(pos) = r.interact_pointer_pos().filter(|_| r.dragged() || r.clicked()) {
         let d = (pos - rect.center()) / (size * 0.42);
         let (x, y) = (d.x.clamp(-1.0, 1.0), (-d.y).clamp(-1.0, 1.0));
@@ -306,6 +306,10 @@ fn surround_pad(ui: &mut Ui, st: &mut State, id: Id, sp: SurroundPan, width: f32
     let mut spread = sp.spread;
     let r = ui.add(egui::Slider::new(&mut spread, 0.0..=180.0).text(RichText::new("spread").small()).show_value(false));
     widgets::apply(st, &r, "Surround spread", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.surround.spread = spread));
+    // Height: used by the 7.1.4 bed and by Atmos (ADM) objects.
+    let mut z = sp.z;
+    let r = ui.add(egui::Slider::new(&mut z, 0.0..=1.0).text(RichText::new("height").small()).show_value(false));
+    widgets::apply(st, &r, "Surround height", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.surround.z = z));
 }
 
 fn is_master_id(st: &State, id: Id) -> bool {

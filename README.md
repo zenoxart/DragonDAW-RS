@@ -50,7 +50,7 @@ docking, command pool, shortcuts, palette, navigation and i18n. Dragon DAW is no
 | 🔌 **Plugins** | CLAP and VST3 instruments and effects, **crash-isolated scanning** (each file in its own process), plugin GUIs embedded in native host windows (Linux X11, Windows), generic parameter editors, sidechain into plugins, full plugin state saved in the project, latency reported to PDC |
 | 🎤 **Vocal & audio tools** | "Dragon Tune" pitch correction (key, scale, retune speed), audio-to-MIDI (melody and drums), offline stem separation (drums / harmonic / centre) |
 | 🎛️ **Performance & hardware** | Clip launcher (tracks × patterns, launch on the bar), Mackie Control surfaces with motor faders and LEDs |
-| 🔊 **Surround** | 5.1 and 7.1 mixes: a surround panner (position, spread, LFE) on every top-level mixer channel and multichannel WAV export |
+| 🔊 **Surround & Atmos** | 5.1, 7.1 and 7.1.4 mixes: a surround panner (position, height, spread, LFE) on every top-level mixer channel, multichannel WAV export, and Dolby Atmos object export as ADM BWF |
 | 🎬 **Video** | Import a video, watch it in sync with the playhead with timecode, its soundtrack on a track, export the video with your mix (uses ffmpeg) |
 | 🛟 **Safety** | Autosave with crash detection and a recovery dialog, numbered backups on save, relative paths, missing-file relinking, "collect all files" into the project folder |
 | 🪟 **Desktop shell** | VS-style docking (tabs, splits, floating windows, saved layout), generated menus, a command palette (`Ctrl+Shift+P`), rebindable and chorded shortcuts, drag & drop from the file manager and browser, an animated splash (Higgsfield AI) |

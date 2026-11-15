@@ -81,7 +81,7 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Control surfaces (Mackie Control) | ✅ | Options › Control surface: faders, V-pots, mute / solo / arm / select, transport, banks; motor faders and LEDs |
 | Video track | ✅ (needs ffmpeg) | File › Import video, View › Video (frame at the playhead with timecode), soundtrack as a clip, export the video with the mix |
 | Surround 5.1 / 7.1 | ✅ (export) | Project › Surround; per-channel XY panner with spread and LFE send (2D VBAP); multichannel WAV export (`surround.rs`). Monitoring is stereo; master inserts are not applied to the surround mix |
-| Dolby Atmos (objects, ADM BWF) | ❌ | needs height speakers, object metadata and the ADM format; not attempted |
+| Dolby Atmos (objects, ADM BWF) | ✅ | 7.1.4 bed with height panning; every top-level channel exported as two positioned objects in an ADM BWF (BS.2076 axml + BS.2088 chna) for the Dolby Atmos Renderer, Resolve, Nuendo. No in-app Atmos binaural monitoring (Dolby-licensed); files over 4 GB (BW64) not supported |
 
 ## P4 – out of scope for an offline app
 
