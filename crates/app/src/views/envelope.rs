@@ -253,7 +253,7 @@ mod tests {
         let e = Envelope { enabled: true, delay: 0.0, attack: 0.05, hold: 0.0, decay: 0.2, sustain: 0.8, release: 0.3, attack_tension: 0.0, release_tension: 0.0 };
         let id = egui::Id::new("t");
         let mut last: Option<Envelope> = None;
-        let mut frame = |events: Vec<egui::Event>, last: &mut Option<Envelope>| {
+        let frame = |events: Vec<egui::Event>, last: &mut Option<Envelope>| {
             let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 300.0))), events, ..Default::default() };
             let _ = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
