@@ -45,6 +45,10 @@ pub enum Drag {
     Knife {
         from: Pos2,
     },
+    /// FL's zoom tool: drag a box to zoom into it.
+    Zoom {
+        from: Pos2,
+    },
 }
 
 pub fn show(ui: &mut Ui, st: &mut State) {
@@ -114,6 +118,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
     let kh = st.ui.key_height;
     let zoom = st.ui.piano_zoom as f64;
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("pr.grid"), grid));
 
     // Ctrl + right-drag: zoom into the box (time and key height); Ctrl + right-click: zoom out.
     match nav::area_zoom(ui, grid, "piano") {
@@ -379,6 +384,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         }
                         preview(st, notes[i].pitch, notes[i].velocity);
                     }
+                    _ if tool == Tool::Zoom => st.ui.pr_drag = Some(Drag::Zoom { from: pos }),
+                    _ if tool == Tool::Playback => {}
                     _ if tool == Tool::Slice => st.ui.pr_drag = Some(Drag::Knife { from: pos }),
                     None if tool == Tool::Select || ctrl => st.ui.pr_drag = Some(Drag::Select { from: pos }),
                     None if tool == Tool::Paint => st.ui.pr_drag = Some(Drag::Paint { last_tick: u32::MAX }),
@@ -495,6 +502,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     });
                 }
             }
+            Drag::Zoom { from } => {
+                let r = Rect::from_two_pos(from, pos);
+                p.rect(r, 2.0, theme::ACCENT_2.gamma_multiply(0.10), Stroke::new(1.0_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
+                if !ui.input(|i| i.pointer.any_down()) && r.width() > 6.0 {
+                    let b0 = st.ui.pr_x + (r.left() - grid.left()) as f64 / zoom;
+                    let b1 = st.ui.pr_x + (r.right() - grid.left()) as f64 / zoom;
+                    let nz = (grid.width() as f64 / (b1 - b0).max(1e-3)).clamp(12.0, 800.0);
+                    let nkh = if r.height() > kh * 2.0 { (kh * grid.height() / r.height()).clamp(6.0, 40.0) } else { kh };
+                    let rows_top = (r.top() - grid.top() + st.ui.pr_y) / kh;
+                    st.ui.pr_anim = Some(ViewTarget { zoom: nz, x: b0.max(0.0), vscale: nkh, y: (rows_top * nkh).clamp(0.0, max_y(nkh)) });
+                }
+            }
             Drag::Velocity => {
                 if vel.x_range().contains(pos.x) {
                     let v = ((vel.bottom() - 2.0 - pos.y) / (vel.height() - 6.0)).clamp(0.02, 1.0);
@@ -534,7 +553,34 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    if (resp.clicked() || resp.secondary_clicked()) && st.ui.pr_drag.is_none() {
+    // FL's playback tool: hold to play from the pointer, drag to scrub, release to stop.
+    let scrub_id = egui::Id::new("pr.scrub");
+    let scrubbing: bool = ui.data(|d| d.get_temp(scrub_id)).unwrap_or(false);
+    if tool == Tool::Playback && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()).filter(|p| grid.contains(*p)) {
+            let beat = (tick_of(pos.x) / PPQ as f64).max(0.0);
+            if !scrubbing {
+                st.seek(beat);
+                if !st.transport().playing {
+                    st.toggle_play();
+                }
+                ui.data_mut(|d| d.insert_temp(scrub_id, true));
+            } else if resp.dragged() {
+                st.seek(beat);
+            }
+        }
+    } else if scrubbing && !ui.input(|i| i.pointer.primary_down()) {
+        ui.data_mut(|d| d.insert_temp(scrub_id, false));
+        st.stop();
+    }
+    if tool == Tool::Zoom && resp.secondary_clicked() {
+        if let Some(at) = resp.interact_pointer_pos() {
+            let b = st.ui.pr_x + (at.x - grid.left()) as f64 / zoom;
+            let nz = (zoom / 2.0).clamp(12.0, 800.0);
+            st.ui.pr_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - grid.left()) as f64 / nz).max(0.0), vscale: kh, y: st.ui.pr_y });
+        }
+    }
+    if (resp.clicked() || resp.secondary_clicked()) && st.ui.pr_drag.is_none() && !matches!(tool, Tool::Playback | Tool::Zoom) {
         if let Some(pos) = resp.interact_pointer_pos().filter(|p| grid.contains(*p)) {
             let hit = note_at(pos);
             let tick = tick_of(pos.x);
@@ -738,15 +784,11 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 }
             }
         });
-        if ui.small_button("Flam").clicked() {
-            let sel = st.ui.notes.clone();
-            st.session.edit("Flam", |p| {
-                if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
-                    let src: Vec<Note> = if sel.is_empty() { c.notes.clone() } else { sel.iter().filter_map(|i| c.notes.get(*i).copied()).collect() };
-                    let extra = edit::flam(&src, 6);
-                    c.notes.extend(extra);
-                }
-            });
+        if ui.small_button("Flam").on_hover_text("Alt+F").clicked() {
+            st.ctx.run("dragon.edit.flam", serde_json::Value::Null);
+        }
+        if ui.small_button("Tools…").on_hover_text("FL piano-roll tools: Alt+A arp, Alt+E riff, Alt+K limit, Alt+L articulate, Alt+O LFO, Alt+R randomize, Alt+U chop, Alt+W claw, Alt+X levels, Alt+Y flip").clicked() {
+            st.ui.note_tools.open = true;
         }
         ui.menu_button("Progression", |ui| {
             let scale = st.ui.scale.unwrap_or(0);

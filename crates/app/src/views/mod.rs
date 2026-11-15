@@ -11,6 +11,7 @@ pub mod launcher;
 pub mod master;
 pub mod mixer;
 pub mod nav;
+pub mod note_tools;
 pub mod options;
 pub mod overlays;
 pub mod piano_roll;

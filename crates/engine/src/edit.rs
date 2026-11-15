@@ -96,6 +96,34 @@ pub fn shuffle(p: &mut Project, track: Id, from: f64, delta: f64) {
     }
 }
 
+/// FL Ctrl+Insert: inserts `range.len()` beats of silence at `range.start` on every track (clips across
+/// the point are split), moving markers too.
+pub fn insert_time(p: &mut Project, range: Range) {
+    let tracks: Vec<Id> = p.tracks.iter().map(|t| t.id).collect();
+    for t in tracks {
+        let ids: Vec<Id> = p.track(t).map(|t| t.clips.iter().map(|c| c.id).collect()).unwrap_or_default();
+        for id in ids {
+            split_clip(p, t, id, range.start);
+        }
+        shuffle(p, t, range.start, range.len());
+    }
+    for m in p.markers.iter_mut().filter(|m| m.beat >= range.start) {
+        m.beat += range.len();
+    }
+}
+
+/// FL Ctrl+Delete: deletes `range` on every track and closes the gap, moving markers too.
+pub fn delete_time(p: &mut Project, range: Range) {
+    let tracks: Vec<Id> = p.tracks.iter().map(|t| t.id).collect();
+    for t in tracks {
+        delete_range_shuffle(p, t, range);
+    }
+    p.markers.retain(|m| m.beat < range.start || m.beat >= range.end);
+    for m in p.markers.iter_mut().filter(|m| m.beat >= range.end) {
+        m.beat -= range.len();
+    }
+}
+
 /// Deletes a time range on a track and closes the gap (shuffle delete).
 pub fn delete_range_shuffle(p: &mut Project, track: Id, range: Range) {
     let ids: Vec<Id> = p.track(track).map(|t| t.clips.iter().map(|c| c.id).collect()).unwrap_or_default();
@@ -883,5 +911,203 @@ mod tests {
         let mut nn = Note { start: 0, length: 96, ..Note::default() };
         let r = split_note(&mut nn, 48).unwrap();
         assert_eq!((nn.length, r.start, r.length), (48, 48, 48));
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// FL Studio piano-roll tools (Limit, Articulate, LFO, Claw machine, Scale levels, Score flipper,
+// Randomize, Riff machine). Each works on the given notes and returns the result.
+
+/// Limit (FL Alt+K): moves notes outside `lo ..= hi` into the range by whole octaves.
+pub fn limit(notes: &mut [Note], lo: u8, hi: u8) {
+    let (lo, hi) = (lo.min(hi), hi.max(lo));
+    for n in notes {
+        let mut p = n.pitch as i32;
+        while p < lo as i32 && p + 12 <= 127 {
+            p += 12;
+        }
+        while p > hi as i32 && p - 12 >= 0 {
+            p -= 12;
+        }
+        n.pitch = p.clamp(lo as i32, hi as i32) as u8;
+    }
+}
+
+/// Articulate (FL Alt+L): scales note lengths (`scale`, 1 = unchanged) and optionally ends every note
+/// `gap` ticks before the next start.
+pub fn articulate(notes: &mut [Note], scale: f32, gap: Option<u32>) {
+    let starts: Vec<u32> = notes.iter().map(|n| n.start).collect();
+    for n in notes.iter_mut() {
+        n.length = ((n.length as f32 * scale).round() as u32).max(1);
+        if let Some(g) = gap {
+            if let Some(next) = starts.iter().copied().filter(|s| *s > n.start).min() {
+                n.length = n.length.min((next - n.start).saturating_sub(g).max(1));
+            }
+        }
+    }
+}
+
+/// Which note property a tool writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteProp {
+    Velocity,
+    Pan,
+    Release,
+}
+
+fn prop(n: &mut Note, p: NoteProp) -> &mut f32 {
+    match p {
+        NoteProp::Velocity => &mut n.velocity,
+        NoteProp::Pan => &mut n.pan,
+        NoteProp::Release => &mut n.release,
+    }
+}
+
+/// LFO (FL Alt+O): a sine of `cycles_per_bar` (bar = `bar_ticks`) shaping a property around `center`
+/// with depth `amount`.
+pub fn lfo(notes: &mut [Note], p: NoteProp, bar_ticks: u32, cycles_per_bar: f32, center: f32, amount: f32) {
+    let (lo, hi) = if p == NoteProp::Pan { (-1.0, 1.0) } else { (0.0, 1.0) };
+    for n in notes {
+        let ph = n.start as f32 / bar_ticks.max(1) as f32 * cycles_per_bar * std::f32::consts::TAU;
+        *prop(n, p) = (center + amount * ph.sin()).clamp(lo, hi);
+    }
+}
+
+/// Claw machine (FL Alt+W): walks the notes in time order and keeps `keep`, then drops `skip`, repeatedly.
+pub fn claw(notes: &[Note], keep: usize, skip: usize) -> Vec<Note> {
+    let mut v = notes.to_vec();
+    v.sort_by_key(|n| (n.start, n.pitch));
+    let period = (keep + skip).max(1);
+    v.into_iter().enumerate().filter(|(i, _)| i % period < keep.max(1)).map(|(_, n)| n).collect()
+}
+
+/// Scale levels (FL Alt+X): property = property × `scale` + `offset`.
+pub fn scale_levels(notes: &mut [Note], p: NoteProp, scale: f32, offset: f32) {
+    let (lo, hi) = if p == NoteProp::Pan { (-1.0, 1.0) } else { (0.0, 1.0) };
+    for n in notes {
+        let v = prop(n, p);
+        *v = (*v * scale + offset).clamp(lo, hi);
+    }
+}
+
+/// Score flipper (FL Alt+Y): mirrors pitches around their middle (vertical) and/or time (horizontal).
+pub fn flip(notes: &mut [Note], vertical: bool, horizontal: bool) {
+    if notes.is_empty() {
+        return;
+    }
+    if vertical {
+        let (lo, hi) = notes.iter().fold((127u8, 0u8), |(a, b), n| (a.min(n.pitch), b.max(n.pitch)));
+        for n in notes.iter_mut() {
+            n.pitch = (lo as i32 + hi as i32 - n.pitch as i32).clamp(0, 127) as u8;
+        }
+    }
+    if horizontal {
+        let (s, e) = notes.iter().fold((u32::MAX, 0u32), |(a, b), n| (a.min(n.start), b.max(n.end())));
+        for n in notes.iter_mut() {
+            n.start = s + (e - n.end());
+        }
+    }
+}
+
+/// Randomize (FL Alt+R): random timing (± `ticks`), velocity (± `velocity`), pitch (± `pitch` semitones,
+/// kept in `scale` when given, relative to `root`).
+pub fn randomize(notes: &mut [Note], ticks: u32, velocity: f32, pitch: u8, scale: Option<(u8, &[u8])>, seed: u64) {
+    let mut rng = crate::dsp::Rng::new(seed);
+    for n in notes {
+        if ticks > 0 {
+            n.start = (n.start as i64 + (rng.bipolar() * ticks as f32).round() as i64).max(0) as u32;
+        }
+        n.velocity = (n.velocity + rng.bipolar() * velocity).clamp(0.05, 1.0);
+        if pitch > 0 {
+            let p = (n.pitch as i32 + (rng.bipolar() * pitch as f32).round() as i32).clamp(0, 127) as u8;
+            n.pitch = match scale {
+                Some((root, s)) => snap_to_scale(p, root, s),
+                None => p,
+            };
+        }
+    }
+}
+
+/// Riff machine (FL Alt+E): a seeded riff in a scale – `bars` long on a `step` grid, `density` 0 … 1 of
+/// the steps sounding, moving mostly stepwise around `root` (MIDI note).
+pub fn riff(root: u8, scale: &[u8], bars: u32, step: u32, density: f32, seed: u64) -> Vec<Note> {
+    let mut rng = crate::dsp::Rng::new(seed);
+    let steps = bars * crate::model::PPQ * 4 / step.max(1);
+    let mut degree: i32 = 0;
+    let mut out: Vec<Note> = Vec::new();
+    let pitch_of = |d: i32| -> u8 {
+        let n = scale.len().max(1) as i32;
+        let oct = d.div_euclid(n);
+        let off = scale.get(d.rem_euclid(n) as usize).copied().unwrap_or(0) as i32;
+        (root as i32 + oct * 12 + off).clamp(0, 127) as u8
+    };
+    for s in 0..steps {
+        // Strong beats sound more often.
+        let accent = if s % 4 == 0 { 0.25 } else { 0.0 };
+        if rng.next_f32() < density + accent {
+            let mv = match (rng.next_f32() * 10.0) as i32 {
+                0..=3 => 1,
+                4..=7 => -1,
+                8 => 2,
+                _ => -2,
+            };
+            degree = (degree + mv).clamp(-5, 9);
+            // Sometimes hold for two steps.
+            let len = if rng.next_f32() < 0.25 { step * 2 } else { step };
+            let start = s * step;
+            if out.last().is_some_and(|l: &Note| l.end() > start) {
+                continue;
+            }
+            out.push(Note { pitch: pitch_of(degree), start, length: len, velocity: if s % 4 == 0 { 0.9 } else { 0.7 }, ..Default::default() });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod fl_tool_tests {
+    use super::*;
+    use crate::model::PPQ;
+
+    fn n(p: u8, s: u32) -> Note {
+        Note { pitch: p, start: s, length: PPQ, ..Default::default() }
+    }
+
+    #[test]
+    fn piano_roll_tools() {
+        let mut v = vec![n(30, 0), n(100, PPQ)];
+        limit(&mut v, 48, 72);
+        assert!(v.iter().all(|x| (48..=72).contains(&x.pitch)), "{v:?}");
+        assert_eq!(v[0].pitch % 12, 30 % 12, "octave moves keep the note name");
+
+        let mut v = vec![n(60, 0), n(62, PPQ)];
+        articulate(&mut v, 0.5, None);
+        assert_eq!(v[0].length, PPQ / 2);
+
+        let v: Vec<Note> = (0..8).map(|i| n(60, i * PPQ)).collect();
+        assert_eq!(claw(&v, 1, 1).len(), 4);
+
+        let mut v = vec![n(60, 0), n(67, PPQ)];
+        flip(&mut v, true, false);
+        assert_eq!((v[0].pitch, v[1].pitch), (67, 60));
+        flip(&mut v, false, true);
+        assert_eq!((v[0].start, v[1].start), (PPQ, 0));
+
+        let mut v = vec![n(60, 0)];
+        scale_levels(&mut v, NoteProp::Velocity, 0.5, 0.0);
+        assert!((v[0].velocity - 0.4).abs() < 1e-4);
+
+        let mut v: Vec<Note> = (0..16).map(|i| n(60, i * PPQ / 4)).collect();
+        lfo(&mut v, NoteProp::Velocity, PPQ * 4, 1.0, 0.5, 0.4);
+        assert!(v.iter().any(|x| x.velocity > 0.85) && v.iter().any(|x| x.velocity < 0.15));
+
+        let major = &[0u8, 2, 4, 5, 7, 9, 11];
+        let r = riff(60, major, 2, PPQ / 4, 0.5, 9);
+        assert!(!r.is_empty());
+        assert!(r.iter().all(|x| in_scale(x.pitch, 0, major)));
+        assert_eq!(r, riff(60, major, 2, PPQ / 4, 0.5, 9), "seeded");
+        let mut v: Vec<Note> = (0..8).map(|i| n(60, i * PPQ)).collect();
+        randomize(&mut v, 0, 0.0, 3, Some((0, major)), 4);
+        assert!(v.iter().all(|x| in_scale(x.pitch, 0, major)));
     }
 }

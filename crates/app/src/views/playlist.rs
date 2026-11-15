@@ -44,6 +44,15 @@ pub enum DragKind {
         from: f64,
         y: f32,
     },
+    /// FL's zoom tool: a box from a screen position.
+    Zoom {
+        from: Pos2,
+    },
+    /// FL's slip edit: moves the audio inside the clip (the clip's audio offset, seconds, at the start).
+    Slip {
+        from: f64,
+        offset: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -392,6 +401,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).filter(|p| timeline.contains(*p)) {
             if let Some((track, take)) = take_at(pos.y) {
                 st.ui.pl_drag = Some(Drag { clip: 0, track, kind: DragKind::Comp { take, from: snap(beat_of(pos.x, sx), grid) } });
+            } else if tool == Tool::Zoom {
+                st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Zoom { from: pos } });
+            } else if tool == Tool::Playback {
+                // Handled below (press and hold).
+            } else if let (Tool::Slip, Some((tid, cid, _))) = (tool, clip_at(pos)) {
+                let off = st.session.project.track(tid).and_then(|t| t.clips.iter().find(|c| c.id == cid)).and_then(|c| match &c.kind {
+                    ClipKind::Audio(a) => Some(a.offset),
+                    _ => None,
+                });
+                if let Some(offset) = off {
+                    st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind: DragKind::Slip { from: beat_of(pos.x, sx), offset } });
+                }
             } else if tool == Tool::Slice {
                 st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
@@ -574,6 +595,29 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     });
                 }
             }
+            DragKind::Zoom { from } => {
+                let r = Rect::from_two_pos(from, pos);
+                painter.rect_filled(r, 2.0, theme::ACCENT.gamma_multiply(0.10));
+                painter.rect_stroke(r, 2.0, Stroke::new(1.0_f32, theme::ACCENT), egui::StrokeKind::Inside);
+                if !ui.input(|i| i.pointer.any_down()) && r.width() > 6.0 {
+                    let (b0, b1) = (beat_of(r.left(), sx), beat_of(r.right(), sx));
+                    let nz = (timeline.width() as f64 / (b1 - b0).max(1e-3)).clamp(3.0, 400.0);
+                    let vz = st.ui.pl_vzoom;
+                    let vs = if r.height() > 24.0 { (vz * timeline.height() / r.height()).clamp(0.4, 4.0) } else { vz };
+                    let content_y = r.top() - timeline.top() + st.ui.pl_y;
+                    st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: b0.max(0.0), vscale: vs, y: (content_y * vs / vz).max(0.0) });
+                }
+            }
+            DragKind::Slip { from, offset } => {
+                let secs = (beat - from) * 60.0 / st.session.project.bpm.max(1.0);
+                let new = (offset - secs).max(0.0);
+                st.session.gesture("Slip edit", |p| {
+                    if let Some(ClipKind::Audio(a)) = p.track_mut(d.track).and_then(|t| t.clips.iter_mut().find(|c| c.id == d.clip)).map(|c| &mut c.kind) {
+                        a.offset = new;
+                    }
+                });
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
             DragKind::Comp { take, from } => {
                 let b = snap(beat, grid);
                 let x0 = x_of(from.min(b), sx);
@@ -597,8 +641,38 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
+    // FL's playback tool: hold the mouse to play from there, drag to scrub, release to stop.
+    let scrub_id = egui::Id::new("pl.scrub");
+    let scrubbing: bool = ui.data(|d| d.get_temp(scrub_id)).unwrap_or(false);
+    if tool == Tool::Playback && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()).filter(|p| timeline.contains(*p)) {
+            let b = beat_of(pos.x, sx).max(0.0);
+            if !scrubbing {
+                st.seek(b);
+                if !st.transport().playing {
+                    st.toggle_play();
+                }
+                ui.data_mut(|d| d.insert_temp(scrub_id, true));
+                ui.data_mut(|d| d.insert_temp(scrub_id.with("x"), pos.x));
+            } else if ui.data(|d| d.get_temp::<f32>(scrub_id.with("x"))).is_some_and(|x| (x - pos.x).abs() > 1.0) {
+                st.seek(b);
+                ui.data_mut(|d| d.insert_temp(scrub_id.with("x"), pos.x));
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    } else if scrubbing && !ui.input(|i| i.pointer.primary_down()) {
+        ui.data_mut(|d| d.insert_temp(scrub_id, false));
+        st.stop();
+    }
+    if tool == Tool::Zoom && resp.secondary_clicked() {
+        if let Some(at) = resp.interact_pointer_pos() {
+            let b = beat_of(at.x, sx);
+            let nz = (zoom / 2.0).clamp(3.0, 400.0);
+            st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: st.ui.pl_vzoom, y: st.ui.pl_y });
+        }
+    }
     // Clicks with tools.
-    if resp.clicked() || resp.secondary_clicked() {
+    if (resp.clicked() || resp.secondary_clicked()) && !matches!(tool, Tool::Playback | Tool::Zoom) {
         if let Some(pos) = resp.interact_pointer_pos().filter(|p| timeline.contains(*p)) {
             let beat = beat_of(pos.x, sx);
             let hit = clip_at(pos);

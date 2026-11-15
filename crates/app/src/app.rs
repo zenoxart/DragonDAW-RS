@@ -264,6 +264,7 @@ impl eframe::App for DragonApp {
         views::windows::show(ctx, &mut self.st);
         views::quests::show(ctx, &mut self.st);
         views::fx_gallery::show(ctx, &mut self.st);
+        views::note_tools::show(ctx, &mut self.st);
         views::overlays::palette(ctx, &mut self.st);
         views::overlays::toasts(ctx, &mut self.st);
         views::overlays::recovery(ctx, &mut self.st);

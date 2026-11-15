@@ -49,8 +49,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("edit.quantize", "Quantize", "Edit/Notes", 3, "Alt+Q"),
     ("edit.quick_quantize", "Quick quantize (piano roll) / clip starts (playlist)", "Edit/Notes", 3, "Shift+Q"),
     ("edit.legato", "Legato", "Edit/Notes", 3, "Ctrl+L"),
-    ("edit.humanize", "Randomize (humanize)", "Edit/Notes", 3, "Alt+R"),
-    ("edit.strum", "Strum chords", "Edit/Notes", 3, "Alt+S"),
+    ("edit.humanize", "Quick randomize (humanize)", "Edit/Notes", 3, ""),
+    ("edit.strum", "Quick strum", "Edit/Notes", 3, ""),
     ("edit.flam", "Flam", "Edit/Notes", 3, "Alt+F"),
     ("edit.glue", "Glue selected notes", "Edit/Notes", 3, "Ctrl+G"),
     ("edit.chop", "Quick chop (at the snap)", "Edit/Notes", 3, "Ctrl+U"),
@@ -71,6 +71,53 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tool.mute", "Mute tool", "Edit/Tools", 6, "T"),
     ("tool.slice", "Slice tool", "Edit/Tools", 6, "C"),
     ("tool.select", "Select tool", "Edit/Tools", 6, "E"),
+    ("tool.slip", "Slip edit tool (playlist) / slide notes (piano roll)", "Edit/Tools", 6, "S"),
+    ("tool.playback", "Playback tool", "Edit/Tools", 6, "Y"),
+    ("tool.zoom", "Zoom tool", "Edit/Tools", 6, "Z"),
+    ("ntool.arp", "Arpeggiator…", "Edit/Piano roll tools", 8, "Alt+A"),
+    ("ntool.riff", "Riff machine…", "Edit/Piano roll tools", 8, "Alt+E"),
+    ("ntool.limit", "Limit…", "Edit/Piano roll tools", 8, "Alt+K"),
+    ("ntool.articulate", "Articulate…", "Edit/Piano roll tools", 8, "Alt+L"),
+    ("ntool.lfo", "LFO…", "Edit/Piano roll tools", 8, "Alt+O"),
+    ("ntool.randomize", "Randomize…", "Edit/Piano roll tools", 8, "Alt+R"),
+    ("ntool.strum", "Strum…", "Edit/Piano roll tools", 8, "Alt+S"),
+    ("ntool.chop", "Chop…", "Edit/Piano roll tools", 8, "Alt+U"),
+    ("ntool.claw", "Claw machine…", "Edit/Piano roll tools", 8, "Alt+W"),
+    ("ntool.levels", "Scale levels…", "Edit/Piano roll tools", 8, "Alt+X"),
+    ("ntool.flip", "Score flipper…", "Edit/Piano roll tools", 8, "Alt+Y"),
+    ("edit.transpose_clip_down", "Transpose clips −1 semitone", "Edit/Clips", 9, ""),
+    ("edit.transpose_clip_up", "Transpose clips +1 semitone", "Edit/Clips", 9, ""),
+    ("edit.reverse_clips", "Reverse audio clips", "Edit/Clips", 9, ""),
+    ("edit.insert_time", "Insert space (loop range)", "Edit/Clips", 9, "Ctrl+Insert"),
+    ("edit.delete_time", "Delete space (loop range)", "Edit/Clips", 9, "Ctrl+Delete"),
+    ("zoom.in", "Zoom in", "View/Zoom", 4, "PageUp"),
+    ("zoom.out", "Zoom out", "View/Zoom", 4, "PageDown"),
+    ("zoom.center", "Center on the playhead", "View/Zoom", 4, "Shift+0"),
+    ("zoom.level1", "Zoom level 1", "View/Zoom", 4, "Shift+1"),
+    ("zoom.level2", "Zoom level 2", "View/Zoom", 4, "Shift+2"),
+    ("zoom.level3", "Zoom level 3", "View/Zoom", 4, "Shift+3"),
+    ("zoom.all", "Show all", "View/Zoom", 4, "Shift+4"),
+    ("zoom.selection", "Zoom to selection", "View/Zoom", 4, "Shift+5"),
+    ("rack.mute1", "Mute / unmute channel 1", "", 0, "1"),
+    ("rack.solo1", "Solo channel 1", "", 0, "Ctrl+1"),
+    ("rack.mute2", "Mute / unmute channel 2", "", 0, "2"),
+    ("rack.solo2", "Solo channel 2", "", 0, "Ctrl+2"),
+    ("rack.mute3", "Mute / unmute channel 3", "", 0, "3"),
+    ("rack.solo3", "Solo channel 3", "", 0, "Ctrl+3"),
+    ("rack.mute4", "Mute / unmute channel 4", "", 0, "4"),
+    ("rack.solo4", "Solo channel 4", "", 0, "Ctrl+4"),
+    ("rack.mute5", "Mute / unmute channel 5", "", 0, "5"),
+    ("rack.solo5", "Solo channel 5", "", 0, "Ctrl+5"),
+    ("rack.mute6", "Mute / unmute channel 6", "", 0, "6"),
+    ("rack.solo6", "Solo channel 6", "", 0, "Ctrl+6"),
+    ("rack.mute7", "Mute / unmute channel 7", "", 0, "7"),
+    ("rack.solo7", "Solo channel 7", "", 0, "Ctrl+7"),
+    ("rack.mute8", "Mute / unmute channel 8", "", 0, "8"),
+    ("rack.solo8", "Solo channel 8", "", 0, "Ctrl+8"),
+    ("rack.mute9", "Mute / unmute channel 9", "", 0, "9"),
+    ("rack.solo9", "Solo channel 9", "", 0, "Ctrl+9"),
+    ("rack.mute0", "Mute / unmute channel 10", "", 0, "0"),
+    ("rack.solo0", "Solo channel 10", "", 0, "Ctrl+0"),
     ("transport.play", "Play / stop", "Transport", 0, "Space"),
     ("transport.pause", "Play / pause", "Transport", 0, "Ctrl+Space"),
     ("transport.panic", "Stop sound (panic)", "Transport", 0, "Ctrl+H"),
@@ -130,7 +177,8 @@ pub fn register(st: &mut State) {
             label: TextKey::new(*label),
             icon: IconRef::new(""),
             permission: String::new(),
-            placements: vec![CommandPlacement::new(placements::MAIN_MENU, &menu_path, *section, i as i32)],
+            // Rows without a menu path are key-only (the number keys).
+            placements: if menu_path.is_empty() { Vec::new() } else { vec![CommandPlacement::new(placements::MAIN_MENU, &menu_path, *section, i as i32)] },
             shortcuts,
             workflow_capable: false,
             ai_allowed: false,
@@ -153,6 +201,10 @@ pub fn register(st: &mut State) {
         ("edit/notes", "Notes"),
         ("edit/tools", "Tools"),
         ("add/instrument", "Instrument"),
+        ("edit/move", "Move"),
+        ("edit/clips", "Clips"),
+        ("edit/piano roll tools", "Piano roll tools"),
+        ("view/zoom", "Zoom"),
     ];
     for (i, (path, label)) in groups.iter().enumerate() {
         st.ctx.commands.register_group("dragon", CommandGroupDescriptor { menu: placements::MAIN_MENU.into(), path: (*path).into(), label: TextKey::new(*label), icon: IconRef::new(""), order: i as i32 });
@@ -275,6 +327,99 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "edit.deselect" => {
             st.ui.clips.clear();
             st.ui.notes.clear();
+        }
+        "tool.slip" if st.ui.editor == crate::state::Editor::PianoRoll => {
+            // FL piano roll S: slide notes on / off for the selection.
+            notes_apply(st, "Slide notes", |v| {
+                let on = !v.iter().all(|n| n.slide);
+                v.iter_mut().for_each(|n| n.slide = on);
+            });
+        }
+        "tool.slip" => st.ui.tool = crate::state::Tool::Slip,
+        "tool.playback" => st.ui.tool = crate::state::Tool::Playback,
+        "tool.zoom" => st.ui.tool = crate::state::Tool::Zoom,
+        x if x.starts_with("ntool.") => {
+            use crate::views::note_tools::{open, Tool as T};
+            let t = match &x[6..] {
+                "arp" => T::Arpeggiator,
+                "riff" => T::Riff,
+                "limit" => T::Limit,
+                "articulate" => T::Articulate,
+                "lfo" => T::Lfo,
+                "randomize" => T::Randomize,
+                "strum" => T::Strum,
+                "chop" => T::Chop,
+                "claw" => T::Claw,
+                "levels" => T::ScaleLevels,
+                _ => T::Flip,
+            };
+            open(st, t);
+        }
+        "edit.transpose_clip_down" | "edit.transpose_clip_up" => {
+            let d = if id.ends_with("up") { 1.0 } else { -1.0 };
+            let ids = st.ui.clips.clone();
+            st.session.edit("Transpose clips", |p| {
+                for c in p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)) {
+                    if let ClipKind::Audio(a) = &mut c.kind {
+                        a.pitch = (a.pitch + d).clamp(-24.0, 24.0);
+                    }
+                }
+            });
+        }
+        "edit.reverse_clips" => {
+            let ids = st.ui.clips.clone();
+            st.session.edit("Reverse clips", |p| {
+                for c in p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)) {
+                    if let ClipKind::Audio(a) = &mut c.kind {
+                        a.reverse = !a.reverse;
+                    }
+                }
+            });
+        }
+        "edit.insert_time" | "edit.delete_time" => match st.session.project.loop_range {
+            Some(r) if r.len() > 0.0 => {
+                if id == "edit.insert_time" {
+                    st.session.edit("Insert space", |p| dragon_engine::edit::insert_time(p, r));
+                } else {
+                    st.session.edit("Delete space", |p| dragon_engine::edit::delete_time(p, r));
+                }
+            }
+            _ => st.toast("Select a time range on the ruler first", Severity::Info),
+        },
+        x if x.starts_with("zoom.") => zoom_command(st, &x[5..], ctx),
+        x if x.starts_with("rack.mute") || x.starts_with("rack.solo") => {
+            let digit: usize = x[9..].parse().unwrap_or(1);
+            let k = if digit == 0 { 9 } else { digit - 1 };
+            let solo = x.starts_with("rack.solo");
+            if st.ui.editor == crate::state::Editor::Rack {
+                if let Some(cid) = st.session.project.channels.get(k).map(|c| c.id) {
+                    st.session.edit(if solo { "Solo channel" } else { "Mute channel" }, |p| {
+                        if solo {
+                            let was = p.channels.iter().any(|c| c.id == cid && c.solo);
+                            for c in p.channels.iter_mut() {
+                                c.solo = !was && c.id == cid;
+                            }
+                        } else if let Some(c) = p.channels.iter_mut().find(|c| c.id == cid) {
+                            c.muted = !c.muted;
+                        }
+                    });
+                }
+            } else if !solo && st.ui.editor == crate::state::Editor::Playlist {
+                // Outside the rack the number keys are FL's playlist keys.
+                match digit {
+                    5 => zoom_command(st, "selection", ctx),
+                    7 => {
+                        execute(st, "edit.transpose_clip_down", ctx);
+                    }
+                    8 => {
+                        execute(st, "edit.transpose_clip_up", ctx);
+                    }
+                    9 => {
+                        execute(st, "edit.reverse_clips", ctx);
+                    }
+                    _ => {}
+                }
+            }
         }
         "tool.draw" => st.ui.tool = crate::state::Tool::Draw,
         "tool.paint" => st.ui.tool = crate::state::Tool::Paint,
@@ -798,6 +943,64 @@ fn notes_edit(st: &mut State, label: &str, f: impl FnOnce(&mut Vec<Note>, &[usiz
     });
     if let Some(s) = new_sel {
         st.ui.notes = s;
+    }
+}
+
+/// FL's zoom keys for the playlist or piano roll (whichever was used last): PgUp / PgDn, Shift+0 centre
+/// on the playhead, Shift+1…3 zoom levels, Shift+4 show all, Shift+5 / 5 zoom to the selection.
+fn zoom_command(st: &mut State, what: &str, ctx: &egui::Context) {
+    let piano = st.ui.editor == crate::state::Editor::PianoRoll;
+    let (zoom, x, lo, hi) = if piano { (st.ui.piano_zoom, st.ui.pr_x, 12.0, 800.0) } else { (st.ui.playlist_zoom, st.ui.pl_x, 3.0, 400.0) };
+    // Visible width in pixels, remembered by the views; a sensible default otherwise.
+    let width = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(if piano { "pr.grid" } else { "pl.timeline" }))).map(|r| r.width()).filter(|w| *w > 50.0).unwrap_or(1000.0);
+    let now = st.beat_now();
+    let (nz, nx) = match what {
+        "in" => (zoom * 1.25, x),
+        "out" => (zoom / 1.25, x),
+        "center" => (zoom, (now - (width / zoom) as f64 * 0.5).max(0.0)),
+        "level1" => (if piano { 24.0 } else { 6.0 }, x),
+        "level2" => (if piano { 96.0 } else { 28.0 }, x),
+        "level3" => (if piano { 300.0 } else { 120.0 }, x),
+        "all" => {
+            let end = if piano {
+                st.session.project.pattern(st.ui.pattern).map(|p| p.length_beats()).unwrap_or(4.0)
+            } else {
+                st.session.project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.end())).fold(16.0, f64::max)
+            };
+            (width / end as f32, 0.0)
+        }
+        _ => {
+            // Selection: clips in the playlist, notes in the piano roll.
+            let span = if piano {
+                let notes = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|c| c.notes.clone()).unwrap_or_default();
+                st.ui.notes.iter().filter_map(|i| notes.get(*i)).fold(None, |a: Option<(f64, f64)>, n| {
+                    let (s, e) = (n.start as f64 / PPQ as f64, n.end() as f64 / PPQ as f64);
+                    Some(a.map_or((s, e), |(x, y)| (x.min(s), y.max(e))))
+                })
+            } else {
+                st.session
+                    .project
+                    .tracks
+                    .iter()
+                    .flat_map(|t| t.clips.iter())
+                    .filter(|c| st.ui.clips.contains(&c.id))
+                    .fold(None, |a: Option<(f64, f64)>, c| Some(a.map_or((c.start, c.end()), |(x, y)| (x.min(c.start), y.max(c.end())))))
+            };
+            match span {
+                Some((s, e)) if e > s => (width / (e - s) as f32, s),
+                _ => (zoom, x),
+            }
+        }
+    };
+    let nz = nz.clamp(lo, hi);
+    if piano {
+        st.ui.pr_anim = None;
+        st.ui.piano_zoom = nz;
+        st.ui.pr_x = nx;
+    } else {
+        st.ui.pl_anim = None;
+        st.ui.playlist_zoom = nz;
+        st.ui.pl_x = nx;
     }
 }
 

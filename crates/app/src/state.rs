@@ -63,11 +63,26 @@ pub enum Tool {
     Slice,
     Erase,
     Mute,
+    /// FL "Playback" (Y): hold the mouse on the timeline to play from there; dragging scrubs.
+    Playback,
+    /// FL "Zoom" (Z): drag a box to zoom into it, right-click zooms out.
+    Zoom,
+    /// FL "Slip edit" (S, playlist): drag inside an audio clip to move the audio, the clip stays.
+    Slip,
 }
 
 impl Tool {
-    pub const ALL: [(Tool, &'static str, &'static str); 6] =
-        [(Tool::Draw, "✏", "Draw"), (Tool::Paint, "🎨", "Paint"), (Tool::Select, "⬛", "Select"), (Tool::Slice, "✂", "Slice"), (Tool::Erase, "🗙", "Erase"), (Tool::Mute, "🔇", "Mute")];
+    pub const ALL: [(Tool, &'static str, &'static str); 9] = [
+        (Tool::Draw, "✏", "Draw (P)"),
+        (Tool::Paint, "🎨", "Paint (B)"),
+        (Tool::Select, "⬛", "Select (E)"),
+        (Tool::Slice, "✂", "Slice (C)"),
+        (Tool::Erase, "🗙", "Delete (D)"),
+        (Tool::Mute, "🔇", "Mute (T)"),
+        (Tool::Slip, "⇔", "Slip edit (S)"),
+        (Tool::Playback, "▶", "Playback (Y)"),
+        (Tool::Zoom, "🔍", "Zoom (Z)"),
+    ];
 }
 
 /// The editor the user last worked in (decides what Select all / Copy / Paste act on).
@@ -76,6 +91,8 @@ pub enum Editor {
     #[default]
     Playlist,
     PianoRoll,
+    /// The channel rack (number keys mute / solo channels there).
+    Rack,
 }
 
 /// Copied clips (with their track index) or notes.
@@ -147,6 +164,8 @@ pub struct UiState {
     pub about: bool,
     /// The effect gallery window is open.
     pub fx_gallery: bool,
+    /// FL's piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
+    pub note_tools: crate::views::note_tools::NoteTools,
     /// The stock effect editor shown full screen (mixer insert, effect).
     pub fx_fullscreen: Option<(Id, Id)>,
     pub midi_learn: Option<Target>,
@@ -208,6 +227,7 @@ impl UiState {
             recovery: None,
             about: false,
             fx_gallery: false,
+            note_tools: Default::default(),
             fx_fullscreen: None,
             midi_learn: None,
             last_note_len: PPQ,

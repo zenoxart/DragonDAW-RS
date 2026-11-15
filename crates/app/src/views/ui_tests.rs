@@ -589,8 +589,30 @@ fn shortcuts_follow_fl_studio() {
         ("edit.glue", "Ctrl+G"),
         ("edit.chop", "Ctrl+U"),
         ("edit.flam", "Alt+F"),
-        ("edit.humanize", "Alt+R"),
-        ("edit.strum", "Alt+S"),
+        ("ntool.randomize", "Alt+R"),
+        ("ntool.strum", "Alt+S"),
+        ("ntool.arp", "Alt+A"),
+        ("ntool.riff", "Alt+E"),
+        ("ntool.limit", "Alt+K"),
+        ("ntool.articulate", "Alt+L"),
+        ("ntool.lfo", "Alt+O"),
+        ("ntool.chop", "Alt+U"),
+        ("ntool.claw", "Alt+W"),
+        ("ntool.levels", "Alt+X"),
+        ("ntool.flip", "Alt+Y"),
+        ("tool.slip", "S"),
+        ("tool.playback", "Y"),
+        ("tool.zoom", "Z"),
+        ("zoom.in", "PageUp"),
+        ("zoom.out", "PageDown"),
+        ("zoom.center", "Shift+0"),
+        ("zoom.all", "Shift+4"),
+        ("zoom.selection", "Shift+5"),
+        ("edit.insert_time", "Ctrl+Insert"),
+        ("edit.delete_time", "Ctrl+Delete"),
+        ("rack.mute1", "1"),
+        ("rack.mute0", "0"),
+        ("rack.solo3", "Ctrl+3"),
         ("edit.transpose_up", "Ctrl+Up"),
         ("view.picker", "Alt+P"),
         ("view.playlist", "F5"),
@@ -736,4 +758,68 @@ fn fl_note_and_clip_commands() {
     assert_ne!(h.st.session.project.tracks[k].id, t0);
     run(&mut h, "edit.move_up");
     assert_eq!(h.st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == clip)).unwrap().id, t0);
+}
+
+/// Number keys follow FL's context: mute / solo channels in the rack, 7 / 8 / 9 transpose and reverse
+/// clips in the playlist; Ctrl+Insert / Ctrl+Delete add or remove time; the piano-roll tool window.
+#[test]
+fn fl_context_keys_and_tools() {
+    let mut h = Harness::new();
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        assert!(crate::commands::execute(&mut h.st, &format!("dragon.{id}"), &ctx), "{id}");
+    };
+    h.st.ui.editor = crate::state::Editor::Rack;
+    run(&mut h, "rack.mute1");
+    assert!(h.st.session.project.channels[0].muted);
+    run(&mut h, "rack.solo2");
+    assert!(h.st.session.project.channels[1].solo && !h.st.session.project.channels[0].solo);
+    // Playlist: an audio clip, 8 transposes up, 9 reverses.
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    let tid = h.st.session.project.tracks[0].id;
+    let cid = h.st.session.edit("audio", |p| {
+        let c = Clip { id: p.next_id(), name: "a".into(), start: 4.0, length: 4.0, muted: false, color: Default::default(), kind: ClipKind::Audio(Default::default()) };
+        let id = c.id;
+        p.track_mut(tid).unwrap().clips.push(c);
+        id
+    });
+    h.st.ui.clips = vec![cid];
+    run(&mut h, "rack.mute8");
+    run(&mut h, "rack.mute9");
+    let clip = |h: &Harness| h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == cid).unwrap().clone();
+    match &clip(&h).kind {
+        ClipKind::Audio(a) => assert!(a.pitch == 1.0 && a.reverse, "{a:?}"),
+        _ => unreachable!(),
+    }
+    assert!(h.st.session.project.channels.iter().skip(1).all(|c| !c.muted), "number keys outside the rack don't mute");
+    // Ctrl+Insert / Ctrl+Delete with the loop range 0…2.
+    h.st.session.edit("loop", |p| p.loop_range = Some(Range::new(0.0, 2.0)));
+    run(&mut h, "edit.insert_time");
+    assert_eq!(clip(&h).start, 6.0);
+    run(&mut h, "edit.delete_time");
+    assert_eq!(clip(&h).start, 4.0);
+    // Zoom to the selected clip.
+    run(&mut h, "zoom.selection");
+    assert!((h.st.ui.pl_x - 4.0).abs() < 1e-9);
+    // Alt+K opens the tool window on Limit.
+    run(&mut h, "ntool.limit");
+    assert!(h.st.ui.note_tools.open && h.st.ui.note_tools.tool == crate::views::note_tools::Tool::Limit);
+    // Tool keys.
+    run(&mut h, "tool.zoom");
+    assert_eq!(h.st.ui.tool, crate::state::Tool::Zoom);
+}
+
+/// No two commands share a default shortcut.
+#[test]
+fn shortcuts_do_not_collide() {
+    let mut h = Harness::new();
+    crate::commands::register(&mut h.st);
+    let mut seen = std::collections::HashMap::new();
+    for d in h.st.ctx.commands.all() {
+        for s in &d.descriptor.shortcuts {
+            if let Some(prev) = seen.insert(s.gesture.to_string(), d.descriptor.id.clone()) {
+                panic!("{} used by {} and {}", s.gesture, prev, d.descriptor.id);
+            }
+        }
+    }
 }

@@ -11,6 +11,9 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use std::path::PathBuf;
 
 pub fn show(ui: &mut Ui, st: &mut State) {
+    if ui.rect_contains_pointer(ui.max_rect()) {
+        st.ui.editor = crate::state::Editor::Rack;
+    }
     let pat = st.ui.pattern;
     let Some(pattern) = st.session.project.pattern(pat).cloned() else {
         ui.label("No pattern – add one with Add › Pattern.");
