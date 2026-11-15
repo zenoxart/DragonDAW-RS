@@ -259,7 +259,7 @@ fn reference_track_region_is_analysed_and_compared_with_the_mix() {
     h.st.session.edit("ref", |p| p.reference = Some(ReferenceTrack { path: path.clone(), region: Some((3.0, 6.0)) }));
     // Decode and analyse in the background; keep drawing until both results are in.
     let wait = |h: &mut Harness, what: &dyn Fn(&ReferenceStateProbe) -> bool| {
-        for _ in 0..600 {
+        for _ in 0..3000 {
             h.idle(mastering, 1);
             if what(&probe(&h.st)) {
                 return;

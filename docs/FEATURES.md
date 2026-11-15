@@ -78,12 +78,23 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | FL-style project folder on save (Samples, Recordings, Renders, Backup) | ✅ | `project_io::save_in_folder` |
 | Mixer and Mastering as default tabs next to the playlist | ✅ | `docking::default_layout` (layout version 2) |
 | Quests, XP, levels, daily streak, celebrations | ✅ | `views/quests.rs` |
+| FL Studio shortcut set (duplicate, undo toggle, clipboard, tools, windows, export) | ✅ | `commands.rs` |
+| BPM display: integer / decimal drag zones, double-click to type, right-click tempo presets 70–160 | ✅ | `widgets::bpm_display` |
+| Multi-select and drag of patterns / audio / automation clips from the picker | ✅ | `views/picker.rs` (`place_many`) |
+| Playlist: Ctrl+drag selection across tracks, Shift+drag clone, multi-track moves | ✅ | `views/playlist.rs` |
+| FL-style slice tool (playlist across tracks, piano roll across notes; Alt = no snap) | ✅ | `views/playlist.rs`, `views/piano_roll.rs` |
+| Sampler volume envelope editor with bend handles, over the waveform, with presets | ✅ | `views/envelope.rs` |
+| Browser waveform preview (cut when playback starts) | ✅ | `views/browser.rs`, `Renderer::play` |
+| Export tempo matches playback at every device rate | ✅ | `Renderer::set_song` (the clock follows the song's rate) |
+| Stock effects with FabFilter-style handling: EQ analyzer, band add / remove / shape menu, compressor level history, typed values, Ctrl+click reset, full screen | ✅ | `views/fx_ui.rs`, `dsp/spectrum.rs` |
+| Native plugin editors resize with the plugin and can go full screen | ✅ Linux (X11) / Windows | `plugins/window.rs`, `clap.rs`, `vst3.rs` |
+| Clean Voice, Class-A Strip, Drum Bus, Alter, tube saturator, transient designer, phase meter | ✅ | `effects/voice.rs`, `strips.rs`, `alter.rs`, `dsp/tube.rs`, `dynamics.rs`, `color.rs` |
 
 ## P3 – advanced
 
 | Feature | Status | Where |
 |---|---|---|
-| Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: YIN pitch detection, key + scale, retune speed, amount (`effects/pitch.rs`) |
+| Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: real-time and low latency for tracking (pitch-synchronous shifting, 2.7 ms hop), YIN detection, key + scale, retune speed, humanize, flex-tune, vibrato (`effects/pitch.rs`) |
 | MP3 / Ogg Vorbis export | ✅ | LAME and libvorbis (aoTuV) encoders, export dialog and `dragon render --format mp3/ogg` |
 | Native plugin editors embedded in a host window | ✅ Linux (X11) / Windows | `plugins/window.rs`; the plugin's own window opens automatically with its effect / instrument window (generic controls as a fallback, with the reason when a GUI cannot open). VST3: `IPlugFrame`, `IRunLoop` (Linux), `IComponentHandler` (GUI edits reach the processor and the project, one undo step per knob turn), host-created `IMessage` / `IAttributeList`, content scale for HiDPI. CLAP: `set_parent`, `set_scale`, timer / fd host extensions, GUI edits from output events. Tested on Linux and Windows CI with real windows, and with 40 real third-party builds (Dragonfly Reverb, DISTRHO collection incl. the OpenGL ProM visualiser; VST3 and CLAP): all 28 with a GUI embed, the 10 without one fall back to generic controls – re-run with `DRAGON_THIRD_PARTY=<folders> cargo test -p dragon-test-plugins --test third_party -- --ignored --nocapture`. CLAP plugins shipped as folders (`Name.clap/Name.clap`) load. macOS ❌ |
 | Sidechain into plugins | ✅ | CLAP second input port, VST3 aux input bus |

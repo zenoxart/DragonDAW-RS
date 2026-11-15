@@ -352,7 +352,16 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         .collect();
     let out = h.v("output");
     let p = p.with_clip_rect(pr.expand(8.0).intersect(r));
-    spectrum(&p, pr, h.tele);
+    if h.tele.is_empty() && h.time.is_some() {
+        // Gallery: a moving, music-like demo spectrum, shaped by the curve for the output.
+        use dragon_engine::dsp::spectrum::{band_freq, BANDS};
+        let t = h.t();
+        let pre: Vec<f32> = (0..BANDS).map(|b| -48.0 - 10.0 * ((b as f32 / BANDS as f32) - 0.3).abs() * 3.0 + 6.0 * (b as f32 * 0.7 + t * 3.0).sin() * (b as f32 * 0.13 + t).cos()).collect();
+        let post: Vec<f32> = (0..BANDS).map(|b| pre[b] + bands.iter().map(|x| x.1.response_db(band_freq(b), RATE)).sum::<f32>()).collect();
+        spectrum(&p, pr, &[pre, post].concat());
+    } else {
+        spectrum(&p, pr, h.tele);
+    }
     // Each band's own shape, faint, then the sum.
     for (k, bq, _, _) in &bands {
         let pts: Vec<Pos2> = (0..=120).map(|i| pr.left() + pr.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
