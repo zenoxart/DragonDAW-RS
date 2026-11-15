@@ -31,6 +31,7 @@ pub const BPM_PRESETS: &[(f64, &str)] = &[
     (115.0, "Nu-disco, pop"),
     (120.0, "House (deep), pop"),
     (124.0, "House, tech house"),
+    (125.0, "House, garage"),
     (126.0, "Tech house"),
     (128.0, "House, EDM"),
     (130.0, "Techno"),
@@ -401,6 +402,17 @@ pub fn snap_floor(beat: f64, grid: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    /// Right-click on the tempo display lists examples from 70 to 160 BPM, every 5 BPM, each with styles.
+    #[test]
+    fn bpm_examples_span_70_to_160() {
+        let v: Vec<f64> = super::BPM_PRESETS.iter().map(|p| p.0).collect();
+        assert_eq!(v.first(), Some(&70.0));
+        assert_eq!(v.last(), Some(&160.0));
+        assert!(v.windows(2).all(|w| w[1] > w[0]));
+        assert!((70..=160).step_by(5).all(|b| v.contains(&(b as f64))), "{v:?}");
+        assert!(super::BPM_PRESETS.iter().all(|p| !p.1.is_empty()));
+    }
+
     #[test]
     fn typed_values_parse_with_units() {
         use super::parse_value as p;
