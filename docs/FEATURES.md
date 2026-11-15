@@ -37,7 +37,11 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Sends, buses, output routing | ✅ | mixer |
 | Sidechain | ✅ | stock compressor / gate and other sidechain effects; CLAP second input port and VST3 aux bus |
 | Automation lanes and modes | ✅ | `views/automation.rs`, `render.rs` |
-| Clip gain, fades, split, trim, duplicate | ✅ | playlist, clip window |
+| Clip gain, fades, split, trim, duplicate | ✅ | playlist, clip window; dB handle on every audio clip (drag up/down, Shift fine, double-click = 0 dB, selected clips move together) |
+| Drag & drop from the file manager | ✅ | audio dropped on the playlist lands on the track and grid beat under the mouse (a ghost shows where), several files on consecutive tracks, below the last track a new track; on the channel rack it loads a sampler |
+| Mixer auto-balance | ✅ | "Auto balance" in the mixer (and Tools): one offline render measures every channel's pre-fader loudness and sets the faders for an even starting mix by role (vocals and low end forward, hats and pads back); buses, VCAs and silent channels untouched; one undo step |
+| Real-time safety | ✅ | no allocation on the audio thread (`tests/realtime.rs`), old songs freed on a GC thread, constant-cost loudness meter, insert chains spread over all cores; 200 stock plugins run in real time on a 4-core machine; knob moves reach the effects every frame and effects retune without resetting their filters (no zipper or "downsampled" sound) |
+| Audio output watchdog | ✅ | a stream error or a callback that stops for 2 s restarts the device and resumes playback at the same spot; a lost device is retried every 5 s |
 | Takes and comping | ✅ | take lanes, `edit::comp_promote` |
 | Loop recording into takes | 🟡 | each new recording pass moves the existing clips into a take lane; several loop cycles in one pass are kept as one long file |
 | Punch in / out | ✅ | ruler `Shift`+drag, transport |

@@ -103,12 +103,16 @@ impl Effect for Delay {
                 self.highcut = v;
                 self.hc.iter_mut().for_each(|f| f.set(v, self.rate));
                 let q = 0.7 + self.reso * 8.0;
-                self.peak = [Biquad::new(BiquadKind::Peak, v.min(self.rate * 0.45), q, self.reso * 12.0, self.rate); 2];
+                for b in &mut self.peak {
+                    b.set(BiquadKind::Peak, v.min(self.rate * 0.45), q, self.reso * 12.0, self.rate);
+                }
             }
             "reso" => {
                 self.reso = v;
                 let q = 0.7 + v * 8.0;
-                self.peak = [Biquad::new(BiquadKind::Peak, self.highcut.min(self.rate * 0.45), q, v * 12.0, self.rate); 2];
+                for b in &mut self.peak {
+                    b.set(BiquadKind::Peak, self.highcut.min(self.rate * 0.45), q, v * 12.0, self.rate);
+                }
             }
             "cross" => self.cross = v.min(0.95),
             "drive" => self.drive = v,

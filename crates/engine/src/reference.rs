@@ -67,7 +67,7 @@ pub fn analyze(d: &AudioData, from: f64, to: f64) -> RegionAnalysis {
         };
     }
     // Loudness: integrated plus the short-term (3 s) history every 100 ms.
-    let mut meter = LoudnessMeter::new(rate);
+    let mut meter = LoudnessMeter::exact(rate);
     let hop = (rate * 0.1) as usize;
     let mut short = Vec::new();
     let mut i = 0;

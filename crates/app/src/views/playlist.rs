@@ -55,6 +55,56 @@ pub enum DragKind {
         from: f64,
         offset: f64,
     },
+    /// Clip gain: dragging the dB handle on an audio clip up / down (the selected audio clips move together;
+    /// their start gains are in `UiState::gain_drag`).
+    Gain {
+        y: f32,
+    },
+}
+
+/// The playlist's geometry for file drops: timeline rect, track rows (id, top, bottom), view and grid.
+#[derive(Clone)]
+pub struct DropInfo {
+    pub pass: u64,
+    pub timeline: Rect,
+    pub tracks: Vec<(Id, f32, f32)>,
+    pub x: f64,
+    pub zoom: f64,
+    pub grid: f64,
+}
+
+impl DropInfo {
+    /// The playlist drop geometry if the playlist was drawn in the last couple of frames.
+    pub fn get(ctx: &egui::Context) -> Option<DropInfo> {
+        let now = ctx.cumulative_pass_nr();
+        ctx.data(|d| d.get_temp::<DropInfo>(egui::Id::new("pl.drop"))).filter(|i| now.saturating_sub(i.pass) <= 2)
+    }
+
+    /// Where a file dropped at `pos` lands: (track index or `None` = a new track below, beat on the grid,
+    /// never before 0). `None` when `pos` is not over the playlist's timeline.
+    pub fn target(&self, pos: Pos2) -> Option<(Option<usize>, f64)> {
+        if !self.timeline.contains(pos) {
+            return None;
+        }
+        let beat = (self.x + (pos.x - self.timeline.left()) as f64 / self.zoom).max(0.0);
+        let beat = if self.grid > 0.0 { (beat / self.grid).floor() * self.grid } else { beat };
+        let track = self.tracks.iter().position(|(_, a, b)| pos.y >= *a && pos.y < *b);
+        Some((track, beat))
+    }
+}
+
+/// The clip-gain handle at the top centre of an audio clip, when the clip is large enough to show it.
+pub fn gain_handle(r: Rect) -> Option<Rect> {
+    (r.width() >= 64.0 && r.height() >= 26.0).then(|| Rect::from_center_size(Pos2::new(r.center().x, r.top() + 8.0), Vec2::new(48.0, 13.0)))
+}
+
+/// "+1.5 dB", "0 dB", "-6.0 dB".
+pub fn gain_label(db: f32) -> String {
+    if db.abs() < 0.05 {
+        "0 dB".into()
+    } else {
+        format!("{:+.1} dB", db)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,6 +259,34 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         y = yy;
     }
     let content_bottom = y;
+    // Where files dropped from the file manager land (read by the app's drop handling).
+    {
+        let pass = ui.ctx().cumulative_pass_nr();
+        let tracks: Vec<(Id, f32, f32)> = rows.iter().map(|r| (r.track, r.y, r.y + r.h)).collect();
+        let info = DropInfo { pass, timeline, tracks, x: st.ui.pl_x, zoom: st.ui.playlist_zoom as f64, grid: st.ui.snap };
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("pl.drop"), info.clone()));
+        // Files dragged over from the file manager: show where they will land.
+        let hovered: Vec<String> = ui.input(|i| i.raw.hovered_files.iter().filter_map(|f| f.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string())).collect());
+        if let (false, Some(pos)) = (hovered.is_empty(), ui.input(|i| i.pointer.latest_pos())) {
+            if let Some((track, beat)) = info.target(pos) {
+                let x = timeline.left() + ((beat - st.ui.pl_x) * zoom) as f32;
+                for (k, name) in hovered.iter().enumerate() {
+                    let (y0, y1) = match track.and_then(|t| info.tracks.get(t + k)) {
+                        Some(&(_, a, b)) => (a, b),
+                        None => {
+                            let base = info.tracks.last().map(|t| t.2).unwrap_or(timeline.top()) + 40.0 * (k as f32 - track.map(|t| info.tracks.len().saturating_sub(t)).unwrap_or(0) as f32).max(0.0);
+                            (base, base + 40.0)
+                        }
+                    };
+                    let r = Rect::from_min_max(Pos2::new(x, y0 + 2.0), Pos2::new(x + 160.0, y1 - 2.0));
+                    painter.rect_filled(r, 3.0, theme::ACCENT.gamma_multiply(0.25));
+                    painter.rect_stroke(r, 3.0, Stroke::new(1.5_f32, theme::ACCENT), egui::StrokeKind::Inside);
+                    painter.text(r.left_top() + Vec2::new(4.0, 2.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(10.0), Color32::WHITE);
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+    }
 
     // ----- grid
     let end_beat = beat_of(timeline.right(), sx);
@@ -460,6 +538,25 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             } else if tool == Tool::Slice || rsh {
                 st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y, delete_small: false } });
+            } else if let Some((tid, cid, r)) = clip_at(pos).filter(|(tid, cid, r)| {
+                gain_handle(*r).is_some_and(|h| h.contains(pos)) && st.session.project.track(*tid).and_then(|t| t.clips.iter().find(|c| c.id == *cid)).is_some_and(|c| matches!(c.kind, ClipKind::Audio(_)))
+            }) {
+                // Clip gain handle: this clip, or every selected audio clip when it is selected.
+                let _ = r;
+                let ids: Vec<Id> = if st.ui.clips.contains(&cid) { st.ui.clips.clone() } else { vec![cid] };
+                st.ui.gain_drag = st
+                    .session
+                    .project
+                    .tracks
+                    .iter()
+                    .flat_map(|t| t.clips.iter().map(move |c| (t.id, c)))
+                    .filter(|(_, c)| ids.contains(&c.id))
+                    .filter_map(|(t, c)| match &c.kind {
+                        ClipKind::Audio(a) => Some((t, c.id, a.gain_db)),
+                        _ => None,
+                    })
+                    .collect();
+                st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind: DragKind::Gain { y: pos.y } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
                 let edge = 6.0;
                 let kind = if pos.x > r.right() - edge {
@@ -673,6 +770,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: b0.max(0.0), vscale: vs, y: (content_y * vs / vz).max(0.0) });
                 }
             }
+            DragKind::Gain { y } => {
+                // 0.1 dB per pixel up (Shift: 0.02 dB), like a fader.
+                let now_y = ui.input(|i| i.pointer.interact_pos()).map(|p| p.y).unwrap_or(y);
+                let per_px = if ui.input(|i| i.modifiers.shift) { 0.02 } else { 0.1 };
+                let delta = (y - now_y) * per_px;
+                let starts = st.ui.gain_drag.clone();
+                st.session.gesture("Clip gain", |p| {
+                    for &(tid, cid, g0) in &starts {
+                        if let Some(ClipKind::Audio(a)) = p.track_mut(tid).and_then(|t| t.clips.iter_mut().find(|c| c.id == cid)).map(|c| &mut c.kind) {
+                            a.gain_db = ((g0 + delta) * 10.0).round() / 10.0;
+                            a.gain_db = a.gain_db.clamp(-48.0, 24.0);
+                        }
+                    }
+                });
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
             DragKind::Slip { from, offset } => {
                 let secs = (beat - from) * 60.0 / st.session.project.bpm.max(1.0);
                 let new = (offset - secs).max(0.0);
@@ -848,7 +961,15 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
     if resp.double_clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
-            if let Some((tid, cid, _)) = clip_at(pos) {
+            let on_gain = clip_at(pos).filter(|(_, _, r)| gain_handle(*r).is_some_and(|h| h.contains(pos)));
+            if let Some((tid, cid, _)) = on_gain.filter(|(tid, cid, _)| st.session.project.track(*tid).and_then(|t| t.clips.iter().find(|c| c.id == *cid)).is_some_and(|c| matches!(c.kind, ClipKind::Audio(_)))) {
+                // Double-click the gain handle: back to 0 dB.
+                st.session.edit("Reset clip gain", |p| {
+                    if let Some(ClipKind::Audio(a)) = p.track_mut(tid).and_then(|t| t.clips.iter_mut().find(|c| c.id == cid)).map(|c| &mut c.kind) {
+                        a.gain_db = 0.0;
+                    }
+                });
+            } else if let Some((tid, cid, _)) = clip_at(pos) {
                 let kind = st.session.project.track(tid).and_then(|t| t.clips.iter().find(|c| c.id == cid)).map(|c| c.kind.clone());
                 match kind {
                     Some(ClipKind::Pattern { pattern }) => {
@@ -945,6 +1066,11 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
                 return;
             };
             let gain = dragon_engine::dsp::db_to_gain(a.gain_db);
+            if let Some(h) = gain_handle(r) {
+                let changed = a.gain_db.abs() >= 0.05;
+                p.rect_filled(h, 4.0, Color32::from_black_alpha(if changed { 170 } else { 110 }));
+                p.text(h.center(), egui::Align2::CENTER_CENTER, gain_label(a.gain_db), egui::FontId::monospace(9.0), if changed { theme::WARN } else { theme::TEXT_DIM });
+            }
             let s0 = tm.beat_to_seconds(c.start);
             let mid = body.center().y;
             let half = body.height() * 0.48;

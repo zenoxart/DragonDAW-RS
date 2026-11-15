@@ -502,7 +502,12 @@ impl Effect for Imager {
     fn set_param(&mut self, id: &str, v: f32) {
         match id {
             "width" => self.width = v,
-            "mono_below" => self.lp = [Biquad::new(BiquadKind::LowPass, v, 0.707, 0.0, self.rate); 2],
+            "mono_below" => {
+                // Retuned in place: a new filter would lose its state and click.
+                for b in &mut self.lp {
+                    b.set(BiquadKind::LowPass, v, 0.707, 0.0, self.rate);
+                }
+            }
             "output" => self.out = db_to_gain(v),
             _ => {}
         }

@@ -6,6 +6,7 @@
 //! nearest semitone as fast as possible) and Robot (one note, set by Pitch: 0 = one octave above middle C) –
 //! tube Drive, Mix and Output.
 
+#[cfg(test)]
 use super::pitch::detect_pitch;
 use super::{Effect, EffectDef, ParamInfo};
 
@@ -48,6 +49,8 @@ pub struct Alter {
     period: f32,
     since: usize,
     analysis: Vec<f32>,
+    /// Scratch for the pitch detector (no allocation in the audio thread).
+    yin: Vec<f32>,
     latency: usize,
     /// [detected Hz (0 = none), output Hz]
     tele: [f32; 2],
@@ -74,6 +77,7 @@ impl Alter {
             period: rate / 150.0,
             since: 0,
             analysis: vec![0.0; ANALYSIS],
+            yin: Vec::with_capacity(ANALYSIS),
             latency,
             tele: [0.0; 2],
         }
@@ -85,7 +89,7 @@ impl Alter {
             let i = (start + k) % RING;
             self.analysis[k] = (self.input[0][i] + self.input[1][i]) * 0.5;
         }
-        match detect_pitch(&self.analysis, self.rate, 70.0, 1000.0) {
+        match super::pitch::detect_pitch_with(&self.analysis, self.rate, 70.0, 1000.0, &mut self.yin) {
             Some((hz, c)) if c > 0.75 => {
                 self.period = self.rate / hz;
                 self.tele[0] = hz;

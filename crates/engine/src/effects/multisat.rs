@@ -80,10 +80,14 @@ struct Lr4 {
 }
 
 impl Lr4 {
-    fn new(f: f32, rate: f32) -> Self {
-        let lp = Biquad::new(BiquadKind::LowPass, f, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
-        let hp = Biquad::new(BiquadKind::HighPass, f, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
-        Lr4 { lp: [lp; 2], hp: [hp; 2] }
+    /// Retunes in place, keeping the filters' state (a new crossover would click).
+    fn retune(&mut self, f: f32, rate: f32) {
+        for b in &mut self.lp {
+            b.set(BiquadKind::LowPass, f, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
+        }
+        for b in &mut self.hp {
+            b.set(BiquadKind::HighPass, f, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
+        }
     }
     fn split(&mut self, x: f32) -> (f32, f32) {
         let a = self.lp[0].process(x);
@@ -135,7 +139,7 @@ impl MultibandSaturator {
         let xs = [self.v("x1"), self.v("x2").max(self.v("x1") * 1.2), self.v("x3").max(self.v("x2") * 1.2)];
         for ch in 0..2 {
             for k in 0..3 {
-                self.xo[ch][k] = Lr4::new(xs[k].min(r * 0.45), r);
+                self.xo[ch][k].retune(xs[k].min(r * 0.45), r);
             }
             for b in 0..BANDS {
                 // Tone: a tilt around the band's centre (high shelf).
@@ -145,7 +149,8 @@ impl MultibandSaturator {
                     2 => (xs[1] * xs[2]).sqrt(),
                     _ => (xs[2] * 2.0).min(r * 0.4),
                 };
-                self.tone[ch][b] = Biquad::new(BiquadKind::HighShelf, centre.min(r * 0.45), 0.6, self.band(b, "tone"), r);
+                let g = self.band(b, "tone");
+                self.tone[ch][b].set(BiquadKind::HighShelf, centre.min(r * 0.45), 0.6, g, r);
             }
         }
     }
@@ -166,9 +171,9 @@ impl Effect for MultibandSaturator {
         let nb = (self.v("bands").round() as usize + 1).clamp(1, BANDS);
         let mix = self.v("mix") / 100.0;
         let out = db_to_gain(self.v("output"));
-        let bp: Vec<(usize, f32, f32, f32, f32)> =
-            (0..BANDS).map(|b| (self.band(b, "style").round() as usize, self.band(b, "drive"), self.band(b, "dyn") / 100.0, db_to_gain(self.band(b, "level")), self.band(b, "mix") / 100.0)).collect();
-        let fbs: Vec<(f32, usize)> = (0..BANDS).map(|b| (self.band(b, "fb") / 100.0 * 0.95, ((self.rate / self.band(b, "fb_freq").max(20.0)) as usize).clamp(1, FB_LEN - 1))).collect();
+        let bp: [(usize, f32, f32, f32, f32); BANDS] =
+            std::array::from_fn(|b| (self.band(b, "style").round() as usize, self.band(b, "drive"), self.band(b, "dyn") / 100.0, db_to_gain(self.band(b, "level")), self.band(b, "mix") / 100.0));
+        let fbs: [(f32, usize); BANDS] = std::array::from_fn(|b| (self.band(b, "fb") / 100.0 * 0.95, ((self.rate / self.band(b, "fb_freq").max(20.0)) as usize).clamp(1, FB_LEN - 1)));
         let dc_a = 1.0 - std::f32::consts::TAU * 10.0 / self.rate;
         let mut lvl = [0.0f32; BANDS];
         let mut drv = [0.0f32; BANDS];

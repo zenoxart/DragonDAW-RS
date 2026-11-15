@@ -165,6 +165,13 @@ impl SharedTransport {
     }
 }
 
+/// Liveness of the output stream: the callback counts its calls, the error callback flags a failure.
+#[derive(Default)]
+pub struct StreamHealth {
+    pub callbacks: std::sync::atomic::AtomicU64,
+    pub failed: std::sync::atomic::AtomicBool,
+}
+
 /// The running audio engine.
 pub struct AudioEngine {
     tx: Sender<Command>,
@@ -179,6 +186,7 @@ pub struct AudioEngine {
     pub input_channels: u16,
     pub latency_frames: u32,
     record_offset: f64,
+    pub health: Arc<StreamHealth>,
     _out: cpal::Stream,
     _in: Option<cpal::Stream>,
 }
@@ -239,6 +247,12 @@ impl AudioEngine {
         std::thread::Builder::new().name("dragon-recorder".into()).spawn(move || recorder_thread(rec_rx)).map_err(|e| EngineError::Device(e.to_string()))?;
         let recording = Arc::new(Mutex::new(false));
         let mut renderer = Renderer::new(song);
+        // Old songs are dropped here, not in the audio callback (freeing can block on the allocator).
+        let (gc_tx, gc_rx) = crossbeam_channel::bounded::<Arc<Song>>(64);
+        std::thread::Builder::new().name("dragon-gc".into()).spawn(move || for _ in gc_rx {}).map_err(|e| EngineError::Device(e.to_string()))?;
+        // Health: the callback counts its calls; the error callback flags a dead stream.
+        let health = Arc::new(StreamHealth::default());
+        let hb = health.clone();
         let meters = renderer.meters.clone();
         let transport = Arc::new(Mutex::new(SharedTransport { state: renderer.transport, at: Instant::now() }));
         let tr = transport.clone();
@@ -252,7 +266,11 @@ impl AudioEngine {
         let mut process = move |n: usize| -> (*const f32, *const f32) {
             while let Ok(c) = rx.try_recv() {
                 match c {
-                    Command::SetSong(s) => renderer.set_song(s),
+                    Command::SetSong(s) => {
+                        let old = renderer.set_song(s);
+                        // If the collector is behind, the song is dropped here after all (rare).
+                        let _ = gc_tx.try_send(old);
+                    }
                     Command::Play(m) => renderer.play(m),
                     Command::Pause => renderer.pause(),
                     Command::Stop => renderer.stop(),
@@ -284,8 +302,14 @@ impl AudioEngine {
                     v.resize(n, 0.0);
                 }
             }
-            let refs: Vec<&[f32]> = inputs.iter().map(|v| v.as_slice()).collect();
-            renderer.render(&mut l[..n], &mut r[..n], &refs);
+            // Input channel slices without allocating (up to 32 channels).
+            let mut refs: [&[f32]; 32] = [&[]; 32];
+            let k = inputs.len().min(refs.len());
+            for (slot, v) in refs.iter_mut().zip(inputs.iter()) {
+                *slot = v.as_slice();
+            }
+            renderer.render(&mut l[..n], &mut r[..n], &refs[..k]);
+            hb.callbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // Recording: hand input to the recorder once the count-in is over.
             let st = renderer.transport;
             let recording_now = st.recording && !renderer.counting_in();
@@ -300,7 +324,11 @@ impl AudioEngine {
             }
             (l.as_ptr(), r.as_ptr())
         };
-        let err = |e| tracing::error!("output stream: {e}");
+        let dead = health.clone();
+        let err = move |e: cpal::StreamError| {
+            tracing::error!("output stream: {e}");
+            dead.failed.store(true, std::sync::atomic::Ordering::Relaxed);
+        };
         let stream = match def.sample_format() {
             cpal::SampleFormat::F32 => out_dev.build_output_stream(
                 &config,
@@ -386,6 +414,7 @@ impl AudioEngine {
             input_channels,
             latency_frames,
             record_offset: cfg.record_offset_ms as f64 / 1000.0,
+            health,
             _out: stream,
             _in: in_stream,
         })

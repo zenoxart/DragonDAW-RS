@@ -30,7 +30,9 @@ impl NullEngine {
                     loop {
                         match rx.try_recv() {
                             Ok(c) => match c {
-                                Command::SetSong(s) => r.set_song(s),
+                                Command::SetSong(s) => {
+                                    let _ = r.set_song(s);
+                                }
                                 Command::Play(m) => r.play(m),
                                 Command::Pause => r.pause(),
                                 Command::Stop => r.stop(),
@@ -103,6 +105,14 @@ impl Audio {
         match self {
             Audio::Device(e) => &e.meters,
             Audio::Null(n, _) => &n.meters,
+        }
+    }
+
+    /// The output stream's liveness (a real device only).
+    pub fn health(&self) -> Option<&dragon_engine::device::StreamHealth> {
+        match self {
+            Audio::Device(e) => Some(&e.health),
+            Audio::Null(..) => None,
         }
     }
 

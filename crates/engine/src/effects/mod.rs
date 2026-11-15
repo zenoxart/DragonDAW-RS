@@ -404,6 +404,74 @@ pub fn value(def: &EffectDef, params: &BTreeMap<String, f32>, id: &str) -> f32 {
 mod tests {
     use super::*;
 
+    /// Zipper / click hunt: sweeping any continuous knob of any stock effect over a smooth low tone, the
+    /// way the UI does (a new value every ~16 ms, smoothed by the wrapper), must not put sharp
+    /// discontinuities into the output (heard as a gritty, "downsampled" sound while turning a knob).
+    /// Measured as the largest second difference relative to the same effect at a fixed setting.
+    #[test]
+    fn knob_sweeps_are_click_free() {
+        let rate = 48000.0;
+        let n = 48000;
+        // Stereo: the two sides differ (side-only processing must be exercised too).
+        let tone: Vec<f32> = (0..n).map(|i| (i as f32 * std::f32::consts::TAU * 110.0 / rate).sin() * 0.25).collect();
+        let tone_r: Vec<f32> = (0..n).map(|i| (i as f32 * std::f32::consts::TAU * 110.0 / rate + 1.3).sin() * 0.2).collect();
+        // Largest second difference relative to the local level (a gain change is not a click).
+        let d2 = |v: &[f32]| {
+            let peak = v.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-3);
+            v.windows(3).map(|w| (w[0] - 2.0 * w[1] + w[2]).abs()).fold(0.0f32, f32::max) / peak
+        };
+        // Effects whose knobs are meant to step or grind (bitcrusher's sample-rate reduction, …).
+        let skip = ["bitcrusher", "tape_stop", "glitch", "scope", "phase_scope", "tuner", "spectrum", "rhythm_gate", "stutter", "gate"];
+        let mut bad = Vec::new();
+        for def in registry() {
+            if skip.contains(&def.id) {
+                continue;
+            }
+            for p in def.params.iter().filter(|p| matches!(p.kind, ParamKind::Linear | ParamKind::Log)) {
+                // mode: 0 = held at the start value, 1 = held at the end value, 2 = swept between them.
+                let run = |mode: u8| {
+                    let mut e = create(def.id, rate, &def.defaults()).unwrap();
+                    let (mut l, mut r) = (tone.clone(), tone_r.clone());
+                    let mid = (p.min + p.max) * 0.5;
+                    let (a, b) = (p.default.clamp(p.min, p.max), if p.default > mid { p.min } else { p.max });
+                    let a = if matches!(p.kind, ParamKind::Log) { a.max(p.min.max(1e-3)) } else { a };
+                    let b = if matches!(p.kind, ParamKind::Log) { b.max(p.min.max(1e-3)) } else { b };
+                    for (k, (x, y)) in l.chunks_mut(768).zip(r.chunks_mut(768)).enumerate() {
+                        let t = (k as f32 / 40.0).min(1.0);
+                        let v = if mode == 0 {
+                            a
+                        } else if mode == 1 {
+                            b
+                        } else if matches!(p.kind, ParamKind::Log) {
+                            (a.ln() + (b.ln() - a.ln()) * t).exp()
+                        } else {
+                            a + (b - a) * t
+                        };
+                        e.set_param(p.id, v);
+                        e.process(x, y, None);
+                    }
+                    let lat = e.latency();
+                    let from = 4800 + lat;
+                    let end = (from + 24000).min(n);
+                    if from >= end {
+                        return 0.0;
+                    }
+                    d2(&l[from..end]).max(d2(&r[from..end]))
+                };
+                // The sharpest the effect is when held anywhere on the way is its own character, not a click.
+                let fixed = run(0).max(run(1));
+                let swept = run(2);
+                // A smooth 110 Hz tone has a relative second difference of ~2e-4; a click is a jump of
+                // several percent of the level within one sample.
+                let limit = (fixed * 6.0).max(0.03);
+                if swept > limit {
+                    bad.push(format!("{}.{}: sweep {swept:.4} vs fixed {fixed:.4}", def.id, p.id));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "knob sweeps that click:\n{}", bad.join("\n"));
+    }
+
     /// Crash hunt: every stock effect at every common sample rate, with each parameter at its minimum,
     /// maximum and middle (one at a time and all together), with odd block sizes, silence and loud
     /// noise, sidechain on and off – it must never panic or put out NaN / infinity.

@@ -520,6 +520,8 @@ struct Suppressor {
     dry: [Vec<f32>; 2],
     dry_w: usize,
     buf: Vec<rustfft::num_complex::Complex<f32>>,
+    /// FFT scratch (rustfft's `process` would allocate one on every call – in the audio thread).
+    fft_scratch: Vec<rustfft::num_complex::Complex<f32>>,
     mag: Vec<f32>,
     base: Vec<f32>,
     gr: f32,
@@ -536,6 +538,8 @@ struct SupState {
 impl Suppressor {
     fn new(rate: f32) -> Self {
         let mut planner = rustfft::FftPlanner::new();
+        let (fft, ifft) = (planner.plan_fft_forward(FFT), planner.plan_fft_inverse(FFT));
+        let scratch_len = fft.get_inplace_scratch_len().max(ifft.get_inplace_scratch_len());
         let window: Vec<f32> = (0..FFT).map(|n| 0.5 - 0.5 * (std::f32::consts::TAU * n as f32 / FFT as f32).cos()).collect();
         let sum: f32 = (0..FFT).step_by(HOP).map(|n| window[n] * window[n]).sum();
         let nodes_f = [200.0f32, 450.0, 1000.0, 2500.0, 5000.0, 8000.0, 16000.0, 22000.0];
@@ -564,8 +568,9 @@ impl Suppressor {
         let st = || SupState { input: vec![0.0; FFT], output: vec![0.0; FFT], gain: vec![1.0; BINS], pos: 0, hop: 0 };
         Suppressor {
             mix: 0.5,
-            fft: planner.plan_fft_forward(FFT),
-            ifft: planner.plan_fft_inverse(FFT),
+            fft_scratch: vec![Default::default(); scratch_len],
+            fft,
+            ifft,
             window,
             norm: 1.0 / sum.max(1e-6),
             sens,
@@ -588,7 +593,7 @@ impl Suppressor {
             let idx = (s.pos + n) % FFT;
             self.buf[n] = rustfft::num_complex::Complex::new(s.input[idx] * self.window[n], 0.0);
         }
-        self.fft.process(&mut self.buf);
+        self.fft.process_with_scratch(&mut self.buf, &mut self.fft_scratch);
         for k in 0..BINS {
             self.mag[k] = to_db(self.buf[k].norm() / FFT as f32 * 2.0);
         }
@@ -617,7 +622,7 @@ impl Suppressor {
                 self.buf[FFT - k] *= *g;
             }
         }
-        self.ifft.process(&mut self.buf);
+        self.ifft.process_with_scratch(&mut self.buf, &mut self.fft_scratch);
         for n in 0..FFT {
             let idx = (s.pos + n) % FFT;
             s.output[idx] += self.buf[n].re / FFT as f32 * self.window[n] * self.norm;

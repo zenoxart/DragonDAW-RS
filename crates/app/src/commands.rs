@@ -180,6 +180,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("add.drums", "Drum pads channel", "Add/Instrument", 1, ""),
     ("add.mixer", "Mixer bus", "Add", 2, ""),
     ("add.vca", "VCA fader", "Add", 2, ""),
+    ("mixer.autobalance", "Auto-balance all mixer channels", "Tools", 2, ""),
     ("add.marker", "Time marker", "Add", 3, "Alt+T"),
     ("view.playlist", "Playlist", "View", 0, "F5"),
     ("view.rack", "Channel rack", "View", 0, "F6"),
@@ -1035,6 +1036,10 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 let n = p.mixer.channels.len() + 1;
                 p.add_mixer_channel(&format!("Bus {n}"))
             })
+        }
+        "mixer.autobalance" => {
+            st.start_auto_balance();
+            st.ui.status = "Auto-balance: measuring every channel …".into();
         }
         "add.vca" => {
             st.ui.mixer = st.session.edit("Add VCA", |p| {

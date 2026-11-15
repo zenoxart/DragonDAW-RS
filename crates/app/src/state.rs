@@ -14,6 +14,7 @@ use redhive_client_framework::AppContext;
 use redhive_contracts::ui::Severity;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +147,8 @@ pub struct UiState {
     pub pl_anim: Option<crate::views::nav::ViewTarget>,
     pub pr_anim: Option<crate::views::nav::ViewTarget>,
     pub pl_drag: Option<crate::views::playlist::Drag>,
+    /// Clip-gain drag: (track, clip, gain at the start) of every clip being changed.
+    pub gain_drag: Vec<(Id, Id, f32)>,
     pub pr_drag: Option<crate::views::piano_roll::Drag>,
     pub waveforms: std::collections::HashMap<PathBuf, std::sync::Arc<Vec<(f32, f32)>>>,
     pub clip_window: Option<Id>,
@@ -247,6 +250,7 @@ impl UiState {
             pl_anim: None,
             pr_anim: None,
             pl_drag: None,
+            gain_drag: Vec::new(),
             pr_drag: None,
             waveforms: Default::default(),
             clip_window: None,
@@ -287,6 +291,15 @@ impl UiState {
     }
 }
 
+/// Measured pre-fader loudness per mixer channel (LUFS).
+pub type Loudness = Vec<(Id, f32)>;
+
+/// A running mixer auto-balance (see [`State::start_auto_balance`]).
+pub struct BalanceJob {
+    pub progress: Arc<std::sync::atomic::AtomicU32>,
+    pub result: Arc<Mutex<Option<Loudness>>>,
+}
+
 pub struct State {
     pub ctx: AppContext,
     pub session: Session,
@@ -310,6 +323,11 @@ pub struct State {
     pub safe_mode: Option<crate::crash::SafeMode>,
     /// Frames left until a just-opened project counts as opened fine (its crash marker is cleared then).
     pub open_guard: Option<u32>,
+    /// Mixer auto-balance running in the background: progress (‰) and the result when done.
+    pub balance_job: Option<BalanceJob>,
+    /// Audio watchdog: the callback count last seen, when it last moved, the last restart, and whether the
+    /// device was lost (then it is retried until it comes back).
+    pub audio_watch: (u64, Instant, Option<Instant>, bool),
 }
 
 /// Mackie Control state: bank offset, the output connection and what was last sent (feedback only on change).
@@ -431,6 +449,8 @@ impl State {
             crash: None,
             safe_mode: None,
             open_guard: None,
+            audio_watch: (0, Instant::now(), None, false),
+            balance_job: None,
         };
         st.open_midi();
         st.session.force_recompile();
@@ -441,6 +461,90 @@ impl State {
             }
         }
         st
+    }
+
+    /// Keeps the audio output alive: when the stream reports an error, or its callback stops being called
+    /// for 2 s (a driver hang, the device unplugged or switched), the engine is restarted on the configured
+    /// (or default) device and playback continues where it was. A lost device is retried every 5 s.
+    pub fn audio_watchdog(&mut self) {
+        let now = Instant::now();
+        let (count, failed) = match self.audio.health() {
+            Some(h) => (h.callbacks.load(std::sync::atomic::Ordering::Relaxed), h.failed.load(std::sync::atomic::Ordering::Relaxed)),
+            None => (0, false),
+        };
+        let device = self.audio.health().is_some();
+        if count != self.audio_watch.0 {
+            self.audio_watch.0 = count;
+            self.audio_watch.1 = now;
+        }
+        let stalled = device && now.duration_since(self.audio_watch.1) > std::time::Duration::from_secs(2);
+        let lost_retry = !device && self.audio_watch.3;
+        let cooled = self.audio_watch.2.is_none_or(|t| now.duration_since(t) > std::time::Duration::from_secs(5));
+        if !((failed || stalled || lost_retry) && cooled) {
+            return;
+        }
+        let t = self.audio.transport().state;
+        let rate = self.audio.rate() as f32;
+        let song = self.session.compile(rate);
+        // Close the old stream before opening the device again.
+        self.audio = crate::audio::Audio::Null(crate::audio::NullEngine::start(song.clone()), "restarting".into());
+        self.audio = crate::audio::Audio::start(&self.settings.device, song);
+        self.session.force_recompile();
+        self.audio_watch = (0, now, Some(now), self.audio.health().is_none());
+        if self.audio.health().is_some() {
+            self.audio.send(dragon_engine::device::Command::Seek(t.beat.max(0.0)));
+            if t.playing && !t.recording {
+                self.audio.send(dragon_engine::device::Command::Play(t.mode));
+            }
+            self.toast(format!("Audio output stopped responding – restarted ({})", self.audio.describe()), Severity::Warning);
+        } else if !lost_retry {
+            self.toast("Audio output lost – retrying every few seconds", Severity::Error);
+        }
+    }
+
+    /// Starts the mixer's auto-balance: one offline render measures every channel's loudness (in the
+    /// background), then the faders are set (one undo step) – see `dragon_engine::edit::auto_balance`.
+    pub fn start_auto_balance(&mut self) {
+        if self.balance_job.is_some() {
+            return;
+        }
+        let project = self.session.project.clone();
+        let cache = self.session.cache.clone();
+        let rate = self.audio.rate() as f32;
+        let progress = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let result = Arc::new(Mutex::new(None));
+        let (p2, r2) = (progress.clone(), result.clone());
+        std::thread::spawn(move || {
+            let mut pool = dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::Host));
+            // At most 4 minutes are measured (enough for a balance; long songs stay quick).
+            let l = dragon_engine::render::measure_strip_loudness(&project, &cache, rate, &mut pool, 240.0, &mut |x| p2.store((x * 1000.0) as u32, std::sync::atomic::Ordering::Relaxed));
+            if let Ok(mut r) = r2.lock() {
+                *r = Some(l);
+            }
+            redhive_client_framework::runtime::request_repaint();
+        });
+        self.balance_job = Some(BalanceJob { progress, result });
+    }
+
+    /// Applies a finished auto-balance.
+    pub fn poll_auto_balance(&mut self) {
+        let Some(job) = &self.balance_job else { return };
+        let Some(l) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
+        self.balance_job = None;
+        let faders = dragon_engine::edit::auto_balance(&self.session.project, &l);
+        if faders.is_empty() {
+            self.toast("Auto-balance: no channel with audio to balance", Severity::Warning);
+            return;
+        }
+        let n = faders.len();
+        self.session.edit("Auto-balance", |p| {
+            for (id, v) in &faders {
+                if let Some(c) = p.mixer.get_mut(*id) {
+                    c.volume = *v;
+                }
+            }
+        });
+        self.toast(format!("Auto-balanced {n} channel{} – Ctrl+Z to undo", if n == 1 { "" } else { "s" }), Severity::Info);
     }
 
     pub fn save_settings(&self) {
@@ -896,6 +1000,19 @@ impl State {
     // ------------------------------------------------------------------------------------ import
 
     /// Puts an audio file on a track at `beat` (the first empty track when `track` is `None`).
+    /// Adds an audio clip at `beat` on `track`, or on a new track named after the file when `track` is
+    /// `None` (a file dropped below the last track).
+    pub fn add_audio_clip_at(&mut self, path: &Path, track: Option<Id>, beat: f64) {
+        match track {
+            Some(t) => self.add_audio_clip(path, Some(t), beat),
+            None => {
+                let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Audio".into());
+                let tid = self.session.edit("Add track", |p| p.add_track(&name));
+                self.add_audio_clip(path, Some(tid), beat);
+            }
+        }
+    }
+
     pub fn add_audio_clip(&mut self, path: &Path, track: Option<Id>, beat: f64) {
         let data = match self.session.cache.get(path, self.audio.rate()) {
             Ok(d) => d,

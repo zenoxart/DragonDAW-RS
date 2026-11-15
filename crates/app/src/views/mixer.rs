@@ -110,6 +110,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         if ui.add(egui::Button::new(RichText::new("+\nVCA").small()).min_size(Vec2::new(46.0, 40.0))).clicked() {
                             st.ctx.run("dragon.add.vca", serde_json::Value::Null);
                         }
+                        // Auto-balance all channels.
+                        match &st.balance_job {
+                            Some(j) => {
+                                let pc = j.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10.0;
+                                ui.add(egui::Button::new(RichText::new(format!("{pc:.0} %")).small()).min_size(Vec2::new(46.0, 40.0)).sense(Sense::hover())).on_hover_text("Measuring every channel …");
+                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                            }
+                            None => {
+                                let b = ui
+                                    .add(egui::Button::new(RichText::new("Auto\nbalance").small()).min_size(Vec2::new(46.0, 40.0)))
+                                    .on_hover_text("Balance all channels: measures each channel's loudness over the song and sets every fader for an even starting mix (lead vocals and the low end forward, hats and pads back). Buses, VCAs and silent channels keep their faders. One undo step.");
+                                if b.clicked() {
+                                    st.ctx.run("dragon.mixer.autobalance", serde_json::Value::Null);
+                                }
+                            }
+                        }
                     });
                 });
             });

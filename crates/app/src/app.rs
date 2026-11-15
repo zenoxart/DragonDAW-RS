@@ -144,8 +144,19 @@ impl DragonApp {
         let rack_rows: Vec<(dragon_engine::model::Id, egui::Rect)> =
             ctx.data(|d| d.get_temp::<(u64, Vec<(dragon_engine::model::Id, egui::Rect)>)>(egui::Id::new("rack.rows"))).filter(|(f, _)| fresh(*f)).map(|(_, r)| r).unwrap_or_default();
         let rack_zone: Option<egui::Rect> = ctx.data(|d| d.get_temp::<(u64, egui::Rect)>(egui::Id::new("rack.dropzone"))).filter(|(f, _)| fresh(*f)).map(|(_, r)| r);
+        // Audio dropped on the playlist lands under the mouse: at the snapped beat, on the track under the
+        // pointer (several files on consecutive tracks; below the last track a new track each).
+        let pl = crate::views::playlist::DropInfo::get(ctx);
+        let pl_target = at.and_then(|p| pl.as_ref().and_then(|i| i.target(p)));
+        let mut pl_k = 0;
         for f in dropped {
             let ext = f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+            if let (true, Some((track, beat)), Some(info)) = (dragon_engine::edit::is_audio_file(&f), pl_target, pl.as_ref()) {
+                let tid = track.and_then(|t| info.tracks.get(t + pl_k)).map(|t| t.0);
+                self.st.add_audio_clip_at(&f, tid, beat);
+                pl_k += 1;
+                continue;
+            }
             // Audio dropped on a channel-rack row replaces that channel's sound; on the rack's drop zone it
             // adds a sampler.
             if dragon_engine::edit::is_audio_file(&f) {
@@ -183,7 +194,11 @@ impl DragonApp {
         self.st.handle_midi();
         self.st.mcu_feedback();
         self.st.poll_stem_job();
-        // Recompile at most every 40 ms while dragging; immediately otherwise.
+        // Knob values reach the running effects every frame; the full recompile (routing, clips, …) runs at
+        // most every 40 ms while dragging, immediately otherwise.
+        if self.st.session.in_gesture() {
+            self.st.session.push_live_params();
+        }
         if !self.st.session.in_gesture() || self.last_compile.elapsed().as_millis() >= 40 {
             self.last_compile = std::time::Instant::now();
             if let Some(song) = self.st.session.compile_if_changed(self.st.audio.rate() as f32) {
@@ -196,6 +211,10 @@ impl DragonApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         self.st.autosave_tick();
+        self.st.poll_auto_balance();
+        self.st.audio_watchdog();
+        // Keep the watchdog running while the window is idle.
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
         self.st.audio.meters().decay(0.86);
     }
 }

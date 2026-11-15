@@ -6,6 +6,33 @@ use super::{Effect, EffectDef, ParamInfo};
 /// YIN fundamental-frequency estimate of `buf` (mono). Returns `(hz, clarity 0 … 1)` when a period between
 /// `min_hz` and `max_hz` is found with an aperiodicity below 0.2.
 pub fn detect_pitch(buf: &[f32], rate: f32, min_hz: f32, max_hz: f32) -> Option<(f32, f32)> {
+    detect_pitch_with(buf, rate, min_hz, max_hz, &mut Vec::new())
+}
+
+/// Sum of squared differences of `a` and `b` (equal length), in 8 independent lanes so the compiler
+/// vectorises it (a single running sum cannot be reordered, so it would stay scalar).
+#[inline]
+fn sq_diff(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
+    let (ra, rb) = (ca.remainder(), cb.remainder());
+    for (x, y) in ca.zip(cb) {
+        for k in 0..8 {
+            let d = x[k] - y[k];
+            acc[k] += d * d;
+        }
+    }
+    let mut s: f32 = acc.iter().sum();
+    for (x, y) in ra.iter().zip(rb) {
+        let d = x - y;
+        s += d * d;
+    }
+    s
+}
+
+/// [`detect_pitch`] with a reusable scratch buffer: no allocation once the scratch has grown (for the
+/// real-time effects, which call it every few milliseconds).
+pub fn detect_pitch_with(buf: &[f32], rate: f32, min_hz: f32, max_hz: f32, scratch: &mut Vec<f32>) -> Option<(f32, f32)> {
     let max_tau = ((rate / min_hz) as usize).min(buf.len() / 2);
     let min_tau = ((rate / max_hz) as usize).max(2);
     if max_tau <= min_tau + 2 {
@@ -17,22 +44,21 @@ pub fn detect_pitch(buf: &[f32], rate: f32, min_hz: f32, max_hz: f32) -> Option<
     if energy < 1e-6 {
         return None;
     }
-    let mut d = vec![0.0f32; max_tau + 1];
+    // Difference function, then (in place) the cumulative mean normalised difference.
+    scratch.clear();
+    scratch.resize(max_tau + 1, 1.0);
+    let cmnd = &mut scratch[..];
     for tau in 1..=max_tau {
-        let mut s = 0.0;
-        for i in 0..w {
-            let x = buf[i] - buf[i + tau];
-            s += x * x;
-        }
-        d[tau] = s;
+        cmnd[tau] = sq_diff(&buf[..w], &buf[tau..tau + w]);
     }
-    // Cumulative mean normalised difference.
-    let mut cmnd = vec![1.0f32; max_tau + 1];
     let mut run = 0.0;
     for tau in 1..=max_tau {
-        run += d[tau];
-        cmnd[tau] = if run > 0.0 { d[tau] * tau as f32 / run } else { 1.0 };
+        let d = cmnd[tau];
+        run += d;
+        cmnd[tau] = if run > 0.0 { d * tau as f32 / run } else { 1.0 };
     }
+    cmnd[0] = 1.0;
+    let cmnd = &*cmnd;
     let threshold = 0.15;
     let mut tau = min_tau;
     let mut found = None;
@@ -199,6 +225,8 @@ pub struct PitchCorrect {
     ring: Vec<f32>,
     pos: usize,
     analysis: Vec<f32>,
+    /// Scratch for the pitch detector (no allocation in the audio thread).
+    yin: Vec<f32>,
     fill: usize,
     since: usize,
     target_ratio: f32,
@@ -236,6 +264,7 @@ impl PitchCorrect {
             ring: vec![0.0; FRAME],
             pos: 0,
             analysis: vec![0.0; FRAME],
+            yin: Vec::with_capacity(FRAME),
             fill: 0,
             since: 0,
             target_ratio: 1.0,
@@ -262,7 +291,7 @@ impl PitchCorrect {
         let (a, b) = self.ring.split_at(self.pos);
         self.analysis[..b.len()].copy_from_slice(b);
         self.analysis[b.len()..].copy_from_slice(a);
-        match detect_pitch(&self.analysis, self.rate, 85.0, 1100.0) {
+        match detect_pitch_with(&self.analysis, self.rate, 85.0, 1100.0, &mut self.yin) {
             Some((hz, clarity)) if clarity > 0.8 => {
                 let m = hz_to_midi(hz);
                 self.detected = Some(m);

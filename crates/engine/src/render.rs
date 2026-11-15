@@ -225,7 +225,14 @@ pub struct Song {
     tracks: Vec<CTrack>,
     channels: Vec<CChannel>,
     strips: Vec<CStrip>,
+    /// Strips in processing order, grouped by dependency level (sources before targets).
     order: Vec<usize>,
+    /// `order[a..b]` per dependency level: strips of one level do not feed each other, so their insert
+    /// chains can run in parallel.
+    levels: Vec<(usize, usize)>,
+    /// Per strip: its first insert's index in a flat list of all inserts.
+    ins_base: Vec<usize>,
+    ins_total: usize,
     master: usize,
     events: Vec<SEvent>,
     /// Events of each pattern for pattern mode, keyed by pattern id: (events, length in beats).
@@ -425,6 +432,49 @@ impl Song {
             }
         };
 
+        // --- dependency levels: a strip's level is one more than the highest level feeding it (outputs,
+        // sends and sidechains), so a level's strips are independent of each other.
+        let (order, levels) = {
+            let mut lvl = vec![0usize; n];
+            // In topological order every source is final before the strips it feeds are visited.
+            for &i in &order {
+                // A sidechain source must be done before the strip that listens to it.
+                for ins in &strips[i].inserts {
+                    if let Some(sc) = ins.sidechain {
+                        if lvl[i] <= lvl[sc] {
+                            lvl[i] = lvl[sc] + 1;
+                        }
+                    }
+                }
+                let s = &strips[i];
+                let li = lvl[i];
+                if let Some(o) = s.output {
+                    lvl[o] = lvl[o].max(li + 1);
+                }
+                for (t, _, _) in &s.sends {
+                    lvl[*t] = lvl[*t].max(li + 1);
+                }
+            }
+            let mut sorted = order.clone();
+            // Stable: within a level the topological order is kept.
+            sorted.sort_by_key(|&i| lvl[i]);
+            let mut levels = Vec::new();
+            let mut a = 0;
+            for k in 1..=sorted.len() {
+                if k == sorted.len() || lvl[sorted[k]] != lvl[sorted[a]] {
+                    levels.push((a, k));
+                    a = k;
+                }
+            }
+            (sorted, levels)
+        };
+        let mut ins_base = Vec::with_capacity(n);
+        let mut ins_total = 0;
+        for s in &strips {
+            ins_base.push(ins_total);
+            ins_total += s.inserts.len();
+        }
+
         // --- plugin delay compensation: align every input of a strip to its slowest input.
         let mut out_latency = vec![0usize; n];
         let mut edge_delay = HashMap::new();
@@ -555,6 +605,9 @@ impl Song {
             channels,
             strips,
             order,
+            levels,
+            ins_base,
+            ins_total,
             master,
             events,
             pattern_events,
@@ -847,6 +900,73 @@ struct Preview {
     pos: usize,
 }
 
+/// Writes `v` in decimal into `buf` and returns it as text (no allocation).
+fn u32_str(mut v: u32, buf: &mut [u8; 10]) -> &str {
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    std::str::from_utf8(&buf[i..]).unwrap_or("0")
+}
+
+/// Per-block working buffers, kept between blocks so the audio thread does not allocate once they have
+/// reached their size (an allocation can block on the allocator's lock: a dropout / stutter).
+#[derive(Default)]
+struct Scratch {
+    strip_vol: Vec<f32>,
+    strip_pan: Vec<f32>,
+    strip_width: Vec<f32>,
+    strip_mute: Vec<bool>,
+    send_levels: HashMap<(usize, usize), f32>,
+    insert_mix: HashMap<Id, f32>,
+    meter_peaks: Vec<(Id, f32, f32)>,
+    gr: Vec<(Id, f32)>,
+    /// Telemetry: (insert, start, len) into `tele_data`.
+    tele: Vec<(Id, usize, usize)>,
+    tele_data: Vec<f32>,
+    sc: (Vec<f32>, Vec<f32>),
+    dry: (Vec<f32>, Vec<f32>),
+    /// Parallel insert processing: per insert (flat) its (mix, mix at block start); per strip whether it
+    /// runs in the parallel pass of the current level, and its own result slot.
+    ins_mix: Vec<(f32, f32)>,
+    par: Vec<bool>,
+    par_list: Vec<usize>,
+    slots: Vec<StripSlot>,
+}
+
+/// Raw pointers to the per-strip buffers and result slots, for the parallel pass (each job touches only
+/// its own strip, so the accesses are disjoint).
+#[derive(Clone, Copy)]
+struct StripPtrs {
+    bufs: *mut (Vec<f32>, Vec<f32>),
+    slots: *mut StripSlot,
+}
+// SAFETY: used only inside `MixPool::run`, where every index (strip) is handled by exactly one thread.
+unsafe impl Sync for StripPtrs {}
+unsafe impl Send for StripPtrs {}
+
+impl StripPtrs {
+    /// SAFETY: `si` must be in range of both vectors and handled by one thread at a time.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn strip(&self, si: usize) -> (&mut (Vec<f32>, Vec<f32>), &mut StripSlot) {
+        (&mut *self.bufs.add(si), &mut *self.slots.add(si))
+    }
+}
+
+/// What one strip's insert chain reports when it runs on a worker thread.
+#[derive(Default)]
+struct StripSlot {
+    gr: Vec<(Id, f32)>,
+    tele: Vec<(Id, usize, usize)>,
+    tele_data: Vec<f32>,
+    dry: (Vec<f32>, Vec<f32>),
+}
+
 pub struct Renderer {
     /// Modulation state per (insert, route).
     mod_runs: HashMap<(Id, usize), ModRun>,
@@ -861,6 +981,11 @@ pub struct Renderer {
     bufs: Vec<(Vec<f32>, Vec<f32>)>,
     pre_fader: Vec<(Vec<f32>, Vec<f32>)>,
     chan_buf: (Vec<f32>, Vec<f32>),
+    scratch: Scratch,
+    /// `route`'s copy of the source (kept between calls).
+    route_tmp: (Vec<f32>, Vec<f32>),
+    /// Offline analysis: a loudness meter per strip, fed each strip's pre-fader signal (auto-balance).
+    strip_meters: Option<Vec<LoudnessMeter>>,
     edge_lines: HashMap<(Id, Id, bool), [DelayLine; 2]>,
     loudness: LoudnessMeter,
     pub meters: Meters,
@@ -929,6 +1054,9 @@ impl Renderer {
             bufs: Vec::new(),
             pre_fader: Vec::new(),
             chan_buf: (vec![0.0; AUTOMATION_BLOCK], vec![0.0; AUTOMATION_BLOCK]),
+            scratch: Scratch::default(),
+            route_tmp: Default::default(),
+            strip_meters: None,
             edge_lines: HashMap::new(),
             ramps: Ramps::default(),
             loudness: LoudnessMeter::new(rate),
@@ -948,7 +1076,9 @@ impl Renderer {
         }
     }
 
-    pub fn set_song(&mut self, song: Arc<Song>) {
+    /// Switches to a new compiled song; returns the old one so the caller can drop it off the audio thread
+    /// (freeing a whole song there can block).
+    pub fn set_song(&mut self, song: Arc<Song>) -> Arc<Song> {
         self.transport.bpm = song.base_bpm;
         // The song is compiled for the rate the audio actually runs at (the sound card's): the clock must
         // follow it, or playback runs at song.rate / old rate speed (a 48 kHz clock on a 44.1 kHz card
@@ -957,7 +1087,7 @@ impl Renderer {
             self.rate = song.rate;
             self.loudness = LoudnessMeter::new(song.rate);
         }
-        self.song = song;
+        std::mem::replace(&mut self.song, song)
     }
 
     /// `true` while the recording count-in is running.
@@ -1117,18 +1247,18 @@ impl Renderer {
 
         // ---- instruments (scheduled notes + live)
         if playing {
-            let segments: Vec<(usize, usize, f64, f64)> = match wrap_at {
+            let segments: ([(usize, usize, f64, f64); 2], usize) = match wrap_at {
                 Some(w) => {
                     let b_mid = loop_end;
                     let t_ls = song.tempo.beat_to_seconds(loop_start);
                     let rest = (n - w) as f64 / self.rate as f64;
                     let b_after = song.tempo.seconds_to_beat(t_ls + rest);
                     b1 = b_after;
-                    vec![(0, w, b0, b_mid), (w, n, loop_start, b_after)]
+                    ([(0, w, b0, b_mid), (w, n, loop_start, b_after)], 2)
                 }
-                None => vec![(0, n, b0, b1)],
+                None => ([(0, n, b0, b1), (0, 0, 0.0, 0.0)], 1),
             };
-            for (seg_i, &(f0, f1, sb0, sb1)) in segments.iter().enumerate() {
+            for (seg_i, &(f0, f1, sb0, sb1)) in segments.0[..segments.1].iter().enumerate() {
                 if seg_i == 1 {
                     // Loop wrap: release everything that was playing.
                     for c in &song.channels {
@@ -1145,12 +1275,12 @@ impl Renderer {
 
         // ---- audio clips and input monitoring
         if playing {
-            let segs: Vec<(usize, usize, f64)> = match wrap_at {
-                Some(w) => vec![(0, w, t0), (w, n, song.tempo.beat_to_seconds(loop_start))],
-                None => vec![(0, n, t0)],
+            let segs: ([(usize, usize, f64); 2], usize) = match wrap_at {
+                Some(w) => ([(0, w, t0), (w, n, song.tempo.beat_to_seconds(loop_start))], 2),
+                None => ([(0, n, t0), (0, 0, 0.0)], 1),
             };
             if self.transport.mode == PlayMode::Song {
-                for (f0, f1, ts) in segs {
+                for &(f0, f1, ts) in &segs.0[..segs.1] {
                     for tr in &song.tracks {
                         let (bl, br) = &mut self.bufs[tr.strip];
                         for c in &tr.clips {
@@ -1175,12 +1305,19 @@ impl Renderer {
 
         // ---- automation values at the block start
         let auto_beat = if playing { b0.max(0.0) } else { self.transport.beat.max(0.0) };
-        let mut strip_vol: Vec<f32> = song.strips.iter().map(|s| s.volume).collect();
-        let mut strip_pan: Vec<f32> = song.strips.iter().map(|s| s.pan).collect();
-        let mut strip_width: Vec<f32> = song.strips.iter().map(|s| s.width).collect();
-        let mut strip_mute: Vec<bool> = song.strips.iter().map(|s| !s.audible).collect();
-        let mut send_levels: HashMap<(usize, usize), f32> = HashMap::new();
-        let mut insert_mix: HashMap<Id, f32> = HashMap::new();
+        let mut sc = std::mem::take(&mut self.scratch);
+        sc.strip_vol.clear();
+        sc.strip_vol.extend(song.strips.iter().map(|s| s.volume));
+        sc.strip_pan.clear();
+        sc.strip_pan.extend(song.strips.iter().map(|s| s.pan));
+        sc.strip_width.clear();
+        sc.strip_width.extend(song.strips.iter().map(|s| s.width));
+        sc.strip_mute.clear();
+        sc.strip_mute.extend(song.strips.iter().map(|s| !s.audible));
+        sc.send_levels.clear();
+        sc.insert_mix.clear();
+        let (strip_vol, strip_pan, strip_width, strip_mute) = (&mut sc.strip_vol, &mut sc.strip_pan, &mut sc.strip_width, &mut sc.strip_mute);
+        let (send_levels, insert_mix) = (&mut sc.send_levels, &mut sc.insert_mix);
         if playing {
             for lane in &song.automation {
                 let v = match song.automation_clips.get(&lane.id) {
@@ -1234,13 +1371,15 @@ impl Renderer {
                         }
                     }
                     Target::PluginParam { channel, insert, param } => {
-                        let key = format!("{param}");
+                        // The id as text without allocating (u32: at most 10 digits).
+                        let mut digits = [0u8; 10];
+                        let key = u32_str(*param, &mut digits);
                         match insert.and_then(|i| song.insert_index.get(&i)) {
-                            Some(&(si, ii)) => song.strips[si].inserts[ii].effect.lock().unwrap().set_param(&key, v),
+                            Some(&(si, ii)) => song.strips[si].inserts[ii].effect.lock().unwrap().set_param(key, v),
                             None => {
                                 if let Some(&ci) = song.channel_index.get(channel) {
                                     if let Some(i) = &song.channels[ci].instrument {
-                                        i.lock().unwrap().set_param(&key, v);
+                                        i.lock().unwrap().set_param(key, v);
                                     }
                                 }
                             }
@@ -1252,139 +1391,260 @@ impl Renderer {
         }
 
         // ---- mixer graph
-        let mut meter_peaks: Vec<(Id, f32, f32)> = Vec::with_capacity(song.strips.len());
-        let mut gr: Vec<(Id, f32)> = Vec::new();
-        let mut tele: Vec<(Id, Vec<f32>)> = Vec::new();
-        for &si in &song.order {
-            let s = &song.strips[si];
-            if s.is_vca {
-                continue;
+        sc.meter_peaks.clear();
+        sc.gr.clear();
+        sc.tele.clear();
+        sc.tele_data.clear();
+        // Sizes grow once per song (not per block).
+        if sc.ins_mix.len() < song.ins_total {
+            sc.ins_mix.resize(song.ins_total, (1.0, 1.0));
+        }
+        if sc.par.len() < song.strips.len() {
+            sc.par.resize(song.strips.len(), false);
+            sc.slots.resize_with(song.strips.len(), Default::default);
+            sc.par_list.reserve(song.strips.len());
+        }
+        let pool = crate::mixpool::MixPool::global();
+        let threads = pool.threads();
+        for &(la, lb) in &song.levels {
+            let level = &song.order[la..lb];
+            // ---- parallel pass: plain insert chains (no sidechain, no modulation) of this level run on all
+            // cores; they touch only their own strip. Chains with a sidechain or modulation share state and
+            // run in order below.
+            let mut eligible = 0;
+            sc.par_list.clear();
+            for &si in level {
+                let s = &song.strips[si];
+                let ok = !s.is_vca && s.inserts.iter().any(|i| i.enabled) && s.inserts.iter().all(|i| i.sidechain.is_none() && i.mods.is_empty());
+                sc.par[si] = ok;
+                if ok {
+                    sc.par_list.push(si);
+                }
+                eligible += ok as usize;
             }
-            // Inserts.
-            {
-                let (bl, br) = &mut self.bufs[si];
-                let (bl, br) = (&mut bl[..n], &mut br[..n]);
-                for ins in &s.inserts {
-                    if !ins.enabled {
+            let parallel = threads > 1 && n >= 128 && eligible >= 2;
+            if parallel {
+                for &si in level {
+                    if !sc.par[si] {
                         continue;
                     }
-                    let sc = ins.sidechain.map(|sc| (self.pre_fader[sc].0[..n].to_vec(), self.pre_fader[sc].1[..n].to_vec()));
-                    let mix = insert_mix.get(&ins.id).copied().unwrap_or(ins.mix);
-                    let mix0 = self.ramps.start((Ramps::MIX, ins.id, 0), [mix, 0.0])[0];
-                    let mut e = ins.effect.lock().unwrap();
-                    // Modulation: each route moves its parameter once per block.
-                    if !ins.mods.is_empty() {
-                        let dt = n as f32 / self.rate;
-                        let peak = bl.iter().chain(br.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
-                        let bpm = self.transport.bpm as f32;
-                        for (k, m) in ins.mods.iter().enumerate() {
-                            let run = self.mod_runs.entry((ins.id, k)).or_default();
-                            let v = match m.source {
-                                crate::model::ModSource::Lfo { rate, shape, sync } => {
-                                    let hz = if sync { rate * bpm / 60.0 } else { rate };
-                                    run.phase += hz * dt;
-                                    if run.phase >= 1.0 {
-                                        run.phase -= run.phase.floor();
-                                        run.step = run.step.wrapping_add(1);
+                    for (ii, ins) in song.strips[si].inserts.iter().enumerate() {
+                        let mix = insert_mix.get(&ins.id).copied().unwrap_or(ins.mix);
+                        let mix0 = self.ramps.start((Ramps::MIX, ins.id, 0), [mix, 0.0])[0];
+                        sc.ins_mix[song.ins_base[si] + ii] = (mix, mix0);
+                    }
+                }
+                {
+                    let (strips, base, mixes, list) = (&song.strips, &song.ins_base, &sc.ins_mix, &sc.par_list);
+                    let ptrs = StripPtrs { bufs: self.bufs.as_mut_ptr(), slots: sc.slots.as_mut_ptr() };
+                    pool.run(list.len(), &|k| {
+                        let si = list[k];
+                        // SAFETY: `list` holds distinct strip indices within both vectors, and each index is
+                        // handled by exactly one thread; nothing else touches these strips meanwhile.
+                        let ((bl, br), slot) = unsafe { ptrs.strip(si) };
+                        slot.gr.clear();
+                        slot.tele.clear();
+                        slot.tele_data.clear();
+                        let (bl, br) = (&mut bl[..n], &mut br[..n]);
+                        for (ii, ins) in strips[si].inserts.iter().enumerate() {
+                            if !ins.enabled {
+                                continue;
+                            }
+                            let (mix, mix0) = mixes[base[si] + ii];
+                            let mut e = ins.effect.lock().unwrap();
+                            if mix >= 0.999 && mix0 >= 0.999 {
+                                e.process(bl, br, None);
+                            } else {
+                                slot.dry.0.clear();
+                                slot.dry.0.extend_from_slice(bl);
+                                slot.dry.1.clear();
+                                slot.dry.1.extend_from_slice(br);
+                                e.process(bl, br, None);
+                                for k in 0..n {
+                                    let m = ramp(mix0, mix, k, n);
+                                    bl[k] = slot.dry.0[k] * (1.0 - m) + bl[k] * m;
+                                    br[k] = slot.dry.1[k] * (1.0 - m) + br[k] * m;
+                                }
+                            }
+                            let g = e.gain_reduction();
+                            if g > 0.01 {
+                                slot.gr.push((ins.id, g));
+                            }
+                            let t = e.telemetry();
+                            if !t.is_empty() {
+                                slot.tele.push((ins.id, slot.tele_data.len(), t.len()));
+                                slot.tele_data.extend_from_slice(t);
+                            }
+                        }
+                    });
+                }
+                for &si in level {
+                    if !sc.par[si] {
+                        continue;
+                    }
+                    let slot = &sc.slots[si];
+                    sc.gr.extend_from_slice(&slot.gr);
+                    for &(id, start, len) in &slot.tele {
+                        sc.tele.push((id, sc.tele_data.len(), len));
+                        sc.tele_data.extend_from_slice(&slot.tele_data[start..start + len]);
+                    }
+                    self.pre_fader[si].0[..n].copy_from_slice(&self.bufs[si].0[..n]);
+                    self.pre_fader[si].1[..n].copy_from_slice(&self.bufs[si].1[..n]);
+                }
+            }
+            let (meter_peaks, gr, tele, tele_data) = (&mut sc.meter_peaks, &mut sc.gr, &mut sc.tele, &mut sc.tele_data);
+            let (sc_buf, dry_buf, par_mark) = (&mut sc.sc, &mut sc.dry, &sc.par);
+            for &si in level {
+                let s = &song.strips[si];
+                if s.is_vca {
+                    continue;
+                }
+                // Inserts (unless the parallel pass did them).
+                if !(parallel && par_mark[si]) {
+                    let (bl, br) = &mut self.bufs[si];
+                    let (bl, br) = (&mut bl[..n], &mut br[..n]);
+                    for ins in &s.inserts {
+                        if !ins.enabled {
+                            continue;
+                        }
+                        let has_sc = if let Some(k) = ins.sidechain {
+                            sc_buf.0.clear();
+                            sc_buf.0.extend_from_slice(&self.pre_fader[k].0[..n]);
+                            sc_buf.1.clear();
+                            sc_buf.1.extend_from_slice(&self.pre_fader[k].1[..n]);
+                            true
+                        } else {
+                            false
+                        };
+                        let sc = has_sc.then_some((sc_buf.0.as_slice(), sc_buf.1.as_slice()));
+                        let mix = insert_mix.get(&ins.id).copied().unwrap_or(ins.mix);
+                        let mix0 = self.ramps.start((Ramps::MIX, ins.id, 0), [mix, 0.0])[0];
+                        let mut e = ins.effect.lock().unwrap();
+                        // Modulation: each route moves its parameter once per block.
+                        if !ins.mods.is_empty() {
+                            let dt = n as f32 / self.rate;
+                            let peak = bl.iter().chain(br.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+                            let bpm = self.transport.bpm as f32;
+                            for (k, m) in ins.mods.iter().enumerate() {
+                                let run = self.mod_runs.entry((ins.id, k)).or_default();
+                                let v = match m.source {
+                                    crate::model::ModSource::Lfo { rate, shape, sync } => {
+                                        let hz = if sync { rate * bpm / 60.0 } else { rate };
+                                        run.phase += hz * dt;
+                                        if run.phase >= 1.0 {
+                                            run.phase -= run.phase.floor();
+                                            run.step = run.step.wrapping_add(1);
+                                        }
+                                        crate::model::ModSource::lfo_shape(shape, run.phase, run.step)
                                     }
-                                    crate::model::ModSource::lfo_shape(shape, run.phase, run.step)
-                                }
-                                crate::model::ModSource::Envelope { attack, release, gain } => {
-                                    let x = peak * db_to_gain(gain);
-                                    let tau = if x > run.env { attack } else { release }.max(0.1) * 0.001;
-                                    run.env += (x - run.env) * (1.0 - (-dt / tau).exp());
-                                    ((gain_to_db(run.env.max(1e-6)) + 60.0) / 60.0).clamp(0.0, 1.0)
-                                }
-                                crate::model::ModSource::Xy { axis } => self.xy.get(&(ins.id, axis)).copied().unwrap_or(m.xy).clamp(0.0, 1.0),
-                                crate::model::ModSource::MidiNote { lo, hi } => {
-                                    let (lo, hi) = (lo.min(hi) as f32, lo.max(hi).max(lo.min(hi) + 1) as f32);
-                                    ((self.last_note.0 as f32 - lo) / (hi - lo)).clamp(0.0, 1.0)
-                                }
-                                crate::model::ModSource::MidiVelocity => self.last_note.1.clamp(0.0, 1.0),
-                            };
-                            // Slew: a one-pole glide toward the source value.
-                            let v = if m.slew > 0.0 && run.started { run.out + (v - run.out) * (1.0 - (-dt / (m.slew * 0.001)).exp()) } else { v };
-                            run.out = v;
-                            run.started = true;
-                            let nv = (m.base + m.depth * v).clamp(0.0, 1.0);
-                            e.set_param(m.info.id, m.info.denormalize(nv));
+                                    crate::model::ModSource::Envelope { attack, release, gain } => {
+                                        let x = peak * db_to_gain(gain);
+                                        let tau = if x > run.env { attack } else { release }.max(0.1) * 0.001;
+                                        run.env += (x - run.env) * (1.0 - (-dt / tau).exp());
+                                        ((gain_to_db(run.env.max(1e-6)) + 60.0) / 60.0).clamp(0.0, 1.0)
+                                    }
+                                    crate::model::ModSource::Xy { axis } => self.xy.get(&(ins.id, axis)).copied().unwrap_or(m.xy).clamp(0.0, 1.0),
+                                    crate::model::ModSource::MidiNote { lo, hi } => {
+                                        let (lo, hi) = (lo.min(hi) as f32, lo.max(hi).max(lo.min(hi) + 1) as f32);
+                                        ((self.last_note.0 as f32 - lo) / (hi - lo)).clamp(0.0, 1.0)
+                                    }
+                                    crate::model::ModSource::MidiVelocity => self.last_note.1.clamp(0.0, 1.0),
+                                };
+                                // Slew: a one-pole glide toward the source value.
+                                let v = if m.slew > 0.0 && run.started { run.out + (v - run.out) * (1.0 - (-dt / (m.slew * 0.001)).exp()) } else { v };
+                                run.out = v;
+                                run.started = true;
+                                let nv = (m.base + m.depth * v).clamp(0.0, 1.0);
+                                e.set_param(m.info.id, m.info.denormalize(nv));
+                            }
+                        }
+                        if mix >= 0.999 && mix0 >= 0.999 {
+                            e.process(bl, br, sc);
+                        } else {
+                            dry_buf.0.clear();
+                            dry_buf.0.extend_from_slice(bl);
+                            dry_buf.1.clear();
+                            dry_buf.1.extend_from_slice(br);
+                            e.process(bl, br, sc);
+                            for k in 0..n {
+                                let m = ramp(mix0, mix, k, n);
+                                bl[k] = dry_buf.0[k] * (1.0 - m) + bl[k] * m;
+                                br[k] = dry_buf.1[k] * (1.0 - m) + br[k] * m;
+                            }
+                        }
+                        let g = e.gain_reduction();
+                        if g > 0.01 {
+                            gr.push((ins.id, g));
+                        }
+                        let t = e.telemetry();
+                        if !t.is_empty() {
+                            tele.push((ins.id, tele_data.len(), t.len()));
+                            tele_data.extend_from_slice(t);
                         }
                     }
-                    if mix >= 0.999 && mix0 >= 0.999 {
-                        e.process(bl, br, sc.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())));
-                    } else {
-                        let dry: (Vec<f32>, Vec<f32>) = (bl.to_vec(), br.to_vec());
-                        e.process(bl, br, sc.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())));
-                        for k in 0..n {
-                            let m = ramp(mix0, mix, k, n);
-                            bl[k] = dry.0[k] * (1.0 - m) + bl[k] * m;
-                            br[k] = dry.1[k] * (1.0 - m) + br[k] * m;
+                    self.pre_fader[si].0[..n].copy_from_slice(bl);
+                    self.pre_fader[si].1[..n].copy_from_slice(br);
+                }
+                // Pre-fader sends.
+                for &(t, level, pre) in &s.sends {
+                    if pre {
+                        let lvl = send_levels.get(&(si, t)).copied().unwrap_or(level);
+                        self.route(si, t, true, lvl, n, true);
+                    }
+                }
+                // Fader, pan, width, polarity, swap, mute.
+                {
+                    let (bl, br) = &mut self.bufs[si];
+                    let vol = if strip_mute[si] { 0.0 } else { strip_vol[si] };
+                    let (gl, gr_) = balance(strip_pan[si]);
+                    let (gl, gr_) = (vol * gl, vol * gr_);
+                    let [gl0, gr0] = self.ramps.start((Ramps::STRIP, s.id, 0), [gl, gr_]);
+                    let w1 = strip_width[si];
+                    let w0 = self.ramps.start((Ramps::WIDTH, s.id, 0), [w1, 0.0])[0];
+                    let mut pl = 0.0f32;
+                    let mut pr = 0.0f32;
+                    for k in 0..n {
+                        let (mut a, mut b) = (bl[k], br[k]);
+                        if s.swap {
+                            std::mem::swap(&mut a, &mut b);
                         }
+                        if s.phase {
+                            a = -a;
+                            b = -b;
+                        }
+                        let w = ramp(w0, w1, k, n);
+                        if (w - 1.0).abs() > 1e-3 {
+                            let m = (a + b) * 0.5;
+                            let sd = (a - b) * 0.5 * w;
+                            a = m + sd;
+                            b = m - sd;
+                        }
+                        a *= ramp(gl0, gl, k, n);
+                        b *= ramp(gr0, gr_, k, n);
+                        bl[k] = a;
+                        br[k] = b;
+                        pl = pl.max(a.abs());
+                        pr = pr.max(b.abs());
                     }
-                    let g = e.gain_reduction();
-                    if g > 0.01 {
-                        gr.push((ins.id, g));
-                    }
-                    let t = e.telemetry();
-                    if !t.is_empty() {
-                        tele.push((ins.id, t.to_vec()));
+                    meter_peaks.push((s.id, pl, pr));
+                }
+                // Post-fader sends and output.
+                for &(t, level, pre) in &s.sends {
+                    if !pre {
+                        let lvl = send_levels.get(&(si, t)).copied().unwrap_or(level);
+                        self.route(si, t, true, lvl, n, false);
                     }
                 }
-                self.pre_fader[si].0[..n].copy_from_slice(bl);
-                self.pre_fader[si].1[..n].copy_from_slice(br);
-            }
-            // Pre-fader sends.
-            for &(t, level, pre) in &s.sends {
-                if pre {
-                    let lvl = send_levels.get(&(si, t)).copied().unwrap_or(level);
-                    self.route(si, t, true, lvl, n, true);
+                if let Some(o) = s.output {
+                    self.route(si, o, false, 1.0, n, false);
                 }
             }
-            // Fader, pan, width, polarity, swap, mute.
-            {
-                let (bl, br) = &mut self.bufs[si];
-                let vol = if strip_mute[si] { 0.0 } else { strip_vol[si] };
-                let (gl, gr_) = balance(strip_pan[si]);
-                let (gl, gr_) = (vol * gl, vol * gr_);
-                let [gl0, gr0] = self.ramps.start((Ramps::STRIP, s.id, 0), [gl, gr_]);
-                let w1 = strip_width[si];
-                let w0 = self.ramps.start((Ramps::WIDTH, s.id, 0), [w1, 0.0])[0];
-                let mut pl = 0.0f32;
-                let mut pr = 0.0f32;
-                for k in 0..n {
-                    let (mut a, mut b) = (bl[k], br[k]);
-                    if s.swap {
-                        std::mem::swap(&mut a, &mut b);
-                    }
-                    if s.phase {
-                        a = -a;
-                        b = -b;
-                    }
-                    let w = ramp(w0, w1, k, n);
-                    if (w - 1.0).abs() > 1e-3 {
-                        let m = (a + b) * 0.5;
-                        let sd = (a - b) * 0.5 * w;
-                        a = m + sd;
-                        b = m - sd;
-                    }
-                    a *= ramp(gl0, gl, k, n);
-                    b *= ramp(gr0, gr_, k, n);
-                    bl[k] = a;
-                    br[k] = b;
-                    pl = pl.max(a.abs());
-                    pr = pr.max(b.abs());
-                }
-                meter_peaks.push((s.id, pl, pr));
-            }
-            // Post-fader sends and output.
-            for &(t, level, pre) in &s.sends {
-                if !pre {
-                    let lvl = send_levels.get(&(si, t)).copied().unwrap_or(level);
-                    self.route(si, t, true, lvl, n, false);
-                }
-            }
-            if let Some(o) = s.output {
-                self.route(si, o, false, 1.0, n, false);
+        }
+
+        // ---- offline analysis: per-strip pre-fader loudness
+        if let Some(ms) = &mut self.strip_meters {
+            for (k, m) in ms.iter_mut().enumerate().take(self.pre_fader.len()) {
+                m.process(&self.pre_fader[k].0[..n], &self.pre_fader[k].1[..n]);
             }
         }
 
@@ -1436,28 +1696,34 @@ impl Renderer {
 
         // ---- meters
         if let Ok(mut mv) = self.meters.inner.try_lock() {
-            for (id, l, r) in meter_peaks {
+            for &(id, l, r) in sc.meter_peaks.iter() {
                 let e = mv.strips.entry(id).or_insert((0.0, 0.0));
                 e.0 = e.0.max(l);
                 e.1 = e.1.max(r);
             }
             mv.gain_reduction.clear();
-            for (id, g) in gr {
+            for &(id, g) in sc.gr.iter() {
                 mv.gain_reduction.insert(id, g);
             }
-            for (id, t) in tele {
-                mv.fx_data.insert(id, t);
+            for &(id, start, len) in sc.tele.iter() {
+                // Reuse each insert's vector (no allocation once it exists).
+                let v = mv.fx_data.entry(id).or_default();
+                v.clear();
+                v.extend_from_slice(&sc.tele_data[start..start + len]);
             }
             mv.momentary = self.loudness.momentary();
             mv.short_term = self.loudness.short_term();
             mv.integrated = self.loudness.integrated();
             mv.true_peak = self.loudness.true_peak;
-            mv.launched = self.launches.iter().filter(|l| l.end.is_infinite()).map(|l| (l.lane, l.pattern)).collect();
-            mv.queued = self.queued.iter().map(|q| (q.0, q.1)).collect();
+            mv.launched.clear();
+            mv.launched.extend(self.launches.iter().filter(|l| l.end.is_infinite()).map(|l| (l.lane, l.pattern)));
+            mv.queued.clear();
+            mv.queued.extend(self.queued.iter().map(|q| (q.0, q.1)));
             mv.voices = song.channels.iter().filter_map(|c| c.instrument.as_ref()).map(|i| i.lock().map(|g| g.active_voices()).unwrap_or(0)).sum();
             mv.scope.clear();
             mv.scope.extend_from_slice(&self.scope);
         }
+        self.scratch = sc;
     }
 
     /// Adds strip `from` (post-fader, or pre-fader when `pre`) into strip `to`, through the PDC delay.
@@ -1465,7 +1731,11 @@ impl Renderer {
         let song = &self.song;
         let delay = song.edge_delay.get(&(from, to, is_send)).copied().unwrap_or(0);
         let src = if pre { &self.pre_fader[from] } else { &self.bufs[from] };
-        let (a, b) = (src.0[..n].to_vec(), src.1[..n].to_vec());
+        let (mut a, mut b) = std::mem::take(&mut self.route_tmp);
+        a.clear();
+        a.extend_from_slice(&src.0[..n]);
+        b.clear();
+        b.extend_from_slice(&src.1[..n]);
         let key = (song.strips[from].id, song.strips[to].id, is_send);
         let level0 = if is_send { self.ramps.start((Ramps::SEND, key.0, key.1), [level, 0.0])[0] } else { level };
         let (tl, tr) = &mut self.bufs[to];
@@ -1488,6 +1758,7 @@ impl Renderer {
                 tr[k] += b[k] * g;
             }
         }
+        self.route_tmp = (a, b);
     }
 
     fn trigger(&mut self, song: &Song, ci: usize, on: NoteOn) {
@@ -1742,6 +2013,34 @@ pub fn offline_renderer(p: &Project, cache: &SampleCache, rate: f32, pool: &mut 
 /// Groups mixer channels by id for quick lookup in the UI.
 pub fn mixer_map(p: &Project) -> BTreeMap<Id, &MixerChannel> {
     p.mixer.all().map(|c| (c.id, c)).collect()
+}
+
+/// Pre-fader integrated loudness (LUFS) of every audio strip over the song (or `max_secs` of it), from one
+/// offline render: what the mixer's auto-balance sets the faders from.
+pub fn measure_strip_loudness(p: &Project, cache: &SampleCache, rate: f32, pool: &mut Pool, max_secs: f64, progress: &mut dyn FnMut(f32)) -> Vec<(Id, f32)> {
+    let mut r = offline_renderer(p, cache, rate, pool);
+    r.strip_meters = Some((0..r.song.strips.len()).map(|_| LoudnessMeter::exact(rate)).collect());
+    let end = p.song_length().max(4.0);
+    let secs = r.song.tempo.beat_to_seconds(end).min(max_secs).max(1.0);
+    let frames = (secs * rate as f64) as usize;
+    r.seek(0.0);
+    r.play(PlayMode::Song);
+    if let Some(song) = Arc::get_mut(&mut r.song) {
+        song.loop_range = None;
+    }
+    let (mut l, mut rr) = (vec![0.0f32; 1024], vec![0.0f32; 1024]);
+    let mut done = 0;
+    while done < frames {
+        let n = 1024.min(frames - done);
+        if !r.transport.playing {
+            r.transport.playing = true;
+        }
+        r.render(&mut l[..n], &mut rr[..n], &[]);
+        done += n;
+        progress(done as f32 / frames as f32);
+    }
+    let ms = r.strip_meters.take().unwrap_or_default();
+    r.song.strips.iter().zip(ms.iter()).filter(|(s, _)| !s.is_vca).map(|(s, m)| (s.id, m.integrated())).collect()
 }
 
 #[cfg(test)]

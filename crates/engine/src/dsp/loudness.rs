@@ -89,13 +89,27 @@ impl TruePeak {
 }
 
 /// Running loudness meter for the master bus.
+/// Integrated-loudness histogram for real-time use: 400 ms window energies binned in 0.1 LU steps from
+/// -70 to +10 LUFS (each bin keeps a count and the energy sum), so the gated integrated value is O(bins)
+/// and allocation-free however long the meter runs.
+const HIST_MIN: f32 = -70.0;
+const HIST_STEP: f32 = 0.1;
+const HIST_BINS: usize = 800;
+
 #[derive(Debug, Clone)]
 pub struct LoudnessMeter {
     rate: f32,
     k: KWeighting,
     tp: TruePeak,
-    /// 100 ms block energies.
+    /// The last 30 block energies (100 ms each) for momentary / short-term, oldest first in ring order.
+    recent: [f64; 30],
+    recent_n: usize,
+    recent_pos: usize,
+    /// Every block energy, only for exact offline measurement (`exact`); empty in real time.
     blocks: Vec<f64>,
+    exact: bool,
+    hist_n: Box<[u32; HIST_BINS]>,
+    hist_e: Box<[f64; HIST_BINS]>,
     acc: f64,
     acc_n: usize,
     block_len: usize,
@@ -103,12 +117,61 @@ pub struct LoudnessMeter {
 }
 
 impl LoudnessMeter {
+    /// A real-time meter: constant memory and cost (histogram-gated integrated loudness).
     pub fn new(rate: f32) -> Self {
-        LoudnessMeter { rate, k: KWeighting::new(rate), tp: TruePeak::default(), blocks: Vec::new(), acc: 0.0, acc_n: 0, block_len: (rate * 0.1) as usize, true_peak: 0.0 }
+        LoudnessMeter {
+            rate,
+            k: KWeighting::new(rate),
+            tp: TruePeak::default(),
+            recent: [0.0; 30],
+            recent_n: 0,
+            recent_pos: 0,
+            blocks: Vec::new(),
+            exact: false,
+            hist_n: Box::new([0; HIST_BINS]),
+            hist_e: Box::new([0.0; HIST_BINS]),
+            acc: 0.0,
+            acc_n: 0,
+            block_len: (rate * 0.1) as usize,
+            true_peak: 0.0,
+        }
+    }
+
+    /// An offline meter that keeps every block for the exact gated integrated loudness.
+    pub fn exact(rate: f32) -> Self {
+        LoudnessMeter { exact: true, ..Self::new(rate) }
     }
 
     pub fn reset(&mut self) {
+        let exact = self.exact;
         *self = LoudnessMeter::new(self.rate);
+        self.exact = exact;
+    }
+
+    fn push_block(&mut self, e: f64) {
+        self.recent[self.recent_pos] = e;
+        self.recent_pos = (self.recent_pos + 1) % self.recent.len();
+        self.recent_n = (self.recent_n + 1).min(self.recent.len());
+        if self.exact {
+            self.blocks.push(e);
+        }
+        // 400 ms window = the last 4 blocks (75 % overlap), into the histogram.
+        if self.recent_n >= 4 {
+            let w = self.last(4) / 4.0;
+            let l = Self::lufs(w);
+            if l > HIST_MIN {
+                let k = (((l - HIST_MIN) / HIST_STEP) as usize).min(HIST_BINS - 1);
+                self.hist_n[k] += 1;
+                self.hist_e[k] += w;
+            }
+        }
+    }
+
+    /// Sum of the last `k` block energies.
+    fn last(&self, k: usize) -> f64 {
+        let k = k.min(self.recent_n);
+        let n = self.recent.len();
+        (1..=k).map(|i| self.recent[(self.recent_pos + n - i) % n]).sum()
     }
 
     pub fn process(&mut self, l: &[f32], r: &[f32]) {
@@ -118,13 +181,10 @@ impl LoudnessMeter {
             self.acc_n += 1;
             self.true_peak = self.true_peak.max(self.tp.process(l[i], r[i]));
             if self.acc_n >= self.block_len {
-                self.blocks.push(self.acc / self.acc_n as f64);
+                let e = self.acc / self.acc_n as f64;
                 self.acc = 0.0;
                 self.acc_n = 0;
-                // Keep at most ~2 hours of blocks.
-                if self.blocks.len() > 72_000 {
-                    self.blocks.drain(..36_000);
-                }
+                self.push_block(e);
             }
         }
     }
@@ -138,12 +198,11 @@ impl LoudnessMeter {
     }
 
     fn window(&self, blocks: usize) -> f32 {
-        let n = self.blocks.len();
-        if n == 0 {
+        if self.recent_n == 0 {
             return -70.0;
         }
-        let take = blocks.min(n);
-        Self::lufs(self.blocks[n - take..].iter().sum::<f64>() / take as f64)
+        let take = blocks.min(self.recent_n);
+        Self::lufs(self.last(take) / take as f64)
     }
 
     /// Momentary loudness (400 ms).
@@ -156,9 +215,23 @@ impl LoudnessMeter {
         self.window(30)
     }
 
-    /// Gated integrated loudness over everything measured.
+    /// Gated integrated loudness over everything measured (exact for `exact` meters; from the 0.1 LU
+    /// histogram in real time).
     pub fn integrated(&self) -> f32 {
-        integrated_from_blocks(&self.blocks)
+        if self.exact {
+            return integrated_from_blocks(&self.blocks);
+        }
+        let (n, e) = (self.hist_n.iter().map(|&c| c as f64).sum::<f64>(), self.hist_e.iter().sum::<f64>());
+        if n == 0.0 {
+            return -70.0;
+        }
+        let rel = Self::lufs(e / n) - 10.0;
+        let from = (((rel - HIST_MIN) / HIST_STEP).max(0.0) as usize).min(HIST_BINS);
+        let (gn, ge) = (from..HIST_BINS).fold((0.0f64, 0.0f64), |a, k| (a.0 + self.hist_n[k] as f64, a.1 + self.hist_e[k]));
+        if gn == 0.0 {
+            return -70.0;
+        }
+        Self::lufs(ge / gn)
     }
 }
 
@@ -189,7 +262,7 @@ pub struct LoudnessStats {
 }
 
 pub fn measure(l: &[f32], r: &[f32], rate: f32) -> LoudnessStats {
-    let mut m = LoudnessMeter::new(rate);
+    let mut m = LoudnessMeter::exact(rate);
     m.process(l, r);
     let peak = l.iter().chain(r.iter()).fold(0.0f32, |a, s| a.max(s.abs()));
     LoudnessStats { integrated: m.integrated(), true_peak_db: super::gain_to_db(m.true_peak.max(peak)), sample_peak_db: super::gain_to_db(peak) }
@@ -211,5 +284,43 @@ mod tests {
         assert!(st.true_peak_db < -19.5 && st.true_peak_db > -20.5, "{}", st.true_peak_db);
         let silent = vec![0.0f32; n];
         assert_eq!(measure(&silent, &silent, rate).integrated, -70.0);
+    }
+}
+
+#[cfg(test)]
+mod realtime_tests {
+    use super::*;
+
+    /// The real-time (histogram) integrated loudness matches the exact one within 0.15 LU on music-like
+    /// material with loud and quiet parts (the gate matters), and stays constant-size however long it runs.
+    #[test]
+    fn histogram_integrated_matches_exact() {
+        let rate = 48000.0;
+        let mut rng = crate::dsp::Rng::new(3);
+        let mut l = Vec::new();
+        for sec in 0..40 {
+            let amp = if sec % 10 < 3 {
+                0.02
+            } else if sec % 7 == 0 {
+                0.0
+            } else {
+                0.3
+            };
+            for i in 0..48000 {
+                l.push(((i as f32 * 0.07).sin() * 0.6 + rng.bipolar() * 0.4) * amp);
+            }
+        }
+        let r = l.clone();
+        let mut exact = LoudnessMeter::exact(rate);
+        let mut live = LoudnessMeter::new(rate);
+        for (a, b) in l.chunks(512).zip(r.chunks(512)) {
+            exact.process(a, b);
+            live.process(a, b);
+        }
+        let (e, h) = (exact.integrated(), live.integrated());
+        assert!((e - h).abs() < 0.15, "exact {e} vs live {h}");
+        assert!(live.blocks.is_empty(), "the live meter keeps no history");
+        assert!((exact.momentary() - live.momentary()).abs() < 1e-3);
+        assert!((exact.short_term() - live.short_term()).abs() < 1e-3);
     }
 }

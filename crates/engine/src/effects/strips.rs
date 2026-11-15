@@ -108,8 +108,13 @@ struct Hp1 {
 }
 
 impl Hp1 {
+    #[cfg(test)]
     fn new(f: f32, rate: f32) -> Self {
         Hp1 { a: (-std::f32::consts::TAU * f / rate).exp(), x1: 0.0, y1: 0.0 }
+    }
+    /// Retunes keeping the state.
+    fn set(&mut self, f: f32, rate: f32) {
+        self.a = (-std::f32::consts::TAU * f / rate).exp();
     }
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
@@ -231,17 +236,17 @@ impl ClassAStrip {
         if h > 0 {
             // 18 dB/oct (third-order Butterworth) like the 1073's: a 2nd-order section (Q 1) and a 1st-order one.
             for ch in 0..2 {
-                self.hpf[ch] = Biquad::new(BiquadKind::HighPass, HPF_HZ[h], 1.0, 0.0, r);
-                self.hpf1[ch] = Hp1::new(HPF_HZ[h], r);
+                self.hpf[ch].set(BiquadKind::HighPass, HPF_HZ[h], 1.0, 0.0, r);
+                self.hpf1[ch].set(HPF_HZ[h], r);
             }
         }
         // Inductor-style shelves have a broad bump before the shelf; a low Q gets close.
         for ch in 0..2 {
-            self.low[ch] = Biquad::new(BiquadKind::LowShelf, LOW_HZ[lf.min(3)], 0.55, lg, r);
+            self.low[ch].set(BiquadKind::LowShelf, LOW_HZ[lf.min(3)], 0.55, lg, r);
             // The mid band's Q tightens slightly with gain (as the inductor bands do).
             let q = 1.0 + mg.abs() / 18.0 * 0.6;
-            self.mid[ch] = Biquad::new(BiquadKind::Peak, MID_HZ[mf.min(5)], q, mg, r);
-            self.high[ch] = Biquad::new(BiquadKind::HighShelf, 12000.0f32.min(r * 0.45), 0.6, hg, r);
+            self.mid[ch].set(BiquadKind::Peak, MID_HZ[mf.min(5)], q, mg, r);
+            self.high[ch].set(BiquadKind::HighShelf, 12000.0f32.min(r * 0.45), 0.6, hg, r);
         }
     }
 
@@ -398,6 +403,12 @@ impl Pair {
     fn new(kind: BiquadKind, f: f32, q: f32, g: f32, r: f32) -> Self {
         Pair([Biquad::new(kind, f, q, g, r); 2])
     }
+    /// Retunes in place, keeping the filters' state (a new pair would click while a knob turns).
+    fn set(&mut self, kind: BiquadKind, f: f32, q: f32, g: f32, r: f32) {
+        for b in &mut self.0 {
+            b.set(kind, f, q, g, r);
+        }
+    }
     #[inline]
     fn run(&mut self, ch: usize, x: f32) -> f32 {
         self.0[ch].process(x)
@@ -414,6 +425,8 @@ pub struct DrumBus {
     comp: Box<dyn Effect>,
     lift_hp: Pair,
     heq: [Pair; 5],
+    /// The harmonic EQ amounts actually applied (gliding towards the knobs).
+    heq_amt: [f32; 5],
     sub_lp: Pair,
     low_lp: Pair,
     low_comp: Box<dyn Effect>,
@@ -441,6 +454,7 @@ impl DrumBus {
             comp: (dynamics::compressor_def().create)(rate),
             lift_hp: Pair::new(BiquadKind::HighPass, 2500.0, 0.7, 0.0, rate),
             heq: [Pair::default(); 5],
+            heq_amt: [0.0; 5],
             sub_lp: Pair::new(BiquadKind::LowPass, 70.0, 0.7, 0.0, rate),
             low_lp: Pair::new(BiquadKind::LowPass, 160.0, 0.7, 0.0, rate),
             low_comp: (dynamics::compressor_def().create)(rate),
@@ -487,10 +501,10 @@ impl DrumBus {
         self.sat.set_param("drive", drive * 24.0);
         self.sat.set_param("output", -drive * 10.0);
         self.sat.set_param("mix", 1.0);
-        self.drive_hp = Pair::new(BiquadKind::HighPass, self.v("drive_hp"), 0.7, 0.0, r);
+        self.drive_hp.set(BiquadKind::HighPass, self.v("drive_hp"), 0.7, 0.0, r);
         let focus = if self.v("focus") >= 0.5 { 80.0 } else { 50.0 };
-        self.harm_bp = Pair::new(BiquadKind::BandPass, focus, 1.2, 0.0, r);
-        self.harm_lp = Pair::new(BiquadKind::LowPass, focus * 4.0, 0.7, 0.0, r);
+        self.harm_bp.set(BiquadKind::BandPass, focus, 1.2, 0.0, r);
+        self.harm_lp.set(BiquadKind::LowPass, focus * 4.0, 0.7, 0.0, r);
         // Compression modes: A glue (bus style), B punch (slower attack lets the hit through).
         let b = self.v("comp_mode") >= 0.5;
         for (k, v) in
@@ -499,7 +513,7 @@ impl DrumBus {
             self.comp.set_param(k, v);
         }
         for (k, f) in HEQ_FREQS.iter().enumerate() {
-            self.heq[k] = Pair::new(BiquadKind::BandPass, f.min(r * 0.45), 0.9, 0.0, r);
+            self.heq[k].set(BiquadKind::BandPass, f.min(r * 0.45), 0.9, 0.0, r);
         }
     }
 }
@@ -572,16 +586,22 @@ impl Effect for DrumBus {
             }
         }
         // Harmonic EQ: each band adds saturated content of its region (gain in dB of that region).
-        let heq: [f32; 5] = std::array::from_fn(|k| self.p[9 + k]);
-        if heq.iter().any(|g| *g > 0.0) {
+        // The knobs move in 1 dB steps (Orion); the applied amount glides between steps (~5 ms) so a step is
+        // heard as a change, not a click.
+        let heq_target: [f32; 5] = std::array::from_fn(|k| db_to_gain(self.p[9 + k]) - 1.0);
+        if heq_target.iter().chain(self.heq_amt.iter()).any(|g| *g > 1e-6) {
+            let glide = 1.0 - (-1.0 / (0.005 * self.rate)).exp();
             for i in 0..n {
+                for k in 0..5 {
+                    self.heq_amt[k] += (heq_target[k] - self.heq_amt[k]) * glide;
+                }
                 for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
                     let src = *x;
                     let mut add = 0.0;
                     for k in 0..5 {
-                        if heq[k] > 0.0 {
+                        if self.heq_amt[k] > 1e-6 {
                             let b = self.heq[k].run(ch, src);
-                            add += ((b * 2.0).tanh() * 0.5 + b * 0.5) * (db_to_gain(heq[k]) - 1.0);
+                            add += ((b * 2.0).tanh() * 0.5 + b * 0.5) * self.heq_amt[k];
                         }
                     }
                     *x = src + add;

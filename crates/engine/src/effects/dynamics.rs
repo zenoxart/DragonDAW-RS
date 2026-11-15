@@ -280,6 +280,15 @@ impl Crossover {
         let hp = Biquad::new(BiquadKind::HighPass, freq, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
         Crossover { lp: [lp, lp], hp: [hp, hp] }
     }
+    /// Retunes the crossover keeping the filters' state (rebuilding them would click).
+    fn retune(&mut self, freq: f32, rate: f32) {
+        for b in &mut self.lp {
+            b.set(BiquadKind::LowPass, freq, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
+        }
+        for b in &mut self.hp {
+            b.set(BiquadKind::HighPass, freq, std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
+        }
+    }
     #[inline]
     fn split(&mut self, x: f32) -> (f32, f32) {
         let a = self.lp[0].process(x);
@@ -410,6 +419,8 @@ pub struct Multiband {
     ap: [[[Crossover; 3]; MB_BANDS]; 2],
     /// The external sidechain's own band split (for per-band sidechain detection).
     xs: [[Crossover; 3]; 2],
+    /// The crossover frequencies the filters are tuned to.
+    xf: [f32; 3],
     /// Dynamic phase: one dynamic shelf / bell per band and channel, and the gain it is set to.
     dynf: [[Biquad; MB_BANDS]; 2],
     dynf_db: [f32; MB_BANDS],
@@ -425,16 +436,22 @@ impl Multiband {
     }
     fn rebuild(&mut self) {
         let f = [self.v("x1"), self.v("x2").max(self.v("x1") * 1.25), self.v("x3").max(self.v("x2") * 1.25)];
-        for ch in 0..2 {
-            for k in 0..3 {
-                self.x[ch][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
-                self.xs[ch][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
-                for b in 0..MB_BANDS {
-                    self.ap[ch][b][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
+        // Only when a crossover moved, and in place: the filters keep their state (no clicks while a
+        // knob turns), and band settings alone touch no filter at all.
+        if f != self.xf {
+            self.xf = f;
+            for ch in 0..2 {
+                for k in 0..3 {
+                    let fk = f[k].min(self.rate * 0.45);
+                    self.x[ch][k].retune(fk, self.rate);
+                    self.xs[ch][k].retune(fk, self.rate);
+                    for b in 0..MB_BANDS {
+                        self.ap[ch][b][k].retune(fk, self.rate);
+                    }
                 }
             }
+            self.dynf_db = [f32::NAN; MB_BANDS];
         }
-        self.dynf_db = [f32::NAN; MB_BANDS];
         for (b, band) in self.bands.iter_mut().enumerate() {
             let g = |k: usize| self.p[MB_G + b * MB_PB + k];
             band.mode = (g(0).round().max(0.0) as usize).min(MB_MODES.len() - 1);
@@ -501,7 +518,10 @@ impl Effect for Multiband {
                 self.set_dynf(b, n, 0.0);
             }
         }
-        let coefs: Vec<(f32, f32)> = self.bands.iter().map(|b| ((-1.0 / (b.attack.max(0.05) * 0.001 * self.rate)).exp(), (-1.0 / (b.release.max(1.0) * 0.001 * self.rate)).exp())).collect();
+        let coefs: [(f32, f32); MB_BANDS] = std::array::from_fn(|k| {
+            let b = &self.bands[k];
+            ((-1.0 / (b.attack.max(0.05) * 0.001 * self.rate)).exp(), (-1.0 / (b.release.max(1.0) * 0.001 * self.rate)).exp())
+        });
         let mut lvl = [-120.0f32; MB_BANDS];
         let mut chg = [0.0f32; MB_BANDS];
         let use_sc = sc.is_some() && self.bands[..n].iter().any(|b| b.sc);
@@ -612,6 +632,7 @@ pub fn multiband_def() -> EffectDef {
                 x: [[Crossover::new(1000.0, rate); 3]; 2],
                 ap: [[[Crossover::new(1000.0, rate); 3]; MB_BANDS]; 2],
                 xs: [[Crossover::new(1000.0, rate); 3]; 2],
+                xf: [f32::NAN; 3],
                 dynf: [[Biquad::default(); MB_BANDS]; 2],
                 dynf_db: [f32::NAN; MB_BANDS],
                 dynf_n: 0,
@@ -672,7 +693,8 @@ impl Gate {
     fn update(&mut self) {
         let (hp, lp) = (self.v("sc_hp"), self.v("sc_lp").min(self.rate * 0.45));
         for ch in 0..2 {
-            self.sc[ch] = [Biquad::new(BiquadKind::HighPass, hp, 0.707, 0.0, self.rate), Biquad::new(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate)];
+            self.sc[ch][0].set(BiquadKind::HighPass, hp, 0.707, 0.0, self.rate);
+            self.sc[ch][1].set(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate);
         }
     }
     fn look(&self) -> usize {
@@ -1108,9 +1130,10 @@ impl DeEsser {
     fn update(&mut self) {
         let (hp, lp) = (self.v("freq"), self.v("freq_hi").max(self.v("freq") * 1.2).min(self.rate * 0.45));
         for ch in 0..2 {
-            self.det_hp[ch] = Biquad::new(BiquadKind::HighPass, hp, 0.9, 0.0, self.rate);
-            self.det_lp[ch] = Biquad::new(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate);
-            self.split[ch] = Biquad::new(BiquadKind::HighShelf, (hp * 0.8).min(self.rate * 0.4), 0.707, -self.red[ch], self.rate);
+            self.det_hp[ch].set(BiquadKind::HighPass, hp, 0.9, 0.0, self.rate);
+            self.det_lp[ch].set(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate);
+            let red = self.red[ch];
+            self.split[ch].set(BiquadKind::HighShelf, (hp * 0.8).min(self.rate * 0.4), 0.707, -red, self.rate);
         }
     }
     fn look(&self) -> usize {

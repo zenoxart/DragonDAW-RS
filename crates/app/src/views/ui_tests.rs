@@ -1185,3 +1185,129 @@ fn safe_mode_opens_without_plugins_and_keeps_them() {
     assert!(h.st.ctx.paths.local.join("Crash").join("opening.txt").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Clip gain on audio clips in the playlist: drag the dB handle at the clip's top up / down, Shift for
+/// fine steps, double-click resets; with several audio clips selected they all move together.
+#[test]
+fn audio_clip_gain_handle() {
+    let mut h = Harness::new();
+    let playlist = |ui: &mut egui::Ui, st: &mut State| super::playlist::show(ui, st);
+    let t0 = h.st.session.project.tracks[0].id;
+    let t1 = h.st.session.project.tracks[1].id;
+    let (a, b) = h.st.session.edit("setup", |p| {
+        let mut ids = Vec::new();
+        for (t, start) in [(0usize, 0.0), (1usize, 0.0)] {
+            let id = p.next_id();
+            p.tracks[t].clips.push(Clip { id, name: "vox".into(), start, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip::default()) });
+            ids.push(id);
+        }
+        (ids[0], ids[1])
+    });
+    h.st.ui.playlist_zoom = 30.0;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
+    let x_mid = t.left() + (4.0 - h.st.ui.pl_x as f32) * h.st.ui.playlist_zoom;
+    let gain = |h: &Harness, tid: Id, cid: Id| match &h.st.session.project.track(tid).unwrap().clips.iter().find(|c| c.id == cid).unwrap().kind {
+        ClipKind::Audio(x) => x.gain_db,
+        _ => f32::NAN,
+    };
+    // The handle sits 8 px below the top of the clip, centred.
+    let handle = Pos2::new(x_mid, t.top() + 2.0 + 8.0);
+    h.drag(playlist, handle, handle - egui::vec2(0.0, 30.0), PointerButton::Primary, Modifiers::NONE);
+    assert!((gain(&h, t0, a) - 3.0).abs() < 0.11, "30 px up = +3 dB, got {}", gain(&h, t0, a));
+    assert_eq!(h.st.session.project.track(t0).unwrap().clips[0].start, 0.0, "the clip did not move");
+    // Fine: Shift = 0.02 dB per pixel.
+    h.drag(playlist, handle, handle + egui::vec2(0.0, 50.0), PointerButton::Primary, Modifiers::SHIFT);
+    assert!((gain(&h, t0, a) - 2.0).abs() < 0.11, "50 px down with Shift = -1 dB, got {}", gain(&h, t0, a));
+    // Double-click resets.
+    h.click(playlist, handle, PointerButton::Primary, Modifiers::NONE);
+    h.click(playlist, handle, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(gain(&h, t0, a), 0.0);
+    // Both clips selected: one drag moves both.
+    h.st.ui.clips = vec![a, b];
+    h.drag(playlist, handle, handle + egui::vec2(0.0, 60.0), PointerButton::Primary, Modifiers::NONE);
+    assert!((gain(&h, t0, a) + 6.0).abs() < 0.11 && (gain(&h, t1, b) + 6.0).abs() < 0.11, "{} {}", gain(&h, t0, a), gain(&h, t1, b));
+    let _ = row_h;
+    // Undo is one step per drag.
+    h.st.session.undo();
+    assert_eq!(gain(&h, t1, b), 0.0);
+}
+
+/// Files dropped from the file manager onto the playlist land under the mouse: the track under the
+/// pointer, the beat on the grid; below the last track they get a new track.
+#[test]
+fn files_dropped_on_the_playlist_land_under_the_mouse() {
+    let mut h = Harness::new();
+    let playlist = |ui: &mut egui::Ui, st: &mut State| super::playlist::show(ui, st);
+    h.st.ui.playlist_zoom = 20.0;
+    h.st.ui.snap = 1.0;
+    h.idle(playlist, 3);
+    let info = super::playlist::DropInfo::get(&h.ctx).expect("the playlist publishes its drop geometry");
+    let (t1, top, bottom) = info.tracks[1];
+    let t = info.timeline;
+    let pos = Pos2::new(t.left() + (4.6 - h.st.ui.pl_x as f32) * 20.0, (top + bottom) / 2.0);
+    assert_eq!(info.target(pos), Some((Some(1), 4.0)), "track 2, beat 4.6 snapped down to 4");
+    assert_eq!(info.target(Pos2::new(t.left() - 10.0, top + 2.0)), None, "the track headers are not a drop target");
+    let below = Pos2::new(pos.x, info.tracks.last().unwrap().2 + 5.0);
+    let below = if t.contains(below) { below } else { Pos2::new(pos.x, t.bottom() - 2.0) };
+    // A real file: dropped on track 2 at beat 4.
+    let dir = std::env::temp_dir().join(format!("dragon-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("kick.wav");
+    let s: Vec<f32> = (0..24000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+    dragon_engine::samples::write_wav(&wav, &s, &s, 48000, dragon_engine::samples::BitDepth::Float32, false, false).unwrap();
+    let (track, beat) = info.target(pos).unwrap();
+    h.st.add_audio_clip_at(&wav, track.map(|k| info.tracks[k].0), beat);
+    let c = h.st.session.project.track(t1).unwrap().clips.iter().find(|c| c.name == "kick").cloned().expect("on track 2");
+    assert_eq!(c.start, 4.0);
+    assert!(matches!(c.kind, ClipKind::Audio(_)));
+    // Below the last track (if the view shows space there): a new track named after the file.
+    if let Some((None, b)) = info.target(below) {
+        let n = h.st.session.project.tracks.len();
+        h.st.add_audio_clip_at(&wav, None, b);
+        assert_eq!(h.st.session.project.tracks.len(), n + 1);
+        assert_eq!(h.st.session.project.tracks.last().unwrap().name, "kick");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Mixer auto-balance: measures every channel and sets the faders so the channels sit at their role's
+/// loudness – a loud kick and a quiet pad end up 7 dB apart (−18 vs −25 LUFS), in one undo step.
+#[test]
+fn mixer_auto_balance() {
+    let mut h = Harness::new();
+    let dir = std::env::temp_dir().join(format!("dragon-bal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tone = |name: &str, amp: f32| {
+        let p = dir.join(name);
+        let s: Vec<f32> = (0..48000 * 4).map(|i| (i as f32 * 0.03).sin() * amp).collect();
+        dragon_engine::samples::write_wav(&p, &s, &s, 48000, dragon_engine::samples::BitDepth::Float32, false, false).unwrap();
+        p
+    };
+    let (loud, quiet) = (tone("k.wav", 0.5), tone("p.wav", 0.1));
+    let (mk, mp) = h.st.session.edit("setup", |p| {
+        let mut ms = Vec::new();
+        for (k, (src, name)) in [(loud.clone(), "Kick"), (quiet.clone(), "Warm pad")].into_iter().enumerate() {
+            let id = p.next_id();
+            p.tracks[k].clips.push(Clip { id, name: name.into(), start: 0.0, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: src, ..Default::default() }) });
+            let m = p.tracks[k].mixer;
+            p.mixer.get_mut(m).unwrap().name = name.into();
+            ms.push(m);
+        }
+        (ms[0], ms[1])
+    });
+    h.st.start_auto_balance();
+    let t0 = std::time::Instant::now();
+    while h.st.balance_job.is_some() && t0.elapsed().as_secs() < 60 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.st.poll_auto_balance();
+    }
+    assert!(h.st.balance_job.is_none(), "finished");
+    let vol = |h: &Harness, id| dragon_engine::dsp::gain_to_db(h.st.session.project.mixer.get(id).unwrap().volume);
+    let (k, p) = (vol(&h, mk), vol(&h, mp));
+    let after = 13.98 + k - p; // the tones differ by 20·log10(0.5/0.1) dB
+    assert!((after - 7.0).abs() < 0.5, "kick {k:.1} dB, pad {p:.1} dB, so kick {after:.1} dB louder");
+    assert_eq!(h.st.session.history.labels().last().map(|s| s.as_str()), Some("Auto-balance"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
