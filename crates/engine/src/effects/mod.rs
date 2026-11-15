@@ -4,11 +4,13 @@
 
 mod color;
 pub use color::{shape as saturation_curve, DragonParticle};
+pub mod alter;
 pub mod dynamics;
 mod eq;
 mod modulation;
 pub mod pitch;
 mod reverb;
+pub mod strips;
 pub mod voice;
 
 pub use eq::{ParametricEq, EQ_BANDS};
@@ -210,6 +212,9 @@ pub fn registry() -> &'static [EffectDef] {
             color::dragon_particle_def(),
             pitch::pitch_correct_def(),
             voice::clean_voice_def(),
+            strips::class_a_strip_def(),
+            strips::drum_bus_def(),
+            alter::alter_def(),
         ]
     })
 }
