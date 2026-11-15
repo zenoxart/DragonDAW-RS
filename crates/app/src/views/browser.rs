@@ -36,10 +36,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     });
     ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
-    if ui.small_button("⏹ stop preview").clicked() {
-        st.audio.send(Cmd::Live(LiveEvent::StopPreview));
-    }
     ui.separator();
+    // FL-style waveform preview of the selected file, docked at the bottom of the browser.
+    egui::TopBottomPanel::bottom("browser.preview").resizable(true).min_height(100.0).default_height(110.0).height_range(100.0..=260.0).frame(egui::Frame::NONE).show_inside(ui, |ui| preview_panel(ui, st));
     let mut roots: Vec<(String, PathBuf)> = st.settings.browser_folders.iter().map(|p| (p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(p.display().to_string()), p.clone())).collect();
     roots.push(("Projects".into(), st.ctx.paths.projects.clone()));
     roots.push(("Recordings".into(), st.recordings_dir()));
@@ -100,6 +99,9 @@ fn folder(ui: &mut Ui, st: &mut State, dir: &Path, filter: &str, depth: usize) {
             ui.label(format!("{k} {name}"));
         });
         let resp = r.response.interact(egui::Sense::click());
+        if st.ui.browser_sel.as_deref() == Some(p.as_path()) {
+            ui.painter().rect_stroke(resp.rect.expand(1.0), 3.0, egui::Stroke::new(1.0_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
+        }
         if resp.clicked() && k == "🔊" {
             st.preview(&p);
         }
@@ -134,4 +136,70 @@ fn folder(ui: &mut Ui, st: &mut State, dir: &Path, filter: &str, depth: usize) {
             }
         });
     }
+}
+
+/// The waveform of the file selected in the browser: name, length and rate, a playhead while the preview
+/// plays, click to play it again, drag it into the playlist / rack like the file itself.
+fn preview_panel(ui: &mut Ui, st: &mut State) {
+    ui.add_space(4.0);
+    let Some(path) = st.ui.browser_sel.clone() else {
+        ui.label(RichText::new("Click an audio file to preview it here").small().color(theme::TEXT_DIM));
+        return;
+    };
+    let name = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+    let rate = st.audio.rate() as f64;
+    let w = st.waveform(&path);
+    let secs = w.as_ref().map(|w| (w.len() * crate::state::WAVE_BUCKET) as f64 / rate).unwrap_or(0.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(&name).small().strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("⏹").on_hover_text("Stop the preview").clicked() {
+                st.audio.send(Cmd::Live(LiveEvent::StopPreview));
+                st.ui.preview_started = None;
+            }
+            ui.label(RichText::new(format!("{secs:.2} s")).small().monospace().color(theme::TEXT_DIM));
+        });
+    });
+    let size = egui::vec2(ui.available_width(), ui.available_height().max(40.0) - 4.0);
+    let id = egui::Id::new(("browser.preview.drag", &path));
+    let r = ui.dnd_drag_source(id, path.clone(), |ui| {
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let p = ui.painter_at(rect);
+        p.rect_filled(rect, 4.0, theme::BG);
+        match &w {
+            Some(w) if !w.is_empty() => {
+                let n = w.len();
+                let mid = rect.center().y;
+                let half = rect.height() * 0.46;
+                let mut x = rect.left();
+                while x < rect.right() {
+                    let b0 = (((x - rect.left()) / rect.width()) * n as f32) as usize;
+                    let b1 = ((((x + 1.0 - rect.left()) / rect.width()) * n as f32) as usize).max(b0 + 1).min(n);
+                    let (lo, hi) = w[b0.min(n - 1)..b1].iter().fold((0.0f32, 0.0f32), |(l, h), (a, b)| (l.min(*a), h.max(*b)));
+                    p.line_segment([egui::pos2(x, mid - hi.min(1.0) * half), egui::pos2(x, mid - lo.max(-1.0) * half)], egui::Stroke::new(1.0_f32, theme::ACCENT_2));
+                    x += 1.0;
+                }
+                p.line_segment([egui::pos2(rect.left(), mid), egui::pos2(rect.right(), mid)], egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(20)));
+                // Playhead while the preview plays.
+                if let Some(t0) = st.ui.preview_started {
+                    let t = t0.elapsed().as_secs_f64();
+                    if t < secs && !st.transport().playing {
+                        let x = rect.left() + (t / secs.max(1e-6)) as f32 * rect.width();
+                        p.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.5_f32, theme::PLAYHEAD));
+                        ui.ctx().request_repaint();
+                    } else {
+                        st.ui.preview_started = None;
+                    }
+                }
+            }
+            _ => {
+                p.text(rect.center(), egui::Align2::CENTER_CENTER, "cannot read this file", egui::FontId::proportional(11.0), theme::REC);
+            }
+        }
+    });
+    let resp = r.response.interact(egui::Sense::click()).on_hover_text("Click to play · drag into the playlist or onto a channel");
+    if resp.clicked() {
+        st.preview(&path);
+    }
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("browser.preview.rect"), resp.rect));
 }

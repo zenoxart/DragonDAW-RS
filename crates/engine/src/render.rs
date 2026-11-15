@@ -911,6 +911,8 @@ impl Renderer {
     }
 
     pub fn play(&mut self, mode: PlayMode) {
+        // Starting the song or a pattern cuts a running browser preview (FL behaviour).
+        self.preview = None;
         self.transport.mode = mode;
         if !self.transport.playing {
             self.transport.beat = match mode {
@@ -1792,6 +1794,24 @@ mod tests {
         }
         // One second at 120 BPM = beat 2.
         assert!((r.transport.beat - 2.0).abs() < 1e-3, "beat {}", r.transport.beat);
+    }
+
+    /// Starting playback cuts the browser preview.
+    #[test]
+    fn playing_cuts_the_preview() {
+        let p = Project::new_default();
+        let cache = SampleCache::default();
+        let mut pool = Pool::new();
+        let mut r = offline_renderer(&p, &cache, 48000.0, &mut pool);
+        let tone = AudioData::from_planar(48000, vec![0.5; 48000], vec![0.5; 48000]);
+        r.push_live(LiveEvent::Preview(Arc::new(tone)));
+        let (mut l, mut rr) = (vec![0.0; 256], vec![0.0; 256]);
+        r.render(&mut l, &mut rr, &[]);
+        assert!(l.iter().any(|x| x.abs() > 0.1), "preview audible");
+        r.play(PlayMode::Song);
+        let (mut l, mut rr) = (vec![0.0; 256], vec![0.0; 256]);
+        r.render(&mut l, &mut rr, &[]);
+        assert!(l.iter().all(|x| x.abs() < 0.1), "preview cut when playback starts");
     }
 
     #[test]

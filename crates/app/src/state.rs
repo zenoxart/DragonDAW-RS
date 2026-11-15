@@ -117,6 +117,9 @@ pub struct UiState {
     /// Entries selected in the picker (dragged together).
     pub picker_sel: Vec<crate::views::picker::PickItem>,
     pub editor: Editor,
+    /// The file selected in the browser (shown in its waveform preview) and when its preview started.
+    pub browser_sel: Option<PathBuf>,
+    pub preview_started: Option<Instant>,
     pub clipboard: Option<Clipboard>,
     /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
     pub last_undo: Option<u64>,
@@ -181,6 +184,8 @@ impl UiState {
             pl_picker: true,
             picker_sel: Vec::new(),
             editor: Editor::Playlist,
+            browser_sel: None,
+            preview_started: None,
             clipboard: None,
             last_undo: None,
             pl_anim: None,
@@ -387,6 +392,8 @@ impl State {
         } else if t.playing {
             self.audio.send(Command::Pause);
         } else {
+            // The engine cuts the browser preview when playback starts.
+            self.ui.preview_started = None;
             self.audio.send(Command::Play(self.play_mode()));
         }
     }
@@ -932,8 +939,12 @@ impl State {
     }
 
     pub fn preview(&mut self, path: &Path) {
+        self.ui.browser_sel = Some(path.to_path_buf());
         match self.session.cache.get(path, self.audio.rate()) {
-            Ok(d) => self.audio.send(Command::Live(LiveEvent::Preview(d))),
+            Ok(d) => {
+                self.audio.send(Command::Live(LiveEvent::Preview(d)));
+                self.ui.preview_started = Some(Instant::now());
+            }
             Err(e) => self.ui.status = format!("Cannot preview: {e}"),
         }
     }
