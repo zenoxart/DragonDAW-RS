@@ -1052,6 +1052,13 @@ fn fl_side_modifier_mouse_shortcuts() {
     h.drag(playlist, edge, Pos2::new(x_at(&h, 10.0) - 2.0, y), PointerButton::Primary, Modifiers::SHIFT);
     let c = clips(&h);
     assert!(c.contains(&(2.0, 8.0)) && c.contains(&(10.0, 4.0)), "ripple: {c:?}");
+    // Double right-click activates the mute tool (FL).
+    h.st.ui.test_keys.clear();
+    h.st.ui.tool = crate::state::Tool::Draw;
+    let empty = Pos2::new(x_at(&h, 20.0), y);
+    h.click(playlist, empty, PointerButton::Secondary, Modifiers::NONE);
+    h.click(playlist, empty, PointerButton::Secondary, Modifiers::NONE);
+    assert_eq!(h.st.ui.tool, crate::state::Tool::Mute, "double right-click picks the mute tool");
     // Numeric-pad 0 is fast forward, not "mute channel 10".
     h.st.ui.test_keys = vec![SideKey::Numpad0];
     h.st.ui.editor = crate::state::Editor::Rack;

@@ -130,6 +130,7 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Right-Shift+left-click with any tool slices; Right-Shift+right-click slices and deletes the smaller piece (playlist) / keeps the longer one (piano roll); Right-Shift+drag cuts a line | ✅ |
 | Right-Alt+click mutes, Right-Alt+right-click quantizes; Left-Shift+right-drag pans; Left-Shift+resize ripples the following clips; holding the right button on empty space starts the slice line; middle+right click opens the tool menu | ✅ |
 | Which Shift / Alt is held (left or right) | read from the OS key state on X11 and Windows; on Wayland and macOS both sides act as left (use the slice tool there) |
+| Double right-click activates the mute tool (playlist); Alt+Right-Shift slices with snap off | ✅ |
 | Ctrl+U quick chop / Alt+U chop tool (piano roll) | ✅ |
 
 ## Comparison with the FabFilter bundle

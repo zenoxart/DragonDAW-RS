@@ -736,6 +736,20 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: st.ui.pl_vzoom, y: st.ui.pl_y });
         }
     }
+    // FL: double right-click activates the mute tool.
+    if resp.secondary_clicked() {
+        if let Some(p) = resp.interact_pointer_pos() {
+            let now = ui.input(|i| i.time);
+            let id = egui::Id::new("pl.last_rclick");
+            let last: Option<(f64, Pos2)> = ui.ctx().data(|d| d.get_temp(id));
+            if last.is_some_and(|(t, q)| now - t < 0.35 && q.distance(p) < 6.0) {
+                st.ui.tool = Tool::Mute;
+                ui.ctx().data_mut(|d| d.remove::<(f64, Pos2)>(id));
+            } else {
+                ui.ctx().data_mut(|d| d.insert_temp(id, (now, p)));
+            }
+        }
+    }
     // FL: Right-Shift + click slices the clip under the pointer (Right-Shift + right-click also deletes the
     // smaller piece); Right-Alt + click mutes, Right-Alt + right-click quantizes the selection.
     let side_click = (rsh || ralt) && (resp.clicked() || resp.secondary_clicked());
