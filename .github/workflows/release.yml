@@ -1,12 +1,23 @@
 name: Release
 
-# Push a version tag (e.g. `git tag v2.1.0 && git push --tags`) to build Dragon DAW for
-# Windows, Linux and macOS and publish the archives as a GitHub release.
+# Continuous delivery:
+# - every push to `main` that passes CI is built for Windows, Linux and macOS and published as the
+#   rolling `nightly` pre-release (replaced on each run);
+# - a version tag (e.g. `git tag v2.1.0 && git push --tags`) builds the same archives and publishes
+#   them as a versioned GitHub release.
 
 on:
   push:
     tags: ["v*"]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_run' && 'nightly' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 permissions:
   contents: write
@@ -17,6 +28,8 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.name }}
+    # Nightly only after a green CI run.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +53,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Install system libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
@@ -55,7 +70,8 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="dev-${GITHUB_SHA::7}"
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          [ "$GITHUB_REF_TYPE" = "tag" ] || VERSION="nightly-${SHA::7}"
           DIR="dragon-daw-${VERSION}-${{ matrix.name }}"
           mkdir -p "$DIR"
           cp "target/${{ matrix.target }}/release/dragon-daw${{ matrix.ext }}" "$DIR/"
@@ -92,3 +108,25 @@ jobs:
           files: dist/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  nightly:
+    name: Publish nightly
+    needs: build
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Replace the nightly release
+        run: |
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create nightly dist/* --repo "$GITHUB_REPOSITORY" --target "$SHA" --prerelease --latest=false \
+            --title "Nightly (main @ ${SHA::7})" \
+            --notes "Automatic build of \`main\` at ${SHA} after a green CI run. For testing; use a versioned release for production."

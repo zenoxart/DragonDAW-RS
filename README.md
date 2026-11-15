@@ -8,6 +8,8 @@
 It's built on the Red Hive desktop framework and hosts CLAP and VST3 plugins.**
 
 [![CI](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/ci.yml/badge.svg)](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/ci.yml)
+[![Release](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/release.yml/badge.svg)](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/release.yml)
+[![Nightly](https://img.shields.io/badge/download-nightly-E84A2C?logo=github)](https://github.com/zenoxart/DragonDAW-RS/releases/tag/nightly)
 [![Rust](https://img.shields.io/badge/Rust-1.89%2B-B7410E?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![egui](https://img.shields.io/badge/egui-0.31-C62828)](https://github.com/emilk/egui)
 [![CLAP](https://img.shields.io/badge/plugins-CLAP%20%7C%20VST3-E84A2C)](#-plugins)
@@ -158,6 +160,10 @@ More detail is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 🚀 Quick start
 
+**Download a build:** the [latest nightly](https://github.com/zenoxart/DragonDAW-RS/releases/tag/nightly)
+(built from `main` after every green CI run) or a [versioned release](https://github.com/zenoxart/DragonDAW-RS/releases)
+– Windows x64, Linux x64, macOS Apple Silicon and Intel. Or build it yourself:
+
 ```bash
 # Linux: ALSA headers for audio and MIDI
 sudo apt install libasound2-dev
@@ -250,12 +256,15 @@ autosave crash detection. The plugin tests load the in-repo CLAP and VST3 plugin
 
 ### CI/CD
 
-GitHub Actions runs on every push to `main` and every pull request:
+GitHub Actions runs on every push to `main` and every pull request – see the
+[CI runs](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/ci.yml),
+[release runs](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/release.yml) and
+[releases](https://github.com/zenoxart/DragonDAW-RS/releases):
 
 | Workflow | Jobs |
 |---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | rustfmt check and Clippy (`-D warnings`), the full test suite on Linux under Xvfb (including the CLAP/VST3 host tests), tests on Windows and macOS, and a build check on the minimum Rust version (1.89) |
-| [`release.yml`](.github/workflows/release.yml) | on a `v*` tag: release builds of `dragon-daw` and the `dragon` CLI for Windows x64, Linux x64, macOS Apple Silicon and macOS Intel, packaged as zip / tar.gz with `SHA256SUMS.txt` and published as a GitHub release (tags with a `-`, such as `v2.1.0-beta.1`, become pre-releases) |
+| [`release.yml`](.github/workflows/release.yml) | **continuous delivery**: after every green CI run on `main`, release builds for all four platforms are published as the rolling [`nightly`](https://github.com/zenoxart/DragonDAW-RS/releases/tag/nightly) pre-release (replaced each time, with `SHA256SUMS.txt`). On a `v*` tag: release builds of `dragon-daw` and the `dragon` CLI for Windows x64, Linux x64, macOS Apple Silicon and macOS Intel, packaged as zip / tar.gz with `SHA256SUMS.txt` and published as a GitHub release (tags with a `-`, such as `v2.1.0-beta.1`, become pre-releases) |
 
 Dependabot opens weekly grouped updates for Cargo crates and the actions themselves.
 
