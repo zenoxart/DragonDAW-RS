@@ -25,19 +25,32 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.25, ""),
     // Decay-rate EQ (Pro-R): a curve of six points (Pro-R has six bands); each part of the tail decays that many times longer
     // (or shorter) than the decay time. Drag the points on the display.
-    ParamInfo::log("dr_1", "Decay rate 80 Hz ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("dr_2", "Decay rate 300 Hz ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("dr_3", "Decay rate 1.2 kHz ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("dr_4", "Decay rate 4.8 kHz ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("dr_5", "Decay rate 12 kHz ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("dr_6", "Decay rate 18 kHz ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_1", "Decay 1 time ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_2", "Decay 2 time ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_3", "Decay 3 time ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_4", "Decay 4 time ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_5", "Decay 5 time ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_6", "Decay 6 time ×", 0.25, 4.0, 1.0, ""),
     // The points' frequencies: free nodes, drag them sideways (kept in order, a third of an octave apart).
-    ParamInfo::log("dr_f1", "Decay point 1 frequency", 20.0, 20000.0, 80.0, "Hz"),
-    ParamInfo::log("dr_f2", "Decay point 2 frequency", 20.0, 20000.0, 300.0, "Hz"),
-    ParamInfo::log("dr_f3", "Decay point 3 frequency", 20.0, 20000.0, 1200.0, "Hz"),
-    ParamInfo::log("dr_f4", "Decay point 4 frequency", 20.0, 20000.0, 4800.0, "Hz"),
-    ParamInfo::log("dr_f5", "Decay point 5 frequency", 20.0, 20000.0, 12000.0, "Hz"),
-    ParamInfo::log("dr_f6", "Decay point 6 frequency", 20.0, 20000.0, 18000.0, "Hz"),
+    ParamInfo::log("dr_f1", "Decay 1 freq", 20.0, 20000.0, 80.0, "Hz"),
+    ParamInfo::log("dr_f2", "Decay 2 freq", 20.0, 20000.0, 300.0, "Hz"),
+    ParamInfo::log("dr_f3", "Decay 3 freq", 20.0, 20000.0, 1200.0, "Hz"),
+    ParamInfo::log("dr_f4", "Decay 4 freq", 20.0, 20000.0, 4800.0, "Hz"),
+    ParamInfo::log("dr_f5", "Decay 5 freq", 20.0, 20000.0, 12000.0, "Hz"),
+    ParamInfo::log("dr_f6", "Decay 6 freq", 20.0, 20000.0, 18000.0, "Hz"),
+    // Each band's shape (Pro-R: low / high shelf, bell, notch) and width.
+    ParamInfo::choice("dr_t1", "Decay 1 shape", DR_SHAPES, 1.0),
+    ParamInfo::choice("dr_t2", "Decay 2 shape", DR_SHAPES, 0.0),
+    ParamInfo::choice("dr_t3", "Decay 3 shape", DR_SHAPES, 0.0),
+    ParamInfo::choice("dr_t4", "Decay 4 shape", DR_SHAPES, 0.0),
+    ParamInfo::choice("dr_t5", "Decay 5 shape", DR_SHAPES, 0.0),
+    ParamInfo::choice("dr_t6", "Decay 6 shape", DR_SHAPES, 2.0),
+    ParamInfo::log("dr_q1", "Decay 1 Q", 0.3, 6.0, 1.0, ""),
+    ParamInfo::log("dr_q2", "Decay 2 Q", 0.3, 6.0, 1.0, ""),
+    ParamInfo::log("dr_q3", "Decay 3 Q", 0.3, 6.0, 1.0, ""),
+    ParamInfo::log("dr_q4", "Decay 4 Q", 0.3, 6.0, 1.0, ""),
+    ParamInfo::log("dr_q5", "Decay 5 Q", 0.3, 6.0, 1.0, ""),
+    ParamInfo::log("dr_q6", "Decay 6 Q", 0.3, 6.0, 1.0, ""),
     // Early reflections.
     ParamInfo::lin("early", "Early level", 0.0, 1.0, 0.4, ""),
     ParamInfo::lin("er_size", "Early size", 0.2, 2.0, 1.0, ""),
@@ -104,20 +117,56 @@ impl PartEq {
     }
 }
 
-/// The decay-rate curve's default points (Hz); each point can be moved (`dr_f1` … `dr_f5`).
+/// The decay-rate EQ's default band frequencies (Hz); each band can be moved (`dr_f1` … `dr_f6`).
 pub const DR_FREQS: [f32; 6] = [80.0, 300.0, 1200.0, 4800.0, 12000.0, 18000.0];
-/// Six points, like Pro-R's six-band decay-rate EQ.
+/// Six bands, like Pro-R's six-band decay-rate EQ.
 pub const DR_BANDS: usize = 6;
+/// Band shapes, as in Pro-R's decay-rate EQ.
+pub const DR_SHAPES: &[&str] = &["Bell", "Low shelf", "High shelf", "Notch"];
+/// The tail is split into this many fixed bands (log-spaced); each gets the curve's value at its centre.
+const DR_SPLIT: usize = 12;
 
-/// The points in order, at least a third of an octave apart, and the crossovers between them
-/// (geometric means of neighbouring points).
-pub fn dr_layout(f: [f32; DR_BANDS]) -> ([f32; DR_BANDS], [f32; DR_BANDS - 1]) {
-    let mut p = f;
-    p.sort_by(f32::total_cmp);
-    for k in 1..DR_BANDS {
-        p[k] = p[k].max(p[k - 1] * 1.26);
+fn dr_splits() -> [f32; DR_SPLIT - 1] {
+    let c = dr_centres();
+    std::array::from_fn(|k| (c[k] * c[k + 1]).sqrt())
+}
+
+fn dr_centres() -> [f32; DR_SPLIT] {
+    std::array::from_fn(|k| 30.0 * (18000.0f32 / 30.0).powf(k as f32 / (DR_SPLIT - 1) as f32))
+}
+
+/// One decay-rate band: shape, frequency, multiplier (×), Q.
+#[derive(Clone, Copy)]
+pub struct DrBand {
+    pub shape: usize,
+    pub freq: f32,
+    pub mul: f32,
+    pub q: f32,
+}
+
+/// The decay-rate curve: the decay-time multiplier at a frequency (sum of the bands' shapes in log2,
+/// limited to ×¼ … ×4).
+pub fn dr_curve(bands: &[DrBand], f: f32) -> f32 {
+    let mut l = 0.0;
+    for b in bands {
+        let x = (f.max(1.0) / b.freq.max(1.0)).log2();
+        let w = match b.shape {
+            1 => 1.0 / (1.0 + (x * b.q * 4.0).exp()),
+            2 => 1.0 / (1.0 + (-x * b.q * 4.0).exp()),
+            3 => (-0.5 * (x * b.q * 6.0).powi(2)).exp(),
+            _ => (-0.5 * (x * b.q * 1.5).powi(2)).exp(),
+        };
+        l += w * b.mul.max(0.01).log2();
     }
-    (p, std::array::from_fn(|k| (p[k] * p[k + 1]).sqrt()))
+    2f32.powf(l.clamp(-2.0, 2.0))
+}
+
+/// The bands from a parameter lookup (for the UI curve).
+pub fn dr_bands(get: impl Fn(&str) -> f32) -> [DrBand; DR_BANDS] {
+    std::array::from_fn(|k| {
+        let n = k + 1;
+        DrBand { shape: (get(&format!("dr_t{n}")).round().max(0.0) as usize).min(DR_SHAPES.len() - 1), freq: get(&format!("dr_f{n}")), mul: get(&format!("dr_{n}")), q: get(&format!("dr_q{n}")) }
+    })
 }
 
 pub struct Reverb {
@@ -126,12 +175,11 @@ pub struct Reverb {
     early: [DelayLine; 2],
     lines: Vec<DelayLine>,
     damp: [OnePole; LINES],
-    /// Five crossovers per line split the tail into the six decay-rate bands.
-    splits: [[OnePole; DR_BANDS - 1]; LINES],
-    /// Feedback gain of each decay-rate band per line.
-    gains_dr: [[f32; DR_BANDS]; LINES],
-    decay_mul: [f32; DR_BANDS],
-    dr_freqs: [f32; DR_BANDS],
+    /// Crossovers per line split the tail into fixed log-spaced bands that follow the decay-rate curve.
+    splits: [[OnePole; DR_SPLIT - 1]; LINES],
+    /// Feedback gain of each split band per line.
+    gains_dr: [[f32; DR_SPLIT]; LINES],
+    dr: [DrBand; DR_BANDS],
     lowcut: [OnePole; 2],
     lfos: Vec<Lfo>,
     lengths: [f32; LINES],
@@ -163,10 +211,9 @@ impl Reverb {
             early: [DelayLine::new((rate * 0.16) as usize), DelayLine::new((rate * 0.16) as usize)],
             lines: (0..LINES).map(|_| DelayLine::new(max)).collect(),
             damp: [OnePole::new(7000.0, rate); LINES],
-            splits: [std::array::from_fn(|k| OnePole::new(dr_layout(DR_FREQS).1[k], rate)); LINES],
-            gains_dr: [[0.0; DR_BANDS]; LINES],
-            decay_mul: [1.0; DR_BANDS],
-            dr_freqs: DR_FREQS,
+            splits: [std::array::from_fn(|k| OnePole::new(dr_splits()[k], rate)); LINES],
+            gains_dr: [[0.0; DR_SPLIT]; LINES],
+            dr: std::array::from_fn(|k| DrBand { shape: [1, 0, 0, 0, 0, 2][k], freq: DR_FREQS[k], mul: 1.0, q: 1.0 }),
             lowcut: [OnePole::new(120.0, rate); 2],
             lfos: (0..LINES).map(|i| Lfo::with_phase(i as f32 / LINES as f32)).collect(),
             lengths: [0.0; LINES],
@@ -198,11 +245,9 @@ impl Reverb {
             4 => (1.6, 0.75),
             _ => (1.0, 1.0),
         };
-        let (_, splits) = dr_layout(self.dr_freqs);
-        // Multipliers follow their points when the points are reordered by sorting.
-        let mut order: Vec<usize> = (0..DR_BANDS).collect();
-        order.sort_by(|a, b| self.dr_freqs[*a].total_cmp(&self.dr_freqs[*b]));
-        let muls: [f32; DR_BANDS] = std::array::from_fn(|k| self.decay_mul[order[k]]);
+        let splits = dr_splits();
+        let centres = dr_centres();
+        let muls: [f32; DR_SPLIT] = std::array::from_fn(|k| dr_curve(&self.dr, centres[k]));
         for i in 0..LINES {
             let len = BASE_MS[i] * 0.001 * self.rate * (0.3 + self.size * 1.7) * size_mul;
             self.lengths[i] = len.min(self.lines[i].len() as f32 - 8.0);
@@ -247,18 +292,30 @@ impl Effect for Reverb {
             "mod" => self.modulation = v,
             "width" => self.width = v,
             "mix" => self.mix = v,
-            "dr_1" => self.decay_mul[0] = v,
-            "dr_2" => self.decay_mul[1] = v,
-            "dr_3" => self.decay_mul[2] = v,
-            "dr_4" => self.decay_mul[3] = v,
-            "dr_5" => self.decay_mul[4] = v,
-            "dr_6" => self.decay_mul[5] = v,
-            "dr_f1" => self.dr_freqs[0] = v,
-            "dr_f2" => self.dr_freqs[1] = v,
-            "dr_f3" => self.dr_freqs[2] = v,
-            "dr_f4" => self.dr_freqs[3] = v,
-            "dr_f5" => self.dr_freqs[4] = v,
-            "dr_f6" => self.dr_freqs[5] = v,
+            "dr_1" => self.dr[0].mul = v,
+            "dr_2" => self.dr[1].mul = v,
+            "dr_3" => self.dr[2].mul = v,
+            "dr_4" => self.dr[3].mul = v,
+            "dr_5" => self.dr[4].mul = v,
+            "dr_6" => self.dr[5].mul = v,
+            "dr_f1" => self.dr[0].freq = v,
+            "dr_t1" => self.dr[0].shape = (v.round().max(0.0) as usize).min(DR_SHAPES.len() - 1),
+            "dr_q1" => self.dr[0].q = v,
+            "dr_f2" => self.dr[1].freq = v,
+            "dr_t2" => self.dr[1].shape = (v.round().max(0.0) as usize).min(DR_SHAPES.len() - 1),
+            "dr_q2" => self.dr[1].q = v,
+            "dr_f3" => self.dr[2].freq = v,
+            "dr_t3" => self.dr[2].shape = (v.round().max(0.0) as usize).min(DR_SHAPES.len() - 1),
+            "dr_q3" => self.dr[2].q = v,
+            "dr_f4" => self.dr[3].freq = v,
+            "dr_t4" => self.dr[3].shape = (v.round().max(0.0) as usize).min(DR_SHAPES.len() - 1),
+            "dr_q4" => self.dr[3].q = v,
+            "dr_f5" => self.dr[4].freq = v,
+            "dr_t5" => self.dr[4].shape = (v.round().max(0.0) as usize).min(DR_SHAPES.len() - 1),
+            "dr_q5" => self.dr[4].q = v,
+            "dr_f6" => self.dr[5].freq = v,
+            "dr_t6" => self.dr[5].shape = (v.round().max(0.0) as usize).min(DR_SHAPES.len() - 1),
+            "dr_q6" => self.dr[5].q = v,
             _ => return,
         }
         self.update();
@@ -298,12 +355,12 @@ impl Effect for Reverb {
             for k in 0..LINES {
                 let m = self.lfos[k].next(0.3 + k as f32 * 0.07, self.rate, LfoShape::Sine) * mod_depth;
                 let x = self.damp[k].process(self.lines[k].read(self.lengths[k] + m));
-                // Decay-rate EQ: each of the six bands gets its own feedback gain (bands = differences of
+                // Decay-rate EQ: each split band gets its own feedback gain (bands = differences of
                 // one-pole low-passes, so they sum back to the input).
                 let mut prev = 0.0;
                 let mut acc = 0.0;
-                for b in 0..DR_BANDS {
-                    let lp = if b < DR_BANDS - 1 { self.splits[k][b].process(x) } else { x };
+                for b in 0..DR_SPLIT {
+                    let lp = if b < DR_SPLIT - 1 { self.splits[k][b].process(x) } else { x };
                     acc += (lp - prev) * self.gains_dr[k][b];
                     prev = lp;
                 }
@@ -448,13 +505,23 @@ mod tests {
         let flat = tail(&[]);
         let warm = tail(&[("dr_1", 4.0), ("dr_2", 2.0), ("dr_4", 0.5), ("dr_5", 0.25)]);
         assert!(warm > flat * 4.0, "{flat} → {warm}");
-        // Free nodes (Pro-R): the same ×4 point moved from 80 Hz up to 6 kHz lengthens the top instead.
-        let low_node = tail(&[("dr_1", 4.0)]);
-        let moved = tail(&[("dr_1", 4.0), ("dr_f1", 6000.0)]);
+        // Free nodes (Pro-R): the same ×4 bell moved from 300 Hz up to 6 kHz lengthens the top instead.
+        let low_node = tail(&[("dr_2", 4.0)]);
+        let moved = tail(&[("dr_2", 4.0), ("dr_f2", 6000.0)]);
         assert!(moved < low_node * 0.5 && moved < flat, "{low_node} → {moved} (flat {flat})");
-        // Points keep their order and spacing whatever the values.
-        let (p, s) = super::dr_layout([5000.0, 100.0, 100.0, 20000.0, 900.0, 300.0]);
-        assert!(p.windows(2).all(|w| w[1] >= w[0] * 1.25) && s.iter().zip(p.iter()).all(|(x, f)| x > f));
+        // Shapes: a ×4 low shelf at 1 kHz lengthens everything below it; a bell only around it; a notch
+        // only a narrow region; a high shelf everything above.
+        let b = |shape: usize, q: f32| [super::DrBand { shape, freq: 1000.0, mul: 4.0, q }];
+        let c = super::dr_curve;
+        assert!(c(&b(1, 1.0), 100.0) > 3.8 && c(&b(1, 1.0), 10000.0) < 1.1, "low shelf");
+        assert!(c(&b(2, 1.0), 100.0) < 1.1 && c(&b(2, 1.0), 10000.0) > 3.8, "high shelf");
+        assert!(c(&b(0, 1.0), 1000.0) > 3.9 && c(&b(0, 1.0), 2000.0) > 1.5 && c(&b(0, 1.0), 8000.0) < 1.2, "bell");
+        assert!(c(&b(3, 1.0), 1000.0) > 3.9 && c(&b(3, 1.0), 1500.0) < c(&b(0, 1.0), 1500.0) * 0.8, "notch is narrower");
+        // Q narrows a bell.
+        assert!(c(&b(0, 4.0), 1500.0) < c(&b(0, 1.0), 1500.0));
+        // Shelf in the engine: a ×4 low shelf keeps the low end of the tail longer.
+        let shelf = tail(&[("dr_1", 4.0), ("dr_f1", 400.0)]);
+        assert!(shelf > flat * 2.0, "{flat} → {shelf}");
     }
 
     #[test]

@@ -341,8 +341,41 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                     out.push((format!("dr_f{k}"), dragon_engine::effects::reverb::DR_FREQS[k - 1]));
                 }
             }
-            if (1..=dragon_engine::effects::reverb::DR_BANDS).any(|k| node(k).distance(pos) < 12.0) {
+            let hover = (1..=dragon_engine::effects::reverb::DR_BANDS).find(|k| node(*k).distance(pos) < 12.0);
+            if hover.is_some() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+            }
+            // Wheel over a band: its Q (width), like Pro-R.
+            if let Some(k) = hover {
+                let s = ui.input(|i| i.raw_scroll_delta.y);
+                if s != 0.0 {
+                    let q = h.v(&format!("dr_q{k}"));
+                    out.push((format!("dr_q{k}"), (q * if s > 0.0 { 1.15 } else { 1.0 / 1.15 }).clamp(0.3, 6.0)));
+                }
+            }
+            // Right-click a band: its shape.
+            let menu_id = resp.id.with("dr.menu");
+            if resp.secondary_clicked() {
+                ui.data_mut(|d| d.insert_temp(menu_id, hover.unwrap_or(0)));
+            }
+            let menu_band: usize = ui.data(|d| d.get_temp(menu_id)).unwrap_or(0);
+            if menu_band > 0 {
+                let k = menu_band;
+                resp.context_menu(|ui| {
+                    ui.label(egui::RichText::new(format!("Decay band {k}")).strong());
+                    let cur = h.v(&format!("dr_t{k}")).round() as usize;
+                    for (t, name) in dragon_engine::effects::reverb::DR_SHAPES.iter().enumerate() {
+                        if ui.selectable_label(t == cur, *name).clicked() {
+                            out.push((format!("dr_t{k}"), t as f32));
+                            ui.close_menu();
+                        }
+                    }
+                    if ui.button("Reset band").clicked() {
+                        out.push((format!("dr_{k}"), 1.0));
+                        out.push((format!("dr_q{k}"), 1.0));
+                        ui.close_menu();
+                    }
+                });
             }
         }
         "multisat" => {
@@ -962,30 +995,31 @@ fn delay(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 /// Where the reverb's decay-rate curve sits (top right of the display).
 fn decay_rect(r: Rect) -> Rect {
     let pr = plot(r);
-    Rect::from_min_size(Pos2::new(pr.right() - pr.width() * 0.38, pr.top() + 4.0), Vec2::new(pr.width() * 0.38 - 4.0, pr.height() * 0.48))
+    // Below the caption line at the top right.
+    Rect::from_min_size(Pos2::new(pr.right() - pr.width() * 0.38, pr.top() + 18.0), Vec2::new(pr.width() * 0.38 - 4.0, pr.height() * 0.48))
 }
 
 const DR_RANGE: f32 = 2.0; // log2: ×0.25 … ×4
 
-/// Pro-R style decay-rate curve: six free nodes (frequency and ×0.25 … ×4 of the decay time).
+/// Pro-R style decay-rate EQ: six bands (bell, shelves, notch) with free frequency, ×0.25 … ×4 of the
+/// decay time and Q (wheel); right-click a band for its shape.
 fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(12, 14, 18, 220));
     p.rect_stroke(r, 4.0, Stroke::new(1.0_f32, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
     let y_of = |m: f32| r.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (r.height() * 0.4);
     p.line_segment([Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
-    let mut pts: Vec<Pos2> = (1..=dragon_engine::effects::reverb::DR_BANDS).map(|k| Pos2::new(fx(r, h.v(&format!("dr_f{k}"))), y_of(h.v(&format!("dr_{k}"))))).collect();
-    pts.sort_by(|a, b| a.x.total_cmp(&b.x));
-    let mut line = vec![Pos2::new(r.left(), pts[0].y)];
-    line.extend(pts.iter().copied());
-    line.push(Pos2::new(r.right(), pts[pts.len() - 1].y));
+    // The curve the reverb uses (sum of the bands' shapes), and a dot per band at its value.
+    let bands = dragon_engine::effects::reverb::dr_bands(|k| h.v(k));
+    let line: Vec<Pos2> = (0..=120).map(|i| r.left() + r.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(dragon_engine::effects::reverb::dr_curve(&bands, freq_at(r, x))))).collect();
     p.add(Shape::line(line, Stroke::new(1.5_f32, col)));
-    for c in &pts {
-        p.circle_filled(*c, 4.0, col);
-        p.circle_stroke(*c, 4.0, Stroke::new(1.0_f32, Color32::WHITE));
+    for b in &bands {
+        let c = Pos2::new(fx(r, b.freq), y_of(b.mul));
+        p.circle_filled(c, 4.0, col);
+        p.circle_stroke(c, 4.0, Stroke::new(1.0_f32, Color32::WHITE));
     }
     p.text(r.left_top() + Vec2::new(4.0, 2.0), egui::Align2::LEFT_TOP, "DECAY RATE", egui::FontId::proportional(8.5), theme::TEXT_DIM);
-    p.text(Pos2::new(r.left() + 4.0, y_of(4.0)), egui::Align2::LEFT_CENTER, "×4", egui::FontId::proportional(8.0), theme::TEXT_DIM);
-    p.text(Pos2::new(r.left() + 4.0, y_of(0.25)), egui::Align2::LEFT_CENTER, "×¼", egui::FontId::proportional(8.0), theme::TEXT_DIM);
+    p.text(Pos2::new(r.right() - 4.0, y_of(4.0)), egui::Align2::RIGHT_CENTER, "×4", egui::FontId::proportional(8.0), theme::TEXT_DIM);
+    p.text(Pos2::new(r.right() - 4.0, y_of(0.25)), egui::Align2::RIGHT_CENTER, "×¼", egui::FontId::proportional(8.0), theme::TEXT_DIM);
 }
 
 fn reverb(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -1726,7 +1760,7 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     glow += (target - glow) * if target > glow { 0.05 } else { 0.02 };
     p.ctx().data_mut(|d| d.insert_temp(glow_id, glow));
     let heat = Color32::from_rgb(0xff, 0x8a, 0x3c);
-    for k in (1..=dragon_engine::effects::reverb::DR_BANDS).rev() {
+    for k in (1..=5).rev() {
         p.circle_filled(Pos2::new(vx, glass.center().y + 10.0), 14.0 + k as f32 * 6.0, heat.gamma_multiply(0.04 * glow));
     }
     p.rect_filled(glass, egui::CornerRadius { nw: 26, ne: 26, sw: 6, se: 6 }, Color32::from_rgba_unmultiplied(0x90, 0xa0, 0xb0, 22));
