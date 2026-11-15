@@ -18,8 +18,10 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
         let title = effect_title(st, m, i);
         // A stock editor fits its content; full screen fills the whole app window (and the app goes full screen).
         let full = st.ui.fx_fullscreen == Some((m, i));
-        let mut w = egui::Window::new(title).id(egui::Id::new(("fx", m, i))).open(&mut open).resizable(true).vscroll(true);
-        w = if full { w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false) } else { w.default_width(520.0).max_height(ctx.screen_rect().height() - 60.0) };
+        // Full screen uses a window of its own, so the fitted window keeps its size and place for when you leave.
+        let wid = if full { egui::Id::new(("fx.full", m, i)) } else { egui::Id::new(("fx", m, i)) };
+        let mut w = egui::Window::new(title).id(wid).open(&mut open).resizable(true).vscroll(true);
+        w = if full { w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false) } else { w.default_width(520.0).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0) };
         w.show(ctx, |ui| effect_editor(ui, st, m, i));
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
             st.ui.effect_windows.retain(|w| *w != (m, i));
@@ -318,10 +320,8 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let brand = if fx_name.starts_with("Dragon") || ins.plugin.is_some() { fx_name.clone() } else { format!("Dragon {fx_name}") };
     egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let (bar, _) = ui.allocate_exact_size(egui::vec2(4.0, 22.0), egui::Sense::hover());
-            ui.painter().rect_filled(bar, 2.0, if ins.enabled { ccol } else { theme::GRID_BAR });
-            ui.label(RichText::new(&brand).size(15.0).strong().color(theme::TEXT));
-            ui.label(RichText::new(format!("|  {cat}")).size(11.0).color(theme::TEXT_DIM));
+            // The controls are laid out first (from the right); the name takes what is left and is shortened
+            // with "…" in narrow windows instead of running under the buttons.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Power button: a ring with a stem, orange when on.
                 let (pr, presp) = ui.allocate_exact_size(egui::Vec2::splat(24.0), egui::Sense::click());
@@ -369,6 +369,13 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                 if gr > 0.05 {
                     ui.label(RichText::new(format!("GR −{gr:.1} dB")).color(theme::WARN).monospace());
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let (bar, _) = ui.allocate_exact_size(egui::vec2(4.0, 22.0), egui::Sense::hover());
+                    ui.painter().rect_filled(bar, 2.0, if ins.enabled { ccol } else { theme::GRID_BAR });
+                    let name = ui.add(egui::Label::new(RichText::new(&brand).size(15.0).strong().color(theme::TEXT)).truncate());
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new(("fx.header.name", m, i)), name.rect));
+                    ui.add(egui::Label::new(RichText::new(format!("|  {cat}")).size(11.0).color(theme::TEXT_DIM)).truncate());
+                });
             });
         });
     });

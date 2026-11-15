@@ -1273,6 +1273,20 @@ fn chrono_like_stamp() -> String {
     format!("{secs}")
 }
 
+impl State {
+    /// Adds a stock effect to the master and opens its editor.
+    pub fn open_effect_on_master(&mut self, id: &str) {
+        let Some(def) = dragon_engine::effects::find(id) else { return };
+        let m = self.session.project.mixer.master.id;
+        let iid = self.session.edit("Add effect", |p| {
+            let iid = p.next_id();
+            p.mixer.master.inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            iid
+        });
+        self.ui.effect_windows.push((m, iid));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

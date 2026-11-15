@@ -59,6 +59,11 @@ fn main() -> eframe::Result {
             if let Some(p) = open {
                 st.open_path(&p);
             }
+            // DRAGON_OPEN_FX=<effect id> adds that stock effect to the master and opens its editor
+            // (used for documentation screenshots).
+            if let Ok(id) = std::env::var("DRAGON_OPEN_FX") {
+                st.open_effect_on_master(&id);
+            }
             Ok(Box::new(app::DragonApp::new(cc, st)))
         }),
     )

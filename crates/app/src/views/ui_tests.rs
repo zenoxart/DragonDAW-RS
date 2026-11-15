@@ -1067,3 +1067,36 @@ fn fl_side_modifier_mouse_shortcuts() {
     crate::commands::execute(&mut h.st, "dragon.rack.mute0", &ctx);
     assert_eq!(muted_before, h.st.session.project.channels.iter().map(|c| c.muted).collect::<Vec<_>>());
 }
+
+/// Every stock effect's editor opens fitted to its content and inside the app window; the full-screen button makes it fill the whole app window, and leaving it restores the fit.
+#[test]
+fn every_stock_editor_fits_its_window_and_goes_full_screen() {
+    let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1400.0, 900.0));
+    for def in dragon_engine::effects::registry() {
+        let mut h = Harness::new();
+        let m = h.st.session.project.mixer.master.id;
+        let iid = h.st.session.edit("add", |p| {
+            let iid = p.next_id();
+            p.mixer.master.inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            iid
+        });
+        h.st.session.compile(48000.0);
+        h.st.ui.effect_windows.push((m, iid));
+        h.idle(windows_and_pump, 4);
+        let area = egui::Id::new(("fx", m, iid));
+        let r = h.ctx.memory(|mem| mem.area_rect(area)).unwrap_or_else(|| panic!("{} window drawn", def.id));
+        assert!(screen.contains_rect(r), "{}: window {r:?} fits on screen", def.id);
+        assert!(r.width() >= 480.0, "{}: window wide enough for its display ({})", def.id, r.width());
+        let name: Rect = h.ctx.data(|d| d.get_temp(egui::Id::new(("fx.header.name", m, iid)))).expect("header drawn");
+        assert!(r.contains_rect(name) && name.width() > 40.0, "{}: the name stays inside the window, before the buttons", def.id);
+        // Full screen.
+        h.st.ui.fx_fullscreen = Some((m, iid));
+        h.idle(windows_and_pump, 4);
+        let f = h.ctx.memory(|mem| mem.area_rect(egui::Id::new(("fx.full", m, iid)))).unwrap();
+        assert!(f.width() >= screen.width() - 12.0 && f.height() >= screen.height() - 12.0, "{}: full screen fills the app window, got {f:?}", def.id);
+        h.st.ui.fx_fullscreen = None;
+        h.idle(windows_and_pump, 4);
+        let back = h.ctx.memory(|mem| mem.area_rect(area)).unwrap();
+        assert!(screen.contains_rect(back) && (back.size() - r.size()).length() < 2.0, "{}: back to a fitted window {r:?} -> {back:?}", def.id);
+    }
+}
