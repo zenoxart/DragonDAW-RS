@@ -166,10 +166,21 @@ struct CInsert {
 /// A compiled modulation route of a built-in effect.
 struct CMod {
     source: crate::model::ModSource,
+    /// The XY pad value at compile time (live changes come through automation into `Renderer::xy`).
+    xy: f32,
     info: effects::ParamInfo,
     /// The parameter's own value, normalized.
     base: f32,
     depth: f32,
+}
+
+/// The XY pad parameter of an axis.
+pub fn xy_param(axis: u8) -> &'static str {
+    if axis == 0 {
+        "__xy_x"
+    } else {
+        "__xy_y"
+    }
 }
 
 /// Running state of one modulation route (LFO phase, follower level, random step).
@@ -349,7 +360,11 @@ impl Song {
                         .iter()
                         .filter_map(|m| {
                             let info = *def.params.iter().find(|p| p.id == m.target)?;
-                            Some(CMod { source: m.source, info, base: info.normalize(effects::value(def, &ins.params, info.id)), depth: m.depth.clamp(-1.0, 1.0) })
+                            let xy = match m.source {
+                                ModSource::Xy { axis } => ins.params.get(xy_param(axis)).copied().unwrap_or(0.5),
+                                _ => 0.0,
+                            };
+                            Some(CMod { source: m.source, xy, info, base: info.normalize(effects::value(def, &ins.params, info.id)), depth: m.depth.clamp(-1.0, 1.0) })
                         })
                         .collect(),
                     _ => Vec::new(),
@@ -831,6 +846,8 @@ struct Preview {
 pub struct Renderer {
     /// Modulation state per (insert, route).
     mod_runs: HashMap<(Id, usize), ModRun>,
+    /// Automated XY pad values per (insert, axis).
+    xy: HashMap<(Id, u8), f32>,
     pub rate: f32,
     pub song: Arc<Song>,
     pub transport: TransportState,
@@ -897,6 +914,7 @@ impl Renderer {
         let rate = song.rate;
         Renderer {
             mod_runs: HashMap::new(),
+            xy: HashMap::new(),
             rate,
             transport: TransportState { bpm: song.base_bpm, ..Default::default() },
             song,
@@ -1189,6 +1207,9 @@ impl Renderer {
                             send_levels.insert((a, b), v.max(0.0));
                         }
                     }
+                    Target::InsertParam { insert, param, .. } if param.starts_with("__xy") => {
+                        self.xy.insert((*insert, if param.ends_with('y') { 1 } else { 0 }), v);
+                    }
                     Target::InsertParam { insert, param, .. } => {
                         if let Some(&(si, ii)) = song.insert_index.get(insert) {
                             song.strips[si].inserts[ii].effect.lock().unwrap().set_param(param, v);
@@ -1267,6 +1288,7 @@ impl Renderer {
                                     run.env += (x - run.env) * (1.0 - (-dt / tau).exp());
                                     ((gain_to_db(run.env.max(1e-6)) + 60.0) / 60.0).clamp(0.0, 1.0)
                                 }
+                                crate::model::ModSource::Xy { axis } => self.xy.get(&(ins.id, axis)).copied().unwrap_or(m.xy).clamp(0.0, 1.0),
                             };
                             let nv = (m.base + m.depth * v).clamp(0.0, 1.0);
                             e.set_param(m.info.id, m.info.denormalize(nv));
@@ -2018,6 +2040,36 @@ mod tests {
         let win: Vec<f32> = l.chunks(882).skip(2).map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt()).collect();
         let (lo, hi) = win.iter().fold((f32::MAX, 0.0f32), |(a, b), x| (a.min(*x), b.max(*x)));
         assert!(hi > lo * 3.0, "{lo} {hi}");
+    }
+
+    /// The XY pad as a modulation source: its X value moves the target.
+    #[test]
+    fn xy_pad_modulates() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("t.wav");
+        let s: Vec<f32> = (0..44100).map(|i| (i as f32 * 0.06).sin() * 0.25).collect();
+        write_wav(&tone, &s, &s, 44100, BitDepth::Float32, false, false).unwrap();
+        let level = |x: f32| {
+            let mut p = Project::new_default();
+            let id = p.next_id();
+            p.tracks[0].clips.push(Clip { id, name: "t".into(), start: 0.0, length: 2.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: tone.clone(), ..Default::default() }) });
+            let m1 = p.tracks[0].mixer;
+            let ins = p.next_id();
+            p.mixer.get_mut(m1).unwrap().inserts.push(Insert {
+                id: ins,
+                effect: "utility".into(),
+                enabled: true,
+                mix: 1.0,
+                params: [(xy_param(0).to_string(), x)].into_iter().collect(),
+                sidechain: None,
+                plugin: None,
+                preset: String::new(),
+                mods: vec![Modulation { source: ModSource::Xy { axis: 0 }, target: "gain".into(), depth: 0.3 }],
+            });
+            let (l, _) = render_secs(&p, 0.5);
+            l[4410..].iter().fold(0.0f32, |m, v| m.max(v.abs()))
+        };
+        assert!(level(1.0) > level(0.0) * 4.0, "{} {}", level(0.0), level(1.0));
     }
 
     #[test]

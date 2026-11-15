@@ -23,11 +23,13 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mod", "Modulation", 0.0, 1.0, 0.3, ""),
     ParamInfo::lin("width", "Width", 0.0, 1.5, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.25, ""),
-    // Decay-rate EQ (Pro-R): the low and high parts of the tail decay faster or slower than the middle.
-    ParamInfo::log("decay_low", "Decay rate low ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("decay_lo_f", "Decay rate low freq", 50.0, 1000.0, 250.0, "Hz"),
-    ParamInfo::log("decay_high", "Decay rate high ×", 0.25, 4.0, 1.0, ""),
-    ParamInfo::log("decay_hi_f", "Decay rate high freq", 1000.0, 16000.0, 4000.0, "Hz"),
+    // Decay-rate EQ (Pro-R): a curve of five points; each part of the tail decays that many times longer
+    // (or shorter) than the decay time. Drag the points on the display.
+    ParamInfo::log("dr_1", "Decay rate 80 Hz ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_2", "Decay rate 300 Hz ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_3", "Decay rate 1.2 kHz ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_4", "Decay rate 4.8 kHz ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_5", "Decay rate 12 kHz ×", 0.25, 4.0, 1.0, ""),
     // Early reflections.
     ParamInfo::lin("early", "Early level", 0.0, 1.0, 0.4, ""),
     ParamInfo::lin("er_size", "Early size", 0.2, 2.0, 1.0, ""),
@@ -94,18 +96,22 @@ impl PartEq {
     }
 }
 
+/// The decay-rate curve's points (Hz) and the crossovers between them.
+pub const DR_FREQS: [f32; 5] = [80.0, 300.0, 1200.0, 4800.0, 12000.0];
+const DR_BANDS: usize = 5;
+const DR_SPLITS: [f32; DR_BANDS - 1] = [155.0, 600.0, 2400.0, 7600.0];
+
 pub struct Reverb {
     rate: f32,
     pre: [DelayLine; 2],
     early: [DelayLine; 2],
     lines: Vec<DelayLine>,
     damp: [OnePole; LINES],
-    split_lo: [OnePole; LINES],
-    split_hi: [OnePole; LINES],
-    /// Feedback gains of the low, middle and high parts per line.
-    gains3: [[f32; 3]; LINES],
-    decay_mul: [f32; 2],
-    decay_f: [f32; 2],
+    /// Four crossovers per line split the tail into the five decay-rate bands.
+    splits: [[OnePole; DR_BANDS - 1]; LINES],
+    /// Feedback gain of each decay-rate band per line.
+    gains_dr: [[f32; DR_BANDS]; LINES],
+    decay_mul: [f32; DR_BANDS],
     lowcut: [OnePole; 2],
     lfos: Vec<Lfo>,
     lengths: [f32; LINES],
@@ -137,11 +143,9 @@ impl Reverb {
             early: [DelayLine::new((rate * 0.16) as usize), DelayLine::new((rate * 0.16) as usize)],
             lines: (0..LINES).map(|_| DelayLine::new(max)).collect(),
             damp: [OnePole::new(7000.0, rate); LINES],
-            split_lo: [OnePole::new(250.0, rate); LINES],
-            split_hi: [OnePole::new(4000.0, rate); LINES],
-            gains3: [[0.0; 3]; LINES],
-            decay_mul: [1.0, 1.0],
-            decay_f: [250.0, 4000.0],
+            splits: [std::array::from_fn(|k| OnePole::new(DR_SPLITS[k], rate)); LINES],
+            gains_dr: [[0.0; DR_BANDS]; LINES],
+            decay_mul: [1.0; DR_BANDS],
             lowcut: [OnePole::new(120.0, rate); 2],
             lfos: (0..LINES).map(|i| Lfo::with_phase(i as f32 / LINES as f32)).collect(),
             lengths: [0.0; LINES],
@@ -179,9 +183,10 @@ impl Reverb {
             // g = 10^(−3·len/(RT60·rate)) gives RT60 decay.
             self.gains[i] = 10f32.powf(-3.0 * self.lengths[i] / (self.decay.max(0.05) * self.rate));
             let g = |mul: f32| 10f32.powf(-3.0 * self.lengths[i] / ((self.decay * mul).max(0.05) * self.rate));
-            self.gains3[i] = [g(self.decay_mul[0]), self.gains[i], g(self.decay_mul[1])];
-            self.split_lo[i].set(self.decay_f[0], self.rate);
-            self.split_hi[i].set(self.decay_f[1].min(self.rate * 0.45), self.rate);
+            self.gains_dr[i] = std::array::from_fn(|k| g(self.decay_mul[k]));
+            for (k, f) in self.splits[i].iter_mut().enumerate() {
+                f.set(DR_SPLITS[k].min(self.rate * 0.45), self.rate);
+            }
             self.damp[i].set((self.damping * bright).min(self.rate * 0.45), self.rate);
         }
         for f in &mut self.lowcut {
@@ -216,10 +221,11 @@ impl Effect for Reverb {
             "mod" => self.modulation = v,
             "width" => self.width = v,
             "mix" => self.mix = v,
-            "decay_low" => self.decay_mul[0] = v,
-            "decay_high" => self.decay_mul[1] = v,
-            "decay_lo_f" => self.decay_f[0] = v,
-            "decay_hi_f" => self.decay_f[1] = v,
+            "dr_1" => self.decay_mul[0] = v,
+            "dr_2" => self.decay_mul[1] = v,
+            "dr_3" => self.decay_mul[2] = v,
+            "dr_4" => self.decay_mul[3] = v,
+            "dr_5" => self.decay_mul[4] = v,
             _ => return,
         }
         self.update();
@@ -227,7 +233,7 @@ impl Effect for Reverb {
 
     fn reset(&mut self) {
         self.pre.iter_mut().chain(self.early.iter_mut()).chain(self.lines.iter_mut()).for_each(DelayLine::clear);
-        self.damp.iter_mut().chain(self.lowcut.iter_mut()).chain(self.split_lo.iter_mut()).chain(self.split_hi.iter_mut()).for_each(OnePole::reset);
+        self.damp.iter_mut().chain(self.lowcut.iter_mut()).chain(self.splits.iter_mut().flatten()).for_each(OnePole::reset);
         self.early_eq.reset();
         self.late_eq.reset();
     }
@@ -259,12 +265,16 @@ impl Effect for Reverb {
             for k in 0..LINES {
                 let m = self.lfos[k].next(0.3 + k as f32 * 0.07, self.rate, LfoShape::Sine) * mod_depth;
                 let x = self.damp[k].process(self.lines[k].read(self.lengths[k] + m));
-                // Decay-rate EQ: low, middle and high parts get their own feedback gain.
-                let lo = self.split_lo[k].process(x);
-                let hi = x - self.split_hi[k].process(x);
-                let mid = x - lo - hi;
-                let [gl, gm, gh] = self.gains3[k];
-                outs[k] = lo * gl + mid * gm + hi * gh;
+                // Decay-rate EQ: each of the five bands gets its own feedback gain (bands = differences of
+                // one-pole low-passes, so they sum back to the input).
+                let mut prev = 0.0;
+                let mut acc = 0.0;
+                for b in 0..DR_BANDS {
+                    let lp = if b < DR_BANDS - 1 { self.splits[k][b].process(x) } else { x };
+                    acc += (lp - prev) * self.gains_dr[k][b];
+                    prev = lp;
+                }
+                outs[k] = acc;
             }
             // Householder mix: y = x − 2/N·Σx.
             let sum: f32 = outs.iter().sum::<f32>() * (2.0 / LINES as f32);
@@ -403,7 +413,7 @@ mod tests {
             low / high.max(1e-12)
         };
         let flat = tail(&[]);
-        let warm = tail(&[("decay_low", 4.0), ("decay_high", 0.25)]);
+        let warm = tail(&[("dr_1", 4.0), ("dr_2", 2.0), ("dr_4", 0.5), ("dr_5", 0.25)]);
         assert!(warm > flat * 4.0, "{flat} → {warm}");
     }
 

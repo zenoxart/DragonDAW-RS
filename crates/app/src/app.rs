@@ -101,6 +101,23 @@ impl DragonApp {
         if typing && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.st.toggle_play();
         }
+        // FL's numeric-pad * and / (egui sees them as typed characters): Alt jumps between markers,
+        // without Alt in song mode they step a bar.
+        if !text_focus && !typing {
+            let typed: Vec<(String, bool)> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some((t.clone(), i.modifiers.alt)) } else { None }).collect());
+            for (t, alt) in typed {
+                let cmd = match (t.as_str(), alt) {
+                    ("*", true) => Some("dragon.pl.marker_next"),
+                    ("/", true) => Some("dragon.pl.marker_prev"),
+                    ("*", false) => Some("dragon.transport.next_bar"),
+                    ("/", false) => Some("dragon.transport.prev_bar"),
+                    _ => None,
+                };
+                if let Some(c) = cmd {
+                    self.st.ctx.run(c, serde_json::Value::Null);
+                }
+            }
+        }
         // Dropped files.
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         let at = ctx.input(|i| i.pointer.latest_pos());

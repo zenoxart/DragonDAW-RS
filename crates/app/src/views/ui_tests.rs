@@ -920,3 +920,76 @@ fn fl_marker_jumps_and_resize_left() {
     run(&mut h, "pr.wave_helper");
     assert!(h.st.ui.wave_helper);
 }
+
+/// Ctrl+I: in the piano roll it writes the last touched parameter into automation at the playhead,
+/// elsewhere it arms "wait for input"; Shift+M in the piano roll selects groups at random when nothing
+/// selected is muted; numeric-pad * / steps bars.
+#[test]
+fn fl_ctrl_i_shift_m_and_bars() {
+    let mut h = Harness::new();
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        assert!(crate::commands::execute(&mut h.st, &format!("dragon.{id}"), &ctx), "{id}");
+    };
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    run(&mut h, "edit.insert_ctrl_value");
+    assert!(h.st.ui.wait_input);
+    run(&mut h, "transport.record");
+    assert!(h.st.ui.waiting_record, "record waits for a note");
+    run(&mut h, "transport.record");
+    assert!(!h.st.ui.waiting_record);
+    // Last touched: the master limiter's ceiling.
+    let master = h.st.session.project.mixer.master.id;
+    let lim = h.st.session.project.mixer.master.inserts[0].id;
+    h.st.session.edit("v", |p| {
+        p.mixer.master.inserts[0].params.insert("ceiling".into(), -2.0);
+    });
+    h.st.ui.last_target = Some(Target::InsertParam { channel: master, insert: lim, param: "ceiling".into() });
+    h.st.ui.editor = crate::state::Editor::PianoRoll;
+    run(&mut h, "edit.insert_ctrl_value");
+    let lane = h.st.session.project.automation.iter().find(|l| matches!(&l.target, Target::InsertParam { param, .. } if param == "ceiling")).expect("lane");
+    assert_eq!(lane.points.len(), 1);
+    assert_eq!(lane.points[0].value, -2.0);
+    // Shift+M: four single notes, none muted → a random subset of them gets selected.
+    let ch = h.st.session.project.channels[0].id;
+    let pat = h.st.ui.pattern;
+    h.st.session.edit("n", |p| p.pattern_mut(pat).unwrap().channels.entry(ch).or_default().notes = (0..16).map(|k| Note { pitch: 60, start: k * PPQ, length: PPQ, ..Default::default() }).collect());
+    h.st.ui.piano_channel = Some(ch);
+    h.st.ui.notes = vec![0];
+    run(&mut h, "edit.unmute_sel");
+    assert!(h.st.ui.notes.len() < 16, "a random subset");
+    run(&mut h, "transport.next_bar");
+}
+
+/// Slice tool right-drag (FL: slice and delete the smaller piece): a cut at 1 beat into a 4-beat note
+/// keeps only the 3-beat part; in the playlist the same on clips.
+#[test]
+fn knife_right_drag_deletes_the_smaller_piece() {
+    let a = Note { pitch: 60, start: 0, length: PPQ * 4, velocity: 0.8, ..Default::default() };
+    let mut h = piano_with_notes(&[a]);
+    h.st.ui.tool = Tool::Slice;
+    let from = h.pr_pos(PPQ as f64 * 1.0, 62);
+    let to = h.pr_pos(PPQ as f64 * 1.0, 58);
+    h.drag(piano, from, to, PointerButton::Secondary, Modifiers::NONE);
+    let n = h.notes();
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert_eq!((n[0].start, n[0].length), (PPQ, PPQ * 3));
+
+    let mut h = Harness::new();
+    let pat = h.st.session.project.patterns[0].id;
+    let t0 = h.st.session.project.tracks[0].id;
+    h.st.session.edit("setup", |p| {
+        for t in &mut p.tracks {
+            t.clips.clear();
+        }
+        super::playlist::place_pattern(p, t0, pat, 0.0, 8.0);
+    });
+    h.st.ui.tool = Tool::Slice;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let x = t.left() + (6.0 - h.st.ui.pl_x as f32) * h.st.ui.playlist_zoom;
+    let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
+    h.drag(playlist, Pos2::new(x, t.top() + 4.0), Pos2::new(x + 1.0, t.top() + row_h - 4.0), PointerButton::Secondary, Modifiers::NONE);
+    let parts: Vec<(f64, f64)> = h.st.session.project.track(t0).unwrap().clips.iter().map(|c| (c.start, c.length)).collect();
+    assert_eq!(parts, vec![(0.0, 6.0)], "the 2-beat piece is gone");
+}

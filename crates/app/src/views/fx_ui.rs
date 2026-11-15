@@ -129,7 +129,10 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "compressor" | "limiter" | "gate" | "deesser" | "multiband" => dynamics(&p, r, h, col),
         "transient" => transient(&p, r, h, col),
         "delay" => delay(&p, r, h, col),
-        "reverb" => reverb(&p, r, h, col),
+        "reverb" => {
+            reverb(&p, r, h, col);
+            decay_curve(&p, decay_rect(r), h, col);
+        }
         "saturator" | "bitcrusher" => shaper(&p, r, h, col),
         "multisat" => multisat(&p, r, h, col),
         "chorus" | "flanger" | "phaser" | "tremolo" => lfo(&p, r, h, col),
@@ -314,6 +317,30 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                         ui.close_menu();
                     }
                 });
+            }
+        }
+        "reverb" => {
+            use dragon_engine::effects::reverb::DR_FREQS;
+            let dr = decay_rect(r);
+            let y_of = |m: f32| dr.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (dr.height() * 0.4);
+            let node = |k: usize| Pos2::new(fx(dr, DR_FREQS[k - 1]), y_of(h.v(&format!("dr_{k}"))));
+            if resp.drag_started() {
+                let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+                let hit = (1..=5).min_by(|a, b| node(*a).distance(origin).total_cmp(&node(*b).distance(origin))).filter(|k| node(*k).distance(origin) < 12.0);
+                ui.data_mut(|d| d.insert_temp(grab, hit.unwrap_or(0)));
+            }
+            let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
+            if resp.dragged() && held > 0 {
+                let u = ((dr.center().y - pos.y) / (dr.height() * 0.4)).clamp(-1.0, 1.0);
+                out.push((format!("dr_{held}"), 2f32.powf(u * DR_RANGE)));
+            }
+            if resp.double_clicked() {
+                if let Some(k) = (1..=5).find(|k| node(*k).distance(pos) < 12.0) {
+                    out.push((format!("dr_{k}"), 1.0));
+                }
+            }
+            if (1..=5).any(|k| node(k).distance(pos) < 12.0) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
             }
         }
         "multisat" => {
@@ -878,6 +905,35 @@ fn delay(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         egui::FontId::proportional(10.5),
         theme::TEXT,
     );
+}
+
+/// Where the reverb's decay-rate curve sits (top right of the display).
+fn decay_rect(r: Rect) -> Rect {
+    let pr = plot(r);
+    Rect::from_min_size(Pos2::new(pr.right() - pr.width() * 0.38, pr.top() + 4.0), Vec2::new(pr.width() * 0.38 - 4.0, pr.height() * 0.48))
+}
+
+const DR_RANGE: f32 = 2.0; // log2: ×0.25 … ×4
+
+/// Pro-R style decay-rate curve: five draggable points (×0.25 … ×4 of the decay time per frequency).
+fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::reverb::DR_FREQS;
+    p.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(12, 14, 18, 220));
+    p.rect_stroke(r, 4.0, Stroke::new(1.0_f32, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
+    let y_of = |m: f32| r.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (r.height() * 0.4);
+    p.line_segment([Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
+    let pts: Vec<Pos2> = (1..=5).map(|k| Pos2::new(fx(r, DR_FREQS[k - 1]), y_of(h.v(&format!("dr_{k}"))))).collect();
+    let mut line = vec![Pos2::new(r.left(), pts[0].y)];
+    line.extend(pts.iter().copied());
+    line.push(Pos2::new(r.right(), pts[4].y));
+    p.add(Shape::line(line, Stroke::new(1.5_f32, col)));
+    for c in &pts {
+        p.circle_filled(*c, 4.0, col);
+        p.circle_stroke(*c, 4.0, Stroke::new(1.0_f32, Color32::WHITE));
+    }
+    p.text(r.left_top() + Vec2::new(4.0, 2.0), egui::Align2::LEFT_TOP, "DECAY RATE", egui::FontId::proportional(8.5), theme::TEXT_DIM);
+    p.text(Pos2::new(r.left() + 4.0, y_of(4.0)), egui::Align2::LEFT_CENTER, "×4", egui::FontId::proportional(8.0), theme::TEXT_DIM);
+    p.text(Pos2::new(r.left() + 4.0, y_of(0.25)), egui::Align2::LEFT_CENTER, "×¼", egui::FontId::proportional(8.0), theme::TEXT_DIM);
 }
 
 fn reverb(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {

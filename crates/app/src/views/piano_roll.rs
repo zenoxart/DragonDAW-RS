@@ -44,6 +44,8 @@ pub enum Drag {
     /// is cut where the line passes its row (snapped to the grid; Alt = no snap).
     Knife {
         from: Pos2,
+        /// Right-drag (FL Right-Shift+right-click): the smaller piece of each cut note is deleted.
+        delete_small: bool,
     },
     /// FL's zoom tool: drag a box to zoom into it.
     Zoom {
@@ -428,6 +430,12 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
+    // Slice tool, right-drag: slice and delete the smaller piece (FL Right-Shift+right-click).
+    if tool == Tool::Slice && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pr_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
+        if let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|p| grid.contains(*p)) {
+            st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: true });
+        }
+    }
     if resp.drag_started_by(egui::PointerButton::Primary) && st.ui.pr_drag.is_none() {
         // Hit-test where the button went down, not where the drag threshold was crossed.
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()) {
@@ -467,7 +475,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     }
                     _ if tool == Tool::Zoom => st.ui.pr_drag = Some(Drag::Zoom { from: pos }),
                     _ if tool == Tool::Playback => {}
-                    _ if tool == Tool::Slice => st.ui.pr_drag = Some(Drag::Knife { from: pos }),
+                    _ if tool == Tool::Slice => st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: false }),
                     None if tool == Tool::Select || ctrl => st.ui.pr_drag = Some(Drag::Select { from: pos }),
                     None if tool == Tool::Paint => st.ui.pr_drag = Some(Drag::Paint { last_tick: u32::MAX }),
                     None if tool == Tool::Draw => {
@@ -540,7 +548,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 p.rect(r, 0.0, theme::ACCENT_2.gamma_multiply(0.12), Stroke::new(1.0_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
                 st.ui.notes = note_rects.iter().enumerate().filter(|(_, nr)| nr.intersects(r)).map(|(i, _)| i).collect();
             }
-            Drag::Knife { from } => {
+            Drag::Knife { from, delete_small } => {
                 let alt = ui.input(|i| i.modifiers.alt);
                 let snapx = |x: f32| if alt { x } else { x_of(snap_tick(tick_of(x))) };
                 let (a, b) = (Pos2::new(snapx(from.x), from.y), Pos2::new(snapx(pos.x), pos.y));
@@ -573,10 +581,23 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     st.session.edit("Slice notes", |p| {
                         if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
                             let mut rest = Vec::new();
+                            let mut drop = Vec::new();
                             for (i, tick) in &cuts {
                                 if let Some(r) = c.notes.get_mut(*i).and_then(|n| edit::split_note(n, *tick)) {
-                                    rest.push(r);
+                                    if delete_small {
+                                        // Keep the longer piece.
+                                        if r.length > c.notes[*i].length {
+                                            drop.push(*i);
+                                            rest.push(r);
+                                        }
+                                    } else {
+                                        rest.push(r);
+                                    }
                                 }
+                            }
+                            drop.sort_unstable();
+                            for i in drop.into_iter().rev() {
+                                c.notes.remove(i);
                             }
                             c.notes.extend(rest);
                         }

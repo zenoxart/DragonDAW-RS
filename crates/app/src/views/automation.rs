@@ -21,6 +21,25 @@ pub fn add_lane(st: &mut State, t: Target) {
     st.ctx.open("dragon.automation", None);
 }
 
+/// FL Ctrl+I: writes the target's current value as an automation point at the playhead (the lane is made
+/// when there is none). Returns false when the value is unknown.
+pub fn insert_current_value(st: &mut State, t: Target) -> bool {
+    let Some(v) = current_value(&st.session.project, &t) else { return false };
+    let beat = st.beat_now();
+    st.session.edit("Insert controller value", |p| {
+        if !p.automation.iter().any(|l| l.target == t) {
+            let id = p.next_id();
+            p.automation.push(AutomationLane { id, target: t.clone(), points: Vec::new(), mode: AutomationMode::Read, visible: true });
+        }
+        if let Some(l) = p.automation.iter_mut().find(|l| l.target == t) {
+            l.points.retain(|q| (q.beat - beat).abs() > 1e-6);
+            l.points.push(AutoPoint { beat, value: v, tension: 0.0 });
+            l.points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        }
+    });
+    true
+}
+
 fn current_value(p: &Project, t: &Target) -> Option<f32> {
     Some(match t {
         Target::MixerVolume(id) => p.mixer.get(*id)?.volume,

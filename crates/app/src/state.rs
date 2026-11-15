@@ -184,6 +184,12 @@ pub struct UiState {
     pub resize_left: bool,
     /// Piano roll: the song's audio drawn under the notes (FL Alt+N).
     pub wave_helper: bool,
+    /// The parameter touched last (FL Ctrl+I inserts its value into automation).
+    pub last_target: Option<dragon_engine::model::Target>,
+    /// FL Ctrl+I (outside the piano roll): recording waits for the first played note.
+    pub wait_input: bool,
+    /// Record was pressed with wait-for-input on and no note has come yet.
+    pub waiting_record: bool,
     /// FL's piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
     pub note_tools: crate::views::note_tools::NoteTools,
     /// The stock effect editor shown full screen (mixer insert, effect).
@@ -257,6 +263,9 @@ impl UiState {
             helpers: true,
             resize_left: true,
             wave_helper: false,
+            last_target: None,
+            wait_input: false,
+            waiting_record: false,
             note_tools: Default::default(),
             fx_fullscreen: None,
             midi_learn: None,
@@ -468,6 +477,11 @@ impl State {
     }
 
     pub fn live_note(&mut self, on: bool, note: u8, velocity: f32) {
+        // FL "wait for input": the first note played starts the armed recording.
+        if on && self.ui.waiting_record {
+            self.ui.waiting_record = false;
+            self.start_recording();
+        }
         let Some(ch) = self.ui.channel.or(self.ui.piano_channel) else { return };
         self.audio.send(Command::Live(if on { LiveEvent::NoteOn { channel: ch, note, velocity } } else { LiveEvent::NoteOff { channel: ch, note } }));
         let t = self.audio.transport();

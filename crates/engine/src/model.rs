@@ -660,6 +660,9 @@ pub enum ModSource {
     Lfo { rate: f32, shape: u8, sync: bool },
     /// An envelope follower on the effect's input: attack / release in ms, gain in dB.
     Envelope { attack: f32, release: f32, gain: f32 },
+    /// One axis of the insert's XY pad (0 = X, 1 = Y), stored in its params as `__xy_x` / `__xy_y`
+    /// (automatable and MIDI-learnable like any parameter). Unipolar 0 … 1.
+    Xy { axis: u8 },
 }
 
 /// One modulation route: a source moving a parameter by `depth` (−1 … 1 of its range) around its value.

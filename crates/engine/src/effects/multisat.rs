@@ -7,6 +7,7 @@ use crate::dsp::{db_to_gain, Biquad, BiquadKind, Follower};
 
 pub const SAT_STYLES: &[&str] = &["Clean tube", "Warm tube", "Tape", "Transformer", "Soft clip", "Hard clip", "Foldback", "Rectify"];
 pub const BANDS: usize = 4;
+const FB_LEN: usize = 4096;
 
 macro_rules! band {
     ($n:literal) => {
@@ -17,10 +18,12 @@ macro_rules! band {
             ParamInfo::lin(concat!("b", $n, "_tone"), concat!("Band ", $n, " tone"), -12.0, 12.0, 0.0, "dB"),
             ParamInfo::lin(concat!("b", $n, "_level"), concat!("Band ", $n, " level"), -24.0, 12.0, 0.0, "dB"),
             ParamInfo::lin(concat!("b", $n, "_mix"), concat!("Band ", $n, " mix"), 0.0, 100.0, 100.0, "%"),
+            ParamInfo::lin(concat!("b", $n, "_fb"), concat!("Band ", $n, " feedback"), 0.0, 100.0, 0.0, "%"),
+            ParamInfo::log(concat!("b", $n, "_fb_freq"), concat!("Band ", $n, " feedback freq"), 20.0, 5000.0, 200.0, "Hz"),
         ]
     };
 }
-const PB: usize = 6;
+const PB: usize = 8;
 
 const fn params() -> [ParamInfo; 4 + BANDS * PB] {
     let bands: [[ParamInfo; PB]; BANDS] = [band!("1"), band!("2"), band!("3"), band!("4")];
@@ -98,6 +101,9 @@ pub struct MultibandSaturator {
     tone: [[Biquad; BANDS]; 2],
     env: [Follower; BANDS],
     dc: [[(f32, f32); BANDS]; 2],
+    /// Feedback loops (Saturn): a short delay per band and channel, tuned by the feedback frequency.
+    fb: [[Vec<f32>; BANDS]; 2],
+    fb_pos: usize,
     /// Telemetry: per band its level (dB) and its current drive (dB).
     tele: [f32; BANDS * 2],
 }
@@ -111,6 +117,8 @@ impl MultibandSaturator {
             tone: [[Biquad::default(); BANDS]; 2],
             env: std::array::from_fn(|_| Follower::new(5.0, 120.0, rate)),
             dc: [[(0.0, 0.0); BANDS]; 2],
+            fb: std::array::from_fn(|_| std::array::from_fn(|_| vec![0.0; FB_LEN])),
+            fb_pos: 0,
             tele: [0.0; BANDS * 2],
         };
         s.update();
@@ -120,7 +128,7 @@ impl MultibandSaturator {
         all_params().iter().position(|p| p.id == id).map(|k| self.p[k]).unwrap_or(0.0)
     }
     fn band(&self, b: usize, key: &str) -> f32 {
-        self.p[4 + b * PB + ["style", "drive", "dyn", "tone", "level", "mix"].iter().position(|k| *k == key).unwrap_or(0)]
+        self.p[4 + b * PB + ["style", "drive", "dyn", "tone", "level", "mix", "fb", "fb_freq"].iter().position(|k| *k == key).unwrap_or(0)]
     }
     fn update(&mut self) {
         let r = self.rate;
@@ -152,6 +160,7 @@ impl Effect for MultibandSaturator {
     }
     fn reset(&mut self) {
         self.dc = [[(0.0, 0.0); BANDS]; 2];
+        self.fb.iter_mut().flatten().for_each(|v| v.fill(0.0));
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let nb = (self.v("bands").round() as usize + 1).clamp(1, BANDS);
@@ -159,6 +168,7 @@ impl Effect for MultibandSaturator {
         let out = db_to_gain(self.v("output"));
         let bp: Vec<(usize, f32, f32, f32, f32)> =
             (0..BANDS).map(|b| (self.band(b, "style").round() as usize, self.band(b, "drive"), self.band(b, "dyn") / 100.0, db_to_gain(self.band(b, "level")), self.band(b, "mix") / 100.0)).collect();
+        let fbs: Vec<(f32, usize)> = (0..BANDS).map(|b| (self.band(b, "fb") / 100.0 * 0.95, ((self.rate / self.band(b, "fb_freq").max(20.0)) as usize).clamp(1, FB_LEN - 1))).collect();
         let dc_a = 1.0 - std::f32::consts::TAU * 10.0 / self.rate;
         let mut lvl = [0.0f32; BANDS];
         let mut drv = [0.0f32; BANDS];
@@ -185,9 +195,14 @@ impl Effect for MultibandSaturator {
                 drv[b] = d;
                 let g = db_to_gain(d);
                 let comp = 1.0 / g.sqrt();
+                let (fb_amt, fb_d) = fbs[b];
                 for ch in 0..2 {
                     let dry = split[ch][b];
-                    let y = shape(style, dry * g) * comp;
+                    // Feedback: the band's output, delayed by one period of the feedback frequency, goes back
+                    // into the shaper (resonant, self-limiting through the saturation).
+                    let back = if fb_amt > 0.0 { self.fb[ch][b][(self.fb_pos + FB_LEN - fb_d) % FB_LEN] * fb_amt } else { 0.0 };
+                    let y = shape(style, (dry + back) * g) * comp;
+                    self.fb[ch][b][self.fb_pos] = y;
                     // DC blocker (asymmetric styles).
                     let (px, py) = self.dc[ch][b];
                     let yd = y - px + dc_a * py;
@@ -196,6 +211,7 @@ impl Effect for MultibandSaturator {
                     split[ch][b] = (dry + (y - dry) * bmix) * level;
                 }
             }
+            self.fb_pos = (self.fb_pos + 1) % FB_LEN;
             let yl: f32 = split[0][..nb].iter().sum();
             let yr: f32 = split[1][..nb].iter().sum();
             l[i] = (x[0] + (yl - x[0]) * mix) * out;
@@ -216,7 +232,7 @@ pub fn multiband_saturator_def() -> EffectDef {
         id: "multisat",
         name: "Multiband Saturator",
         category: "Distortion",
-        description: "Saturn-style multiband saturation: up to four bands (Linkwitz–Riley crossovers), each with a style (clean / warm tube, tape, transformer, soft / hard clip, foldback, rectify), drive, dynamics, tone, level and mix.",
+        description: "Saturn-style multiband saturation: up to four bands (Linkwitz–Riley crossovers), each with a style (clean / warm tube, tape, transformer, soft / hard clip, foldback, rectify), drive, dynamics, tone, level, mix and a resonant feedback loop.",
         params: all_params(),
         uses_sidechain: false,
         create: |rate| Box::new(MultibandSaturator::new(rate)),
@@ -263,5 +279,15 @@ mod tests {
         let hi = tone(4000.0, 0.5);
         let yh = run(&mut e, &hi);
         assert!(harmonic(&yh[24000..], 12000.0) < harmonic(&yh[24000..], 4000.0) * 0.01, "treble untouched");
+        // Feedback rings at its frequency: an impulse into band 2 with feedback leaves energy there.
+        let mut e = MultibandSaturator::new(48000.0);
+        e.set_param("b2_fb", 90.0);
+        e.set_param("b2_fb_freq", 400.0);
+        e.set_param("b2_drive", 0.0);
+        let mut imp = vec![0.0f32; 48000];
+        imp[0] = 0.8;
+        let y = run(&mut e, &imp);
+        assert!(harmonic(&y[..12000], 400.0) > 3.0 * harmonic(&y[..12000], 250.0), "resonance at the feedback frequency");
+        assert!(y.iter().all(|v| v.is_finite() && v.abs() < 4.0));
     }
 }

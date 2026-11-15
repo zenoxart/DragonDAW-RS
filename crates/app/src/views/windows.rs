@@ -99,18 +99,58 @@ fn eq_compare(ui: &mut Ui, st: &mut State, m: Id, i: Id, ins: &Insert) {
         let other = reference.and_then(|r| data.get(&r)).filter(|t| t.len() >= BANDS * 2).map(|t| t[BANDS..BANDS * 2].to_vec());
         ui.data_mut(|d| d.insert_temp(hero_key.with("collide"), other.clone()));
         // Match: average both spectra while learning.
+        // Match references besides another EQ: the sidechain input, or an audio file.
+        let file_key = egui::Id::new(("eq.fileref", i));
+        let mut file_ref: Option<(String, Vec<f32>)> = ui.data(|d| d.get_temp(file_key)).flatten();
+        let mut use_sc: bool = ui.data(|d| d.get_temp(egui::Id::new(("eq.scref", i)))).unwrap_or(false);
+        ui.menu_button("Match to…", |ui| {
+            if ui.selectable_label(use_sc, "Sidechain input").on_hover_text("Route a track into this EQ's sidechain (mixer) – its sound is the reference").clicked() {
+                use_sc = !use_sc;
+                file_ref = None;
+                ui.close_menu();
+            }
+            if ui.button("Audio file…").clicked() {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["wav", "flac", "mp3", "ogg", "aif", "aiff"]).pick_file() {
+                    match st.session.cache.get(&path, 48_000) {
+                        Ok(d) => {
+                            file_ref = Some((path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), dragon_engine::dsp::spectrum::average(&d.l, &d.r, 48_000.0)));
+                            use_sc = false;
+                        }
+                        Err(e) => st.toast(format!("Cannot read the reference: {e}"), redhive_contracts::ui::Severity::Error),
+                    }
+                }
+                ui.close_menu();
+            }
+        });
+        if let Some((name, _)) = &file_ref {
+            ui.label(RichText::new(format!("reference: {name}")).small().color(theme::TEXT_DIM));
+        } else if use_sc {
+            ui.label(RichText::new("reference: sidechain").small().color(theme::TEXT_DIM));
+        }
+        ui.data_mut(|d| d.insert_temp(file_key, file_ref.clone()));
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(("eq.scref", i)), use_sc));
+        let sc_spec: Option<Vec<f32>> = if use_sc {
+            let o = BANDS * 2 + dragon_engine::effects::eq::EQ_BANDS;
+            data.get(&i).filter(|t| t.len() >= o + BANDS).map(|t| t[o..o + BANDS].to_vec())
+        } else {
+            None
+        };
+        let live_ref = sc_spec.or(other.clone());
         let mut learn: (bool, u32, Vec<f32>, Vec<f32>) = ui.data(|d| d.get_temp(learn_key)).unwrap_or((false, 0, vec![0.0; BANDS], vec![0.0; BANDS]));
-        if reference.is_some() {
-            if ui.selectable_label(learn.0, if learn.0 { format!("⏺ Learning ({} s)", learn.1 / 30) } else { "Learn".into() }).on_hover_text("Play both tracks; the two spectra are averaged").clicked() {
+        if reference.is_some() || use_sc || file_ref.is_some() {
+            if ui.selectable_label(learn.0, if learn.0 { format!("⏺ Learning ({} s)", learn.1 / 30) } else { "Learn".into() }).on_hover_text("Play the track (and the reference); the spectra are averaged").clicked() {
                 learn = if learn.0 { (false, learn.1, learn.2, learn.3) } else { (true, 0, vec![0.0; BANDS], vec![0.0; BANDS]) };
             }
             if learn.0 {
-                if let (Some(own), Some(o)) = (data.get(&i).filter(|t| t.len() >= BANDS), other.as_ref()) {
-                    for b in 0..BANDS {
-                        learn.2[b] += own[b];
-                        learn.3[b] += o[b];
+                if let Some(own) = data.get(&i).filter(|t| t.len() >= BANDS) {
+                    let rf = file_ref.as_ref().map(|f| f.1.clone()).or(live_ref.clone());
+                    if let Some(o) = rf {
+                        for b in 0..BANDS {
+                            learn.2[b] += own[b];
+                            learn.3[b] += o[b];
+                        }
+                        learn.1 += 1;
                     }
-                    learn.1 += 1;
                 }
                 ui.ctx().request_repaint();
             }
@@ -154,6 +194,7 @@ fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDe
                     let (name, color) = match md.source {
                         ModSource::Lfo { .. } => ("LFO", egui::Color32::from_rgb(0x4b, 0xc0, 0xf0)),
                         ModSource::Envelope { .. } => ("ENV", egui::Color32::from_rgb(0x5d, 0xe0, 0xa8)),
+                        ModSource::Xy { .. } => ("XY", egui::Color32::from_rgb(0xf5, 0xc8, 0x42)),
                     };
                     ui.label(RichText::new(format!("{name} {}", k + 1)).strong().color(color));
                     ui.label(">");
@@ -187,6 +228,10 @@ fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDe
                         changed |= ui.add(egui::Slider::new(release, 5.0..=2000.0).logarithmic(true).suffix(" ms").text("rel")).changed();
                         changed |= ui.add(egui::Slider::new(gain, -24.0..=24.0).suffix(" dB").text("gain")).changed();
                     }
+                    ModSource::Xy { axis } => {
+                        changed |= ui.selectable_value(axis, 0, "X axis").changed();
+                        changed |= ui.selectable_value(axis, 1, "Y axis").changed();
+                    }
                 });
             });
         }
@@ -201,10 +246,54 @@ fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDe
                 changed = true;
             }
             if ui.button("+ Envelope follower").clicked() {
-                mods.push(Modulation { source: ModSource::Envelope { attack: 5.0, release: 150.0, gain: 0.0 }, target: first, depth: 0.5 });
+                mods.push(Modulation { source: ModSource::Envelope { attack: 5.0, release: 150.0, gain: 0.0 }, target: first.clone(), depth: 0.5 });
+                changed = true;
+            }
+            if ui.button("+ XY pad").on_hover_text("Moves the target with the XY pad; right-click the pad for MIDI learn or automation").clicked() {
+                mods.push(Modulation { source: ModSource::Xy { axis: 0 }, target: first, depth: 0.5 });
                 changed = true;
             }
         });
+        // The XY pad (when a route uses it): drag to move both axes.
+        if mods.iter().any(|x| matches!(x.source, ModSource::Xy { .. })) {
+            let get = |k: &str| ins.params.get(k).copied().unwrap_or(0.5);
+            let (mut x, mut y) = (get("__xy_x"), get("__xy_y"));
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(140.0, 140.0), egui::Sense::click_and_drag());
+            let p = ui.painter();
+            p.rect_filled(rect, 6.0, theme::PANEL_2);
+            for k in 1..4 {
+                let f = k as f32 / 4.0;
+                p.line_segment([egui::pos2(rect.left() + rect.width() * f, rect.top()), egui::pos2(rect.left() + rect.width() * f, rect.bottom())], egui::Stroke::new(1.0_f32, theme::GRID));
+                p.line_segment([egui::pos2(rect.left(), rect.top() + rect.height() * f), egui::pos2(rect.right(), rect.top() + rect.height() * f)], egui::Stroke::new(1.0_f32, theme::GRID));
+            }
+            if let Some(pos) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+                x = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                y = ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0);
+                st.ui.last_target = Some(dragon_engine::model::Target::InsertParam { channel: m, insert: i, param: "__xy_x".into() });
+                st.session.gesture("XY pad", |p| {
+                    with_insert(p, m, i, |ins| {
+                        ins.params.insert("__xy_x".into(), x);
+                        ins.params.insert("__xy_y".into(), y);
+                    })
+                });
+            }
+            let dot = egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height());
+            p.circle_filled(dot, 7.0, egui::Color32::from_rgb(0xf5, 0xc8, 0x42));
+            p.text(rect.left_top() + egui::vec2(4.0, 2.0), egui::Align2::LEFT_TOP, format!("XY {x:.2} / {y:.2}"), egui::FontId::proportional(9.0), theme::TEXT_DIM);
+            resp.context_menu(|ui| {
+                for (axis, name) in [("__xy_x", "X"), ("__xy_y", "Y")] {
+                    let target = dragon_engine::model::Target::InsertParam { channel: m, insert: i, param: axis.into() };
+                    if ui.button(format!("MIDI learn {name}")).clicked() {
+                        st.ui.midi_learn = Some(target.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button(format!("Automation lane for {name}")).clicked() {
+                        crate::views::automation::add_lane(st, target);
+                        ui.close_menu();
+                    }
+                }
+            });
+        }
         if changed {
             st.session.gesture("Modulation", |p| with_insert(p, m, i, |x| x.mods = mods));
         }
@@ -425,6 +514,9 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                                 })
                             });
                             let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
+                            if r.changed() || r.drag_started() {
+                                st.ui.last_target = Some(target.clone());
+                            }
                             r.context_menu(|ui| {
                                 // Type an exact value (FabFilter style); units and a k suffix are accepted.
                                 let buf_id = ui.id().with(("fx.type", &target));

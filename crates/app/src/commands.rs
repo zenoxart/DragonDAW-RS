@@ -107,9 +107,12 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("pl.consolidate", "Consolidate selected clips", "Edit/Clips", 9, "Ctrl+Alt+C"),
     ("pl.time_sig", "Set a time signature at the playhead", "Edit/Clips", 9, "Shift+Alt+T"),
     ("pl.picker", "Project picker", "", 0, "Ctrl+F8"),
+    ("edit.insert_ctrl_value", "Insert controller value (piano roll) / wait for input to record", "Edit", 2, "Ctrl+I"),
     ("pl.resize_left", "Allow resizing clips from the left", "", 0, "Ctrl+Alt+Home"),
     ("pl.marker_prev", "Jump to the previous marker", "", 0, "Alt+Slash"),
     ("pl.marker_next", "Jump to the next marker", "", 0, "Alt+Plus"),
+    ("transport.next_bar", "Next bar (song mode)", "", 0, ""),
+    ("transport.prev_bar", "Previous bar (song mode)", "", 0, ""),
     ("tool.slip", "Slip edit tool (playlist) / slide notes (piano roll)", "Edit/Tools", 6, "S"),
     ("tool.playback", "Playback tool", "Edit/Tools", 6, "Y"),
     ("tool.zoom", "Zoom tool", "Edit/Tools", 6, "Z"),
@@ -449,9 +452,24 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "pr.ghosts" => st.ui.ghosts = !st.ui.ghosts,
         "pr.wave_helper" => st.ui.wave_helper = !st.ui.wave_helper,
         "pl.picker" => st.ui.pl_picker = !st.ui.pl_picker,
+        "edit.insert_ctrl_value" if st.ui.editor != Ed::PianoRoll => {
+            st.ui.wait_input = !st.ui.wait_input;
+            st.ui.waiting_record = false;
+            st.ui.status = format!("Wait for input to start recording {}", if st.ui.wait_input { "on" } else { "off" });
+        }
+        "edit.insert_ctrl_value" => match st.ui.last_target.clone() {
+            Some(t) if crate::views::automation::insert_current_value(st, t.clone()) => st.ui.status = "Inserted the current value into automation".into(),
+            _ => st.toast("Touch a parameter first (an effect knob or the XY pad)", Severity::Info),
+        },
         "pl.resize_left" => {
             st.ui.resize_left = !st.ui.resize_left;
             st.ui.status = format!("Resizing from the left {}", if st.ui.resize_left { "on" } else { "off" });
+        }
+        "transport.next_bar" | "transport.prev_bar" => {
+            let now = st.beat_now();
+            let bar = st.session.project.beats_per_bar(now).max(1.0);
+            let b = if id == "transport.next_bar" { ((now + 1e-6) / bar).floor() * bar + bar } else { (((now - 1e-6) / bar).ceil() * bar - bar).max(0.0) };
+            st.seek(b);
         }
         "pl.marker_prev" | "pl.marker_next" => {
             let now = st.beat_now();
@@ -874,6 +892,23 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 (first..n.len()).collect()
             });
         }
+        "edit.unmute_sel" if st.ui.editor == Ed::PianoRoll && !st.ui.notes.is_empty() => {
+            // FL binds Shift+M twice in the piano roll: unmute the selection, or – when nothing selected is
+            // muted – select groups of notes at random.
+            let notes = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|c| c.notes.clone()).unwrap_or_default();
+            if st.ui.notes.iter().filter_map(|i| notes.get(*i)).any(|n| n.muted) {
+                notes_apply(st, "Unmute notes", |v| v.iter_mut().for_each(|n| n.muted = false));
+            } else {
+                let mut rng = dragon_engine::dsp::Rng::new(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1));
+                // Groups: notes starting together (chords) or explicit note groups.
+                let key = |n: &Note| if n.group > 0 { u64::from(n.group) << 32 } else { u64::from(n.start) };
+                let mut keys: Vec<u64> = notes.iter().map(key).collect();
+                keys.sort_unstable();
+                keys.dedup();
+                let keep: Vec<u64> = keys.into_iter().filter(|_| rng.next_f32() < 0.5).collect();
+                st.ui.notes = notes.iter().enumerate().filter(|(_, n)| keep.contains(&key(n))).map(|(i, _)| i).collect();
+            }
+        }
         "edit.mute_sel" | "edit.unmute_sel" => {
             let mute = id == "edit.mute_sel";
             if !st.ui.clips.is_empty() {
@@ -901,6 +936,12 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "transport.record" => {
             if st.transport().recording || st.audio.is_recording() {
                 st.stop();
+            } else if st.ui.waiting_record {
+                st.ui.waiting_record = false;
+                st.ui.status = "Recording cancelled".into();
+            } else if st.ui.wait_input {
+                st.ui.waiting_record = true;
+                st.ui.status = "Waiting for input – play a note to start recording".into();
             } else {
                 st.start_recording();
             }

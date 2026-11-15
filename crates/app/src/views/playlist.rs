@@ -43,6 +43,8 @@ pub enum DragKind {
     Knife {
         from: f64,
         y: f32,
+        /// Right-drag: the smaller piece of each cut clip is deleted.
+        delete_small: bool,
     },
     /// FL's zoom tool: a box from a screen position.
     Zoom {
@@ -408,6 +410,12 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
+    // Slice tool, right-drag: slice and delete the smaller piece.
+    if tool == Tool::Slice && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pl_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
+        if let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|p| timeline.contains(*p)) {
+            st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y, delete_small: true } });
+        }
+    }
     if resp.drag_started_by(egui::PointerButton::Primary) && st.ui.pl_drag.is_none() {
         // Where the button went down (the drag only starts after a few pixels of movement).
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).filter(|p| timeline.contains(*p)) {
@@ -426,7 +434,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind: DragKind::Slip { from: beat_of(pos.x, sx), offset } });
                 }
             } else if tool == Tool::Slice {
-                st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y } });
+                st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y, delete_small: false } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
                 let edge = 6.0;
                 let kind = if pos.x > r.right() - edge {
@@ -583,7 +591,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
                 st.ui.clips = all;
             }
-            DragKind::Knife { from, y } => {
+            DragKind::Knife { from, y, delete_small } => {
                 let alt = ui.input(|i| i.modifiers.alt);
                 let sb = |b: f64| if alt { b } else { snap(b, grid) };
                 let (a, b) = ((sb(from), y - st.ui.pl_y), (sb(beat), pos.y));
@@ -606,7 +614,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 if !ui.input(|i| i.pointer.any_down()) && !cuts.is_empty() {
                     st.session.edit("Slice clips", |p| {
                         for (t, c, at) in &cuts {
-                            dragon_engine::edit::split_clip(p, *t, *c, *at);
+                            let right = dragon_engine::edit::split_clip(p, *t, *c, *at);
+                            if let (true, Some(right)) = (delete_small, right) {
+                                // Keep the longer piece.
+                                let len = |p: &Project, id: Id| p.track(*t).and_then(|tr| tr.clips.iter().find(|x| x.id == id)).map(|x| x.length).unwrap_or(0.0);
+                                let small = if len(p, right) < len(p, *c) { right } else { *c };
+                                dragon_engine::edit::delete_clips(p, &[small]);
+                            }
                         }
                     });
                 }

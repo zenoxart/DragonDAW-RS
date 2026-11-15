@@ -10,7 +10,7 @@ pub mod eq;
 mod modulation;
 pub mod multisat;
 pub mod pitch;
-mod reverb;
+pub mod reverb;
 pub mod strips;
 pub mod voice;
 

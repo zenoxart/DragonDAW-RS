@@ -112,8 +112,23 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Channel rack: Ctrl+click multi-select, Alt+C clone, Alt+Del delete, Alt+G group, PgUp / PgDn group view, Alt+Z / Alt+U zip / unzip, Alt+↑/↓ move, Ctrl+L route to free mixer tracks, Alt+M mixer selectors, ↑/↓ select, Shift+↑/↓ extend, Ctrl+Enter focus playlist | ✅ |
 | Piano roll: G / K and H / J channel stepping, Shift+H / Shift+K, M note names, O portamento, F / Shift+F event lane (velocity, pan, release), Shift+D discard lengths, Shift+N chord off, Shift+R select at random, Shift+C select by colour, Alt+C colour, Shift+G / Alt+G groups, Alt+B helpers, Alt+V ghosts, Alt+arrows nudge, Ctrl+Alt+Q quick quantize, Ctrl+M import MIDI | ✅ |
 | Playlist: Shift+G / Alt+G clip groups, Shift+C select by source, Ctrl+Alt+C consolidate, Ctrl+P performance, 6 zoom, Ctrl+← / → / Enter time selection, Shift+Alt+T time signature, Ctrl+F8 project picker | ✅ (6 shows the whole song – there is no separate performance zone) |
-| Piano roll Alt+N waveform helper (the song's audio under the notes), Shift+Alt+wheel nudge (playlist and piano roll), Ctrl+Alt+Home resizing from the left, marker jumps | ✅ (marker jumps on Alt+/ and Alt++ – egui has no separate numeric-pad * key) |
-| Ctrl+I insert controller value (FL's per-pattern event editor does not exist here – automation lives in lanes and clips), Shift+M random note groups (FL binds Shift+M to unmute as well) | ❌ |
+| Piano roll Alt+N waveform helper (the song's audio under the notes), Shift+Alt+wheel nudge (playlist and piano roll), Ctrl+Alt+Home resizing from the left | ✅ |
+| Numeric-pad 0 fast forward | ❌ egui cannot tell the numeric-pad 0 from the main 0 (which mutes channel 10 in the rack) |
+| Numeric-pad * and / (next / previous bar in song mode; with Alt next / previous marker) | ✅ (read as typed characters, so the main-keyboard * and / work too; Alt+/ and Alt++ also jump markers) |
+| Ctrl+I: insert controller value (piano roll – the last touched parameter goes into its automation lane at the playhead) / wait for input to start recording (elsewhere – the first played note starts the armed recording) | ✅ |
+| Shift+M in the piano roll: unmute the selection, or – when nothing selected is muted – select groups of notes at random (FL binds both) | ✅ |
+
+## FL's slice tool, compared
+
+| FL Studio (playlist and piano roll) | Dragon DAW |
+|---|---|
+| C selects the slice tool | ✅ |
+| Click on a clip / note slices it at the pointer (snapped) | ✅ |
+| Drag a line (any angle) – every clip / note it crosses is cut where the line passes its track / row | ✅ |
+| Alt while slicing: no snap | ✅ |
+| Right-drag with the slice tool: slice and delete the smaller piece (FL Right-Shift+right-click in the piano roll) | ✅ |
+| Right-Shift+left-click with any tool slices (the Shift key on the right only) | ❌ egui does not report which Shift key is held; the slice tool or Insert (slice at the playhead) do the same |
+| Ctrl+U quick chop / Alt+U chop tool (piano roll) | ✅ |
 
 ## Comparison with the FabFilter bundle
 
@@ -123,12 +138,12 @@ What the stock effects share with FabFilter's handling, and what is still missin
 |---|---|
 | Pro-Q: 24 bands, live pre / post analyzer, double-click to add a band, spectrum grab (drag a peak of the analyzer), drag nodes, wheel = Q, right-click shape menu, hover readout with note names, piano scale, remove a band, band solo, auto gain, one band's controls at a time | ✅ |
 | Pro-Q: dynamic EQ per band, stereo placement per band (stereo, mid, side, left, right), zero-latency, natural-phase (filters at 2× rate, ~0.5 ms) and linear-phase processing | ✅ (linear phase: bands are stereo and static) |
-| Pro-Q: EQ match against another EQ in the project (learn both spectra, fill free bands), collision display with another EQ's spectrum | ✅ (the reference is another Dragon EQ, not a sidechain or file) |
+| Pro-Q: EQ match against another EQ in the project, the sidechain input or an audio file (learn the spectra, fill free bands), collision display with another EQ's spectrum | ✅ |
 | Pro-C: styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain high- and low-pass, external sidechain, transfer curve with threshold drag, scrolling level / gain-reduction history, mix, auto makeup | ✅ (styles designed after Pro-C's names, not measured against it) |
 | Pro-L: true-peak limiting, styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe), 2× / 4× oversampling, scrolling level / gain-reduction display, unity-gain listening, loudness meters | ✅ (LUFS in the Mastering view) |
-| Saturn: multiband saturation – up to four bands with draggable crossovers, eight styles, drive, dynamics, tone, level and mix per band | ✅ "Multiband Saturator" (no per-band feedback) |
-| Pro-R: decay-rate EQ (low / high parts of the tail decay faster or slower) | ✅ on the reverb (two crossover points, not Pro-R's free curve) |
-| Modulation: LFOs (five shapes, free or tempo-synced) and envelope followers on any stock-effect parameter, with depth | ✅ (no XY pads, MIDI sources or slew) |
+| Saturn: multiband saturation – up to four bands with draggable crossovers, eight styles, drive, dynamics, tone, level, mix and a resonant feedback loop per band | ✅ "Multiband Saturator" |
+| Pro-R: decay-rate EQ, drawn as a curve | ✅ on the reverb: five draggable points (80 Hz … 12 kHz, ×¼ … ×4) – Pro-R's curve has free nodes |
+| Modulation: LFOs (five shapes, free or tempo-synced), envelope followers and an XY pad on any stock-effect parameter, with depth; the XY pad is MIDI-learnable and automatable (MIDI as a source) | ✅ (no slew or per-source MIDI note / velocity sources) |
 | Pro-DS / Pro-MB / Timeless / Volcano / Pro-G | partial: de-esser, multiband compressor, delay, filter and gate exist with their own, simpler controls |
 | Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ |
 

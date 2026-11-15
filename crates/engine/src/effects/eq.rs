@@ -276,8 +276,9 @@ pub struct ParametricEq {
     solo_f: [Biquad; 2],
     pre: Analyzer,
     post: Analyzer,
+    sc: Analyzer,
     /// Telemetry: the input spectrum, then the output spectrum ([`BANDS`] dB values each), then the
-    /// dynamic gain change of each band (dB).
+    /// dynamic gain change of each band (dB), then the sidechain input's spectrum.
     tele: Vec<f32>,
 }
 
@@ -302,7 +303,8 @@ impl ParametricEq {
             solo_f: [Biquad::default(); 2],
             pre: Analyzer::new(rate),
             post: Analyzer::new(rate),
-            tele: vec![crate::dsp::spectrum::FLOOR; BANDS * 2 + EQ_BANDS],
+            sc: Analyzer::new(rate),
+            tele: vec![crate::dsp::spectrum::FLOOR; BANDS * 3 + EQ_BANDS],
         }
     }
 
@@ -490,7 +492,10 @@ impl Effect for ParametricEq {
         self.lp.reset();
     }
 
-    fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
+        if let Some((a, b)) = sc {
+            self.sc.push(a, b);
+        }
         if self.dirty {
             self.update();
         }
@@ -538,6 +543,8 @@ impl Effect for ParametricEq {
         for i in 0..EQ_BANDS {
             self.tele[BANDS * 2 + i] = self.dyns[i].applied;
         }
+        let o = BANDS * 2 + EQ_BANDS;
+        self.tele[o..o + BANDS].copy_from_slice(&self.sc.bands);
     }
     fn telemetry(&self) -> &[f32] {
         &self.tele
@@ -560,7 +567,8 @@ pub fn def() -> EffectDef {
         category: "EQ",
         description: "7-band parametric EQ with shelves, cuts and notch per band.",
         params: &PARAMS,
-        uses_sidechain: false,
+        // The sidechain only feeds an analyzer: the reference for EQ match.
+        uses_sidechain: true,
         create: |r| Box::new(ParametricEq::new(r)),
     }
 }

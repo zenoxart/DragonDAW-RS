@@ -86,6 +86,24 @@ impl Analyzer {
     }
 }
 
+/// Average spectrum (dB per band) of a whole recording, as the analyzer would show it over time – the
+/// reference for EQ match from a file.
+pub fn average(l: &[f32], r: &[f32], rate: f32) -> Vec<f32> {
+    let mut a = Analyzer::new(rate);
+    let mut sum = vec![0.0f32; BANDS];
+    let mut n = 0;
+    for (cl, cr) in l.chunks(HOP).zip(r.chunks(HOP)) {
+        a.push(cl, cr);
+        if cl.len() == HOP {
+            for (s, b) in sum.iter_mut().zip(a.bands.iter()) {
+                *s += b;
+            }
+            n += 1;
+        }
+    }
+    sum.iter().map(|s| s / n.max(1) as f32).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +119,14 @@ mod tests {
         assert!((900.0..1120.0).contains(&f), "peak at {f} Hz");
         assert!((a.bands[top] + 6.0).abs() < 3.0, "level {}", a.bands[top]);
         assert!(a.bands[5] < a.bands[top] - 40.0);
+    }
+
+    #[test]
+    fn average_of_a_file_peaks_at_its_tone() {
+        let rate = 48000.0;
+        let x: Vec<f32> = (0..rate as usize * 2).map(|i| (std::f32::consts::TAU * 500.0 * i as f32 / rate).sin() * 0.3).collect();
+        let a = average(&x, &x, rate);
+        let top = (0..BANDS).max_by(|p, q| a[*p].total_cmp(&a[*q])).unwrap();
+        assert!((band_freq(top) / 500.0 - 1.0).abs() < 0.12, "{}", band_freq(top));
     }
 }
