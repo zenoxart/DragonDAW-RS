@@ -9,10 +9,10 @@ license.workspace = true
 redhive-monads.workspace = true
 redhive-contracts.workspace = true
 chrono.workspace = true
-egui = "0.31"
-egui_dock = { version = "0.16", features = ["serde"] }
+egui = "0.37"
+egui_dock = { version = "0.21", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-dirs = "6"
+dirs = "7"

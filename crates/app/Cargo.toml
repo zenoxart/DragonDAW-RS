@@ -18,9 +18,9 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "persistence", "x11", "wayland"] }
-egui = "0.31"
-egui_dock = { version = "0.16", features = ["serde"] }
-rfd = "0.15"
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "persistence", "x11", "wayland"] }
+egui = "0.37"
+egui_dock = { version = "0.21", features = ["serde"] }
+rfd = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
