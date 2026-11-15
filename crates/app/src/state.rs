@@ -70,6 +70,21 @@ impl Tool {
         [(Tool::Draw, "✏", "Draw"), (Tool::Paint, "🎨", "Paint"), (Tool::Select, "⬛", "Select"), (Tool::Slice, "✂", "Slice"), (Tool::Erase, "🗙", "Erase"), (Tool::Mute, "🔇", "Mute")];
 }
 
+/// The editor the user last worked in (decides what Select all / Copy / Paste act on).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Editor {
+    #[default]
+    Playlist,
+    PianoRoll,
+}
+
+/// Copied clips (with their track index) or notes.
+#[derive(Debug, Clone)]
+pub enum Clipboard {
+    Clips(Vec<(usize, Clip)>),
+    Notes(Vec<Note>),
+}
+
 pub struct UiState {
     pub pattern: Id,
     pub channel: Option<Id>,
@@ -101,6 +116,10 @@ pub struct UiState {
     pub pl_picker: bool,
     /// Entries selected in the picker (dragged together).
     pub picker_sel: Vec<crate::views::picker::PickItem>,
+    pub editor: Editor,
+    pub clipboard: Option<Clipboard>,
+    /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
+    pub last_undo: Option<u64>,
     /// Running zoom animations: target (zoom, x, vertical zoom / key height, y).
     pub pl_anim: Option<crate::views::nav::ViewTarget>,
     pub pr_anim: Option<crate::views::nav::ViewTarget>,
@@ -161,6 +180,9 @@ impl UiState {
             pl_vzoom: 1.0,
             pl_picker: true,
             picker_sel: Vec::new(),
+            editor: Editor::Playlist,
+            clipboard: None,
+            last_undo: None,
             pl_anim: None,
             pr_anim: None,
             pl_drag: None,
@@ -505,6 +527,26 @@ impl State {
         if let Some(p) = rfd::FileDialog::new().add_filter("Dragon project", &["dragon"]).set_directory(&self.ctx.paths.projects).pick_file() {
             self.open_path(&p);
         }
+    }
+
+    /// FL's "Save new version": saves a copy next to the project as `<Name>_2`, `<Name>_3`, … and
+    /// continues in it.
+    pub fn save_new_version(&mut self) -> bool {
+        let Some(cur) = self.session.path.clone() else { return self.save(true) };
+        let dir = cur.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+        let stem = cur.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
+        let (base, mut n) = match stem.rsplit_once('_') {
+            Some((b, k)) if k.parse::<u32>().is_ok() => (b.to_string(), k.parse::<u32>().unwrap() + 1),
+            _ => (stem.clone(), 2),
+        };
+        let mut path = dir.join(format!("{base}_{n}.dragon"));
+        while path.exists() {
+            n += 1;
+            path = dir.join(format!("{base}_{n}.dragon"));
+        }
+        self.session.end_gesture();
+        self.capture_plugin_states();
+        self.save_to(&path)
     }
 
     pub fn save(&mut self, save_as: bool) -> bool {

@@ -48,6 +48,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
     let avail = ui.available_rect_before_wrap();
     let (rect, resp) = ui.allocate_exact_size(avail.size(), Sense::click_and_drag());
+    if resp.hovered() || resp.is_pointer_button_down_on() {
+        st.ui.editor = crate::state::Editor::Playlist;
+    }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::BG);
 

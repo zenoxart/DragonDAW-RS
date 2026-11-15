@@ -10,65 +10,85 @@ use redhive_contracts::ui::Severity;
 use redhive_contracts::{IconRef, TextKey};
 
 /// (id, label, menu path, section, shortcut)
+/// Shortcuts follow FL Studio's defaults: Ctrl+N saves a new version, Ctrl+R / Ctrl+Shift+R export WAV /
+/// MP3, Ctrl+Z undoes (pressed again it redoes, like FL), Ctrl+Alt+Z steps further back, Ctrl+B duplicates,
+/// Ctrl+D deselects, Ctrl+Q quick-quantizes, Ctrl+L makes legato, Alt+R randomizes, Alt+S strums, Alt+T adds
+/// a time marker, L switches pattern / song, Ctrl+M the metronome, Ctrl+T the typing keyboard, F4 the
+/// next empty pattern, F5–F11 the windows, Alt+F8 the browser, F12 closes the floating windows, and the
+/// editor tools are P (draw), B (paint), D (delete), T (mute), C (slice) and E (select).
 const TABLE: &[(&str, &str, &str, i32, &str)] = &[
-    ("file.new", "New project", "File", 0, "Ctrl+N"),
+    ("file.new", "New project", "File", 0, ""),
     ("file.open", "Open…", "File", 0, "Ctrl+O"),
     ("file.save", "Save", "File", 1, "Ctrl+S"),
     ("file.save_as", "Save as…", "File", 1, "Ctrl+Shift+S"),
+    ("file.save_new_version", "Save new version", "File", 1, "Ctrl+N"),
     ("file.collect", "Collect all files into project folder", "File", 1, ""),
-    ("file.import_audio", "Import audio…", "File/Import", 2, "Ctrl+I"),
+    ("file.import_audio", "Import audio…", "File/Import", 2, ""),
     ("file.import_midi", "Import MIDI file…", "File/Import", 2, ""),
     ("file.import_video", "Import video…", "File/Import", 2, ""),
-    ("file.export", "Export mix…", "File/Export", 3, "Ctrl+R"),
-    ("file.export_stems", "Export stems…", "File/Export", 3, "Ctrl+Shift+R"),
-    ("file.export_midi", "Export pattern as MIDI…", "File/Export", 3, ""),
+    ("file.export", "Export WAV / mix…", "File/Export", 3, "Ctrl+R"),
+    ("file.export_mp3", "Export MP3…", "File/Export", 3, "Ctrl+Shift+R"),
+    ("file.export_stems", "Export stems…", "File/Export", 3, ""),
+    ("file.export_midi", "Export pattern as MIDI…", "File/Export", 3, "Ctrl+Shift+M"),
     ("file.recover", "Recover autosave…", "File", 4, ""),
-    ("file.quit", "Quit", "File", 5, "Ctrl+Q"),
-    ("edit.undo", "Undo", "Edit", 0, "Ctrl+Z"),
-    ("edit.redo", "Redo", "Edit", 0, "Ctrl+Y"),
+    ("file.quit", "Exit", "File", 5, "Alt+F4"),
+    ("edit.undo_toggle", "Undo / redo last", "Edit", 0, "Ctrl+Z"),
+    ("edit.undo", "Undo (step back)", "Edit", 0, "Ctrl+Alt+Z"),
+    ("edit.redo", "Redo (step forward)", "Edit", 0, "Ctrl+Shift+Z"),
+    ("edit.cut", "Cut", "Edit", 1, "Ctrl+X"),
+    ("edit.copy", "Copy", "Edit", 1, "Ctrl+C"),
+    ("edit.paste", "Paste", "Edit", 1, "Ctrl+V"),
     ("edit.delete", "Delete selection", "Edit", 1, "Delete"),
-    ("edit.duplicate", "Duplicate selection", "Edit", 1, "Ctrl+D"),
+    ("edit.duplicate", "Duplicate selection", "Edit", 1, "Ctrl+B"),
     ("edit.select_all", "Select all", "Edit", 1, "Ctrl+A"),
-    ("edit.split", "Split clips at playhead", "Edit", 2, "Ctrl+E"),
-    ("edit.quantize", "Quantize notes", "Edit/Notes", 3, "Alt+Q"),
-    ("edit.legato", "Legato", "Edit/Notes", 3, ""),
-    ("edit.humanize", "Humanize", "Edit/Notes", 3, ""),
-    ("edit.strum", "Strum chords", "Edit/Notes", 3, ""),
+    ("edit.deselect", "Deselect all", "Edit", 1, "Ctrl+D"),
+    ("edit.split", "Split clips at playhead", "Edit", 2, ""),
+    ("edit.quantize", "Quick quantize", "Edit/Notes", 3, "Ctrl+Q"),
+    ("edit.legato", "Legato", "Edit/Notes", 3, "Ctrl+L"),
+    ("edit.humanize", "Randomize (humanize)", "Edit/Notes", 3, "Alt+R"),
+    ("edit.strum", "Strum chords", "Edit/Notes", 3, "Alt+S"),
     ("edit.transpose_up", "Transpose +1 octave", "Edit/Notes", 4, "Ctrl+Up"),
     ("edit.transpose_down", "Transpose −1 octave", "Edit/Notes", 4, "Ctrl+Down"),
-    ("edit.capture_midi", "Capture played notes (retro record)", "Edit/Notes", 5, "Ctrl+Shift+M"),
-    ("transport.play", "Play / pause", "Transport", 0, "Space"),
-    ("transport.stop", "Stop", "Transport", 0, "Ctrl+Space"),
+    ("edit.capture_midi", "Dump score log (retro record)", "Edit/Notes", 5, ""),
+    ("tool.draw", "Draw tool", "Edit/Tools", 6, "P"),
+    ("tool.paint", "Paint tool", "Edit/Tools", 6, "B"),
+    ("tool.delete", "Delete tool", "Edit/Tools", 6, "D"),
+    ("tool.mute", "Mute tool", "Edit/Tools", 6, "T"),
+    ("tool.slice", "Slice tool", "Edit/Tools", 6, "C"),
+    ("tool.select", "Select tool", "Edit/Tools", 6, "E"),
+    ("transport.play", "Play / stop", "Transport", 0, "Space"),
+    ("transport.stop", "Stop", "Transport", 0, ""),
     ("transport.record", "Record", "Transport", 0, "R"),
     ("transport.home", "Go to start", "Transport", 1, "Home"),
     ("transport.mode", "Toggle pattern / song mode", "Transport", 1, "L"),
-    ("transport.loop", "Toggle loop", "Transport", 2, "Ctrl+L"),
+    ("transport.loop", "Toggle loop", "Transport", 2, ""),
     ("transport.punch", "Toggle punch in/out", "Transport", 2, ""),
-    ("transport.metronome", "Toggle metronome", "Transport", 3, "M"),
-    ("transport.tap", "Tap tempo", "Transport", 3, "T"),
+    ("transport.metronome", "Toggle metronome", "Transport", 3, "Ctrl+M"),
+    ("transport.tap", "Tap tempo", "Transport", 3, ""),
     ("transport.typing_keyboard", "Typing keyboard to piano", "Transport", 4, "Ctrl+T"),
-    ("add.track", "Audio track", "Add", 0, "Ctrl+Shift+T"),
-    ("add.pattern", "Pattern", "Add", 0, "F4"),
+    ("add.track", "Audio track", "Add", 0, ""),
+    ("add.pattern", "Next empty pattern", "Add", 0, "F4"),
     ("add.sampler", "Sampler channel", "Add/Instrument", 1, ""),
     ("add.synth", "Synth channel", "Add/Instrument", 1, ""),
     ("add.drums", "Drum pads channel", "Add/Instrument", 1, ""),
     ("add.mixer", "Mixer bus", "Add", 2, ""),
     ("add.vca", "VCA fader", "Add", 2, ""),
-    ("add.marker", "Marker at playhead", "Add", 3, "Ctrl+K"),
+    ("add.marker", "Time marker", "Add", 3, "Alt+T"),
     ("view.playlist", "Playlist", "View", 0, "F5"),
     ("view.rack", "Channel rack", "View", 0, "F6"),
     ("view.piano", "Piano roll", "View", 0, "F7"),
     ("view.mixer", "Mixer", "View", 0, "F9"),
-    ("view.launcher", "Performance (clip launcher)", "View", 0, "F12"),
+    ("view.launcher", "Performance (clip launcher)", "View", 0, ""),
     ("view.browser", "Browser", "View", 1, "Alt+F8"),
     ("view.master", "Mastering & loudness", "View", 1, ""),
     ("view.video", "Video", "View", 1, ""),
-    ("view.project", "Project & tempo", "View", 1, ""),
+    ("view.project", "Project info & tempo", "View", 1, "F11"),
     ("view.automation", "Automation & MIDI mappings", "View", 1, ""),
     ("view.history", "Undo history", "View", 1, "Alt+Z"),
-    ("view.plugins", "Plugin manager", "View", 2, "F8"),
-    ("view.fx_gallery", "Effect gallery", "View", 2, ""),
+    ("view.plugins", "Plugin manager", "View", 2, ""),
+    ("view.fx_gallery", "Plugin picker (effect gallery)", "View", 2, "F8"),
     ("view.options", "Options", "View", 2, "F10"),
+    ("view.close_windows", "Close all floating windows", "View", 2, "F12"),
     ("view.palette", "Command palette", "View", 3, "Ctrl+Shift+P"),
     ("view.reset_layout", "Reset layout", "View", 3, ""),
     ("tools.scan_plugins", "Scan plugins", "Tools", 0, ""),
@@ -112,6 +132,7 @@ pub fn register(st: &mut State) {
         ("file/import", "Import"),
         ("file/export", "Export"),
         ("edit/notes", "Notes"),
+        ("edit/tools", "Tools"),
         ("add/instrument", "Instrument"),
     ];
     for (i, (path, label)) in groups.iter().enumerate() {
@@ -189,6 +210,14 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             }
         }
         "file.export" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, false, st.session.path.as_deref())),
+        "file.save_new_version" => {
+            st.save_new_version();
+        }
+        "file.export_mp3" => {
+            let mut d = crate::views::export::ExportDialog::new(&st.session.project, false, st.session.path.as_deref());
+            d.set_mp3();
+            st.ui.export = Some(d);
+        }
         "file.export_stems" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, true, st.session.path.as_deref())),
         "file.export_midi" => {
             let pat = st.ui.pattern;
@@ -205,6 +234,42 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "file.recover" => st.ui.recovery = Some(st.autosave.list()),
         "file.quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        "edit.undo_toggle" => {
+            // FL: Ctrl+Z undoes the last action; pressed again (with nothing done in between) it redoes it.
+            let rev = st.session.history.revision;
+            if st.ui.last_undo == Some(rev) {
+                if let Some(l) = st.session.redo() {
+                    st.ui.status = format!("Redo: {l}");
+                }
+                st.ui.last_undo = None;
+            } else if let Some(l) = st.session.undo() {
+                st.ui.status = format!("Undo: {l}");
+                st.ui.last_undo = Some(st.session.history.revision);
+            }
+        }
+        "edit.cut" => {
+            copy_selection(st);
+            st.ctx.run("dragon.edit.delete", serde_json::Value::Null);
+        }
+        "edit.copy" => copy_selection(st),
+        "edit.paste" => paste(st),
+        "edit.deselect" => {
+            st.ui.clips.clear();
+            st.ui.notes.clear();
+        }
+        "tool.draw" => st.ui.tool = crate::state::Tool::Draw,
+        "tool.paint" => st.ui.tool = crate::state::Tool::Paint,
+        "tool.delete" => st.ui.tool = crate::state::Tool::Erase,
+        "tool.mute" => st.ui.tool = crate::state::Tool::Mute,
+        "tool.slice" => st.ui.tool = crate::state::Tool::Slice,
+        "tool.select" => st.ui.tool = crate::state::Tool::Select,
+        "view.close_windows" => {
+            st.ui.effect_windows.clear();
+            st.ui.instrument_windows.clear();
+            st.ui.clip_window = None;
+            st.ui.fx_gallery = false;
+            st.quests.window_open = false;
+        }
         "edit.undo" => {
             if let Some(l) = st.session.undo() {
                 st.ui.status = format!("Undo: {l}");
@@ -248,6 +313,9 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                     (first..notes.len()).collect()
                 });
             }
+        }
+        "edit.select_all" if st.ui.editor == crate::state::Editor::Playlist => {
+            st.ui.clips = st.session.project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.id)).collect();
         }
         "edit.select_all" => {
             let n = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|x| x.notes.len()).unwrap_or(0);
@@ -530,6 +598,56 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         _ => return false,
     }
     true
+}
+
+/// Copies the selected clips (playlist) or notes (piano roll) to the clipboard.
+fn copy_selection(st: &mut State) {
+    if st.ui.editor == crate::state::Editor::Playlist && !st.ui.clips.is_empty() {
+        let p = &st.session.project;
+        let clips: Vec<(usize, Clip)> = p.tracks.iter().enumerate().flat_map(|(ti, t)| t.clips.iter().filter(|c| st.ui.clips.contains(&c.id)).map(move |c| (ti, c.clone()))).collect();
+        st.ui.status = format!("Copied {} clip(s)", clips.len());
+        st.ui.clipboard = Some(crate::state::Clipboard::Clips(clips));
+    } else if let Some(ch) = st.ui.piano_channel {
+        let notes: Vec<Note> = st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&ch)).map(|c| st.ui.notes.iter().filter_map(|i| c.notes.get(*i).copied()).collect()).unwrap_or_default();
+        if !notes.is_empty() {
+            st.ui.status = format!("Copied {} note(s)", notes.len());
+            st.ui.clipboard = Some(crate::state::Clipboard::Notes(notes));
+        }
+    }
+}
+
+/// Pastes: clips at the playhead on their tracks (keeping their spacing), notes at their positions in the
+/// current pattern. The pasted items become the selection.
+fn paste(st: &mut State) {
+    match st.ui.clipboard.clone() {
+        Some(crate::state::Clipboard::Clips(clips)) if !clips.is_empty() => {
+            let beat = st.beat_now().max(0.0);
+            let first = clips.iter().map(|c| c.1.start).fold(f64::MAX, f64::min);
+            st.ui.clips = st.session.edit("Paste clips", |p| {
+                let mut out = Vec::new();
+                for (ti, mut c) in clips {
+                    let ti = ti.min(p.tracks.len().saturating_sub(1));
+                    c.id = p.next_id();
+                    c.start = beat + (c.start - first);
+                    out.push(c.id);
+                    if let Some(t) = p.tracks.get_mut(ti) {
+                        t.clips.push(c);
+                    }
+                }
+                out
+            });
+        }
+        Some(crate::state::Clipboard::Notes(notes)) => {
+            let (pat, Some(ch)) = (st.ui.pattern, st.ui.piano_channel) else { return };
+            st.ui.notes = st.session.edit("Paste notes", |p| {
+                let Some(c) = p.pattern_mut(pat).map(|pt| pt.channels.entry(ch).or_default()) else { return Vec::new() };
+                let first = c.notes.len();
+                c.notes.extend(notes);
+                (first..c.notes.len()).collect()
+            });
+        }
+        _ => {}
+    }
 }
 
 fn selected_audio(st: &State) -> Option<std::path::PathBuf> {

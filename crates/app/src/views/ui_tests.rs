@@ -560,3 +560,64 @@ fn picker_drags_several_selected_items() {
     let has = |i: usize, pat: Id| tracks[i].clips.iter().any(|c| matches!(c.kind, ClipKind::Pattern { pattern } if pattern == pat) && (c.start - 4.0).abs() < 1e-9);
     assert!(has(0, a) && has(1, b), "one per track: {:?}", tracks.iter().map(|t| t.clips.len()).collect::<Vec<_>>());
 }
+
+/// FL shortcuts: the gestures are bound to the right commands.
+#[test]
+fn shortcuts_follow_fl_studio() {
+    let mut h = Harness::new();
+    crate::commands::register(&mut h.st);
+    let reg = &h.st.ctx.commands;
+    let key = |id: &str| reg.get(&format!("dragon.{id}")).and_then(|d| d.descriptor.shortcuts.first().map(|s| s.gesture.to_string())).unwrap_or_default();
+    for (id, want) in [
+        ("edit.duplicate", "Ctrl+B"),
+        ("edit.deselect", "Ctrl+D"),
+        ("edit.undo_toggle", "Ctrl+Z"),
+        ("edit.quantize", "Ctrl+Q"),
+        ("edit.legato", "Ctrl+L"),
+        ("transport.metronome", "Ctrl+M"),
+        ("transport.mode", "L"),
+        ("file.save_new_version", "Ctrl+N"),
+        ("file.export", "Ctrl+R"),
+        ("file.export_mp3", "Ctrl+Shift+R"),
+        ("add.pattern", "F4"),
+        ("view.fx_gallery", "F8"),
+        ("tool.draw", "P"),
+        ("tool.paint", "B"),
+        ("tool.delete", "D"),
+        ("tool.mute", "T"),
+        ("tool.slice", "C"),
+        ("tool.select", "E"),
+        ("add.marker", "Alt+T"),
+    ] {
+        assert_eq!(key(id), want, "{id}");
+    }
+}
+
+/// Ctrl+Z undoes, pressed again it redoes (FL), Ctrl+Alt+Z keeps stepping back; copy / paste of clips.
+#[test]
+fn undo_toggle_and_clip_clipboard() {
+    let mut h = Harness::new();
+    h.st.session.edit("a", |p| p.bpm = 100.0);
+    h.st.session.edit("b", |p| p.bpm = 110.0);
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        crate::commands::execute(&mut h.st, id, &ctx);
+    };
+    run(&mut h, "dragon.edit.undo_toggle");
+    assert_eq!(h.st.session.project.bpm, 100.0);
+    run(&mut h, "dragon.edit.undo_toggle");
+    assert_eq!(h.st.session.project.bpm, 110.0, "second Ctrl+Z redoes");
+    run(&mut h, "dragon.edit.undo_toggle");
+    run(&mut h, "dragon.edit.undo");
+    assert_ne!(h.st.session.project.bpm, 100.0, "Ctrl+Alt+Z steps further back");
+    // Copy two clips and paste them at the playhead.
+    let before: usize = h.st.session.project.tracks.iter().map(|t| t.clips.len()).sum();
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    h.st.ui.clips = h.st.session.project.tracks[0].clips.iter().take(2).map(|c| c.id).collect();
+    let n = h.st.ui.clips.len();
+    run(&mut h, "dragon.edit.copy");
+    run(&mut h, "dragon.edit.paste");
+    let after: usize = h.st.session.project.tracks.iter().map(|t| t.clips.len()).sum();
+    assert_eq!(after, before + n);
+    assert_eq!(h.st.ui.clips.len(), n, "pasted clips are selected");
+}

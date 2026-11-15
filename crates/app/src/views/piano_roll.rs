@@ -84,6 +84,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
     let (rect, resp) = ui.allocate_exact_size(avail.size(), Sense::click_and_drag());
+    if resp.hovered() || resp.is_pointer_button_down_on() {
+        st.ui.editor = crate::state::Editor::PianoRoll;
+    }
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 0.0, theme::BG);
     let grid = Rect::from_min_max(Pos2::new(rect.left() + KEYS_W, rect.top() + RULER), Pos2::new(rect.right(), rect.bottom() - VEL_H));

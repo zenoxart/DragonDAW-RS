@@ -56,6 +56,12 @@ impl ExportDialog {
         }
     }
 
+    /// Presets the dialog for MP3 (FL's Ctrl+Shift+R).
+    pub fn set_mp3(&mut self) {
+        self.opts.format = dragon_engine::export::ExportFormat::Mp3(320);
+        self.path = self.path.with_extension("mp3");
+    }
+
     /// Shows the dialog; returns `false` when it should close.
     pub fn show(&mut self, ctx: &egui::Context, st: &mut State) -> bool {
         let mut open = true;
