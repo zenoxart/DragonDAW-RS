@@ -9,12 +9,17 @@ use std::ffi::c_void;
 
 pub struct EditorWindow {
     inner: imp::Window,
+    /// Whether the user may resize the window; a fixed-size window's size hints follow every resize the
+    /// plugin asks for (otherwise a window manager keeps it at the size it opened with).
+    resizable: bool,
+    /// The size before full screen.
+    before: (u32, u32),
 }
 
 impl EditorWindow {
     /// Opens a window of `width` × `height` pixels.
     pub fn open(title: &str, width: u32, height: u32) -> Result<EditorWindow> {
-        Ok(EditorWindow { inner: imp::Window::open(title, width.max(32), height.max(32))? })
+        Ok(EditorWindow { inner: imp::Window::open(title, width.max(32), height.max(32))?, resizable: true, before: (width.max(32), height.max(32)) })
     }
 
     /// The native handle to embed into: an X11 window id, or an `HWND`.
@@ -23,7 +28,11 @@ impl EditorWindow {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.inner.resize(width.max(32), height.max(32));
+        let (w, h) = (width.max(32), height.max(32));
+        if !self.resizable && !self.inner.fullscreen {
+            self.inner.set_resizable(false, (w, h));
+        }
+        self.inner.resize(w, h);
     }
 
     /// Current inner size in pixels.
@@ -33,12 +42,29 @@ impl EditorWindow {
 
     /// Lets the user resize the window (only for editors that can follow a new size).
     pub fn set_resizable(&mut self, on: bool, size: (u32, u32)) {
+        self.resizable = on;
         self.inner.set_resizable(on, size);
     }
 
     /// Full screen on (covers the monitor) or back to the previous size.
     pub fn set_fullscreen(&mut self, on: bool) {
-        self.inner.set_fullscreen(on);
+        if on == self.inner.fullscreen {
+            return;
+        }
+        if on {
+            // A fixed-size window would be refused by the window manager: lift the limits first.
+            self.before = self.inner.size();
+            if !self.resizable {
+                self.inner.set_resizable(true, self.before);
+            }
+            self.inner.set_fullscreen(true);
+        } else {
+            self.inner.set_fullscreen(false);
+            if !self.resizable {
+                self.inner.set_resizable(false, self.before);
+                self.inner.resize(self.before.0, self.before.1);
+            }
+        }
     }
 
     pub fn is_fullscreen(&self) -> bool {

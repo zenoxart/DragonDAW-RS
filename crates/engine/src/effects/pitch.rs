@@ -178,6 +178,11 @@ const TUNE_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("vibrato", "Natural vibrato", 0.0, 1.0, 0.0, ""),
     ParamInfo::lin("amount", "Amount", 0.0, 1.0, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
+    // MetaTune's Note Stabilizer: a held note is kept until the voice moves this far past the midpoint to
+    // the next note (no flutter between two notes).
+    ParamInfo::lin("stabilizer", "Note stabilizer", 0.0, 100.0, 0.0, "ct"),
+    // MetaTune's Doubler: two tuned copies, slightly delayed and detuned, panned left and right.
+    ParamInfo::lin("doubler", "Doubler", 0.0, 1.0, 0.0, ""),
 ];
 
 /// Analysis every 128 samples (2.7 ms at 48 kHz) over 1024 samples (enough for voices down to ~90 Hz).
@@ -211,6 +216,12 @@ pub struct PitchCorrect {
     pub detected: Option<f32>,
     /// [detected MIDI (−1 = none), target MIDI, output MIDI, clarity] for the display.
     tele: [f32; 4],
+    stabilizer: f32,
+    doubler: f32,
+    /// Doubler: delay lines of the tuned signal and the modulation phase.
+    dbl: [Vec<f32>; 2],
+    dbl_pos: usize,
+    dbl_phase: f32,
 }
 
 impl PitchCorrect {
@@ -238,6 +249,11 @@ impl PitchCorrect {
             centre: 0.0,
             detected: None,
             tele: [-1.0, -1.0, -1.0, 0.0],
+            stabilizer: 0.0,
+            doubler: 0.0,
+            dbl: [vec![0.0; (rate * 0.05) as usize + 4], vec![0.0; (rate * 0.05) as usize + 4]],
+            dbl_pos: 0,
+            dbl_phase: 0.0,
         }
     }
 
@@ -256,7 +272,11 @@ impl PitchCorrect {
                 } else {
                     self.centre += (m - self.centre) * 0.08;
                 }
-                let target = nearest_in_scale(self.centre, self.key, TUNE_SCALES[self.scale].1);
+                let mut target = nearest_in_scale(self.centre, self.key, TUNE_SCALES[self.scale].1);
+                // Note stabilizer: stay on the held note until the voice is clearly on another.
+                if self.stabilizer > 0.0 && self.held.0 > 0.0 && (target - self.held.0).abs() > 0.01 && (self.centre - self.held.0).abs() * 100.0 < 50.0 + self.stabilizer {
+                    target = self.held.0;
+                }
                 let wobble = (m - self.centre) * self.vibrato;
                 let off_cents = (target - m).abs() * 100.0;
                 // Flex-tune: notes already within the window are left alone.
@@ -295,6 +315,8 @@ impl Effect for PitchCorrect {
             "humanize" => self.humanize = v.clamp(0.0, 1.0),
             "flex" => self.flex = v.clamp(0.0, 50.0),
             "vibrato" => self.vibrato = v.clamp(0.0, 1.0),
+            "stabilizer" => self.stabilizer = v.clamp(0.0, 100.0),
+            "doubler" => self.doubler = v.clamp(0.0, 1.0),
             _ => {}
         }
     }
@@ -308,6 +330,7 @@ impl Effect for PitchCorrect {
         self.fill = 0;
         self.ratio = 1.0;
         self.target_ratio = 1.0;
+        self.dbl.iter_mut().for_each(|d| d.fill(0.0));
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         // Humanize: notes held longer than ~120 ms are retuned more slowly (up to 8× the speed setting).
@@ -326,8 +349,29 @@ impl Effect for PitchCorrect {
             }
             self.ratio = self.target_ratio + (self.ratio - self.target_ratio) * coef;
             let (dl, dr) = (l[i], r[i]);
-            let wl = self.sl.process(dl, self.ratio);
-            let wr = self.sr.process(dr, self.ratio);
+            let mut wl = self.sl.process(dl, self.ratio);
+            let mut wr = self.sr.process(dr, self.ratio);
+            if self.doubler > 0.0 {
+                // Two copies of the tuned voice: 14 and 23 ms behind, their delay swaying slowly (a few
+                // cents of detune), one on each side.
+                let n = self.dbl[0].len();
+                self.dbl[0][self.dbl_pos] = wl;
+                self.dbl[1][self.dbl_pos] = wr;
+                self.dbl_phase = (self.dbl_phase + 0.37 / self.rate).fract();
+                let sway = (self.dbl_phase * std::f32::consts::TAU).sin();
+                let tap = |buf: &[f32], ms: f32| {
+                    let d = (ms * 0.001 * self.rate).min(n as f32 - 2.0);
+                    let p = (self.dbl_pos as f32 - d).rem_euclid(n as f32);
+                    let (k, f) = (p.floor() as usize, p.fract());
+                    buf[k] * (1.0 - f) + buf[(k + 1) % n] * f
+                };
+                let a = tap(&self.dbl[0], 14.0 + 1.5 * sway);
+                let b = tap(&self.dbl[1], 23.0 - 1.5 * sway);
+                self.dbl_pos = (self.dbl_pos + 1) % n;
+                let g = self.doubler * 0.7;
+                wl += a * g;
+                wr += b * g;
+            }
             l[i] = dl * (1.0 - self.mix) + wl * self.mix;
             r[i] = dr * (1.0 - self.mix) + wr * self.mix;
         }
@@ -395,6 +439,45 @@ mod tests {
         assert!(ms < 6.0, "grain delay {ms:.1} ms");
         let t = e.telemetry();
         assert!((t[0] - 57.0).abs() < 0.1, "detected A3: {t:?}");
+    }
+
+    /// MetaTune's Note Stabilizer holds a note when the voice wavers just past the midpoint; the Doubler
+    /// widens a mono voice (the two sides differ).
+    #[test]
+    fn stabilizer_and_doubler() {
+        // C4 held, then the voice drifts to 60.6 (past the C/C# midpoint, chromatic scale).
+        let run = |stab: f32| {
+            let mut e = PitchCorrect::new(48000.0);
+            e.set_param("stabilizer", stab);
+            let hz = |m: f32| 440.0 * 2f32.powf((m - 69.0) / 12.0);
+            let mut ph = 0.0f32;
+            let mut sig = |m: f32, n: usize| -> Vec<f32> {
+                (0..n)
+                    .map(|_| {
+                        ph += hz(m) / 48000.0;
+                        (ph * std::f32::consts::TAU).sin() * 0.5
+                    })
+                    .collect()
+            };
+            let mut x = sig(60.0, 24000);
+            x.extend(sig(60.6, 24000));
+            let (mut l, mut r) = (x.clone(), x);
+            for (a, b) in l.chunks_mut(64).zip(r.chunks_mut(64)) {
+                e.process(a, b, None);
+            }
+            e.telemetry()[1]
+        };
+        assert_eq!(run(0.0), 61.0, "without the stabilizer it jumps to C#");
+        assert_eq!(run(30.0), 60.0, "the stabilizer keeps C");
+        let mut e = PitchCorrect::new(48000.0);
+        e.set_param("doubler", 1.0);
+        let x = sine(220.0, 1.0);
+        let (mut l, mut r) = (x.clone(), x);
+        for (a, b) in l.chunks_mut(64).zip(r.chunks_mut(64)) {
+            e.process(a, b, None);
+        }
+        let diff: f32 = l[24000..].iter().zip(&r[24000..]).map(|(a, b)| (a - b).abs()).sum::<f32>() / 24000.0;
+        assert!(diff > 0.02, "doubled sides differ: {diff}");
     }
 
     /// Flex-tune leaves notes that are already close enough alone.

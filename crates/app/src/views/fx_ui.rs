@@ -1420,10 +1420,28 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let kr = Rect::from_min_max(Pos2::new(r.left() + 10.0, r.bottom() - 38.0), Pos2::new(r.right() - 10.0, r.bottom() - 8.0));
     let kw = kr.width() / 12.0;
     let tgt = if target >= 0.0 { Some((target.round() as i32).rem_euclid(12) as usize) } else { None };
+    // MetaTune-style heat map: every detected note warms its key; the heat fades over a few seconds.
+    let heat_id = h.key.with("tune.heat");
+    let mut heat: [f32; 12] = p.ctx().data(|d| d.get_temp(heat_id)).unwrap_or([0.0; 12]);
+    if h.time.is_some() {
+        for v in heat.iter_mut() {
+            *v *= 0.985;
+        }
+        if let Some(d) = det {
+            let pc = (d.round() as i32).rem_euclid(12) as usize;
+            heat[pc] = (heat[pc] + 0.06).min(1.0);
+        }
+        p.ctx().data_mut(|d| d.insert_temp(heat_id, heat));
+    }
     for (i, nm) in KEYS.iter().enumerate() {
         let b = Rect::from_min_size(Pos2::new(kr.left() + i as f32 * kw + 1.0, kr.top()), Vec2::new(kw - 2.0, kr.height()));
         let on = in_scale(i);
         let lit = tgt == Some(i);
+        // Heat glow (orange) under the key.
+        if heat[i] > 0.02 {
+            let hc = Color32::from_rgb(0xf0, 0x8a, 0x4b).gamma_multiply(heat[i].sqrt() * 0.9);
+            p.rect_filled(b.expand(2.0), 6.0, hc);
+        }
         p.rect_filled(
             b,
             5.0,

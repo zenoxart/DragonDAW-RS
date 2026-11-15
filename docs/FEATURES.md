@@ -152,7 +152,7 @@ What the stock effects share with FabFilter's handling, and what is still missin
 | Timeless: tempo-synced stereo delay with feedback, cross feedback, drive in the loop, filter with resonance, diffusion, ducking, freeze, width and pitch shift in the loop | ✅ Delay (no modulation matrix beyond the shared LFO / envelope / XY sources) |
 | Volcano: two filters (LP, HP, BP, notch, peak, shelves) at 12 / 24 / 48 dB/oct, styles (Clean, Smooth, Ram, Hack), drive, serial / parallel routing, B following A, stereo spread | ✅ Filter |
 | Pro-G: threshold with hysteresis, range, ratio (gate … expander), knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix, listen | ✅ Gate |
-| Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ |
+| Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ (stock editors: fitted window, never under 480 px, full screen in a window of its own; CLAP / VST3 editors: the window takes the editor's requested size, also under window managers, and full screen lifts the size lock – tested with openbox on Xvfb) |
 
 ## The new plugins against their published references
 
@@ -170,7 +170,7 @@ Checked against the manufacturers' manuals and spec sheets (tests in `effects/st
 
 | Feature | Status | Where |
 |---|---|---|
-| Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: real-time and low latency for tracking (pitch-synchronous shifting, 2.7 ms hop), YIN detection, key + scale, retune speed, humanize, flex-tune, vibrato (`effects/pitch.rs`) |
+| Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: real-time and low latency for tracking (pitch-synchronous shifting, 2.7 ms hop), YIN detection, key + scale, retune speed, humanize, flex-tune, vibrato; after MetaTune: note stabilizer, doubler, heat map on the note keys, big note readout with a ±50 ct meter and a pitch graph over note lanes (`effects/pitch.rs`); MetaTune's negative speed and grouped instances are not there |
 | MP3 / Ogg Vorbis export | ✅ | LAME and libvorbis (aoTuV) encoders, export dialog and `dragon render --format mp3/ogg` |
 | Native plugin editors embedded in a host window | ✅ Linux (X11) / Windows | `plugins/window.rs`; the plugin's own window opens automatically with its effect / instrument window (generic controls as a fallback, with the reason when a GUI cannot open). VST3: `IPlugFrame`, `IRunLoop` (Linux), `IComponentHandler` (GUI edits reach the processor and the project, one undo step per knob turn), host-created `IMessage` / `IAttributeList`, content scale for HiDPI. CLAP: `set_parent`, `set_scale`, timer / fd host extensions, GUI edits from output events. Tested on Linux and Windows CI with real windows, and with 40 real third-party builds (Dragonfly Reverb, DISTRHO collection incl. the OpenGL ProM visualiser; VST3 and CLAP): all 28 with a GUI embed, the 10 without one fall back to generic controls – re-run with `DRAGON_THIRD_PARTY=<folders> cargo test -p dragon-test-plugins --test third_party -- --ignored --nocapture`. CLAP plugins shipped as folders (`Name.clap/Name.clap`) load. macOS ❌ |
 | Sidechain into plugins | ✅ | CLAP second input port, VST3 aux input bus |

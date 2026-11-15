@@ -236,6 +236,35 @@ fn editors_embed_resize_and_report_gui_edits() {
     assert_eq!(cp.editor_window().unwrap().child_count(), 1);
     assert!(Effect::editor(&mut vp, true));
     assert_eq!(vp.editor_window().unwrap().child_count(), 1);
+    // The host window takes exactly the editor's size: 320 × 200 at first, 500 × 400 after the plugin
+    // asked for it.
+    for _ in 0..20 {
+        Effect::idle(&mut cp);
+        Effect::idle(&mut vp);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(cp.editor_window().unwrap().size(), (500, 400), "clap window fits its editor");
+    assert_eq!(vp.editor_window().unwrap().size(), (500, 400), "vst3 window fits its editor");
+    // Full screen needs a window manager (EWMH); run with DRAGON_TEST_WM=1 under one (e.g. openbox on Xvfb).
+    if std::env::var_os("DRAGON_TEST_WM").is_some() {
+        let settle = |cp: &mut ClapPlugin, vp: &mut Vst3Plugin| {
+            for _ in 0..40 {
+                Effect::idle(cp);
+                Effect::idle(vp);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        assert!(cp.set_editor_fullscreen(true) && vp.set_editor_fullscreen(true));
+        settle(&mut cp, &mut vp);
+        let screen = |w: (u32, u32)| w.0 >= 1000 && w.1 >= 700;
+        assert!(screen(cp.editor_window().unwrap().size()), "clap full screen: {:?}", cp.editor_window().unwrap().size());
+        assert!(screen(vp.editor_window().unwrap().size()), "vst3 full screen: {:?}", vp.editor_window().unwrap().size());
+        // (returns the new state: false = left full screen)
+        assert!(!cp.set_editor_fullscreen(false) && !vp.set_editor_fullscreen(false));
+        settle(&mut cp, &mut vp);
+        assert_eq!(cp.editor_window().unwrap().size(), (500, 400), "clap back to its editor size");
+        assert_eq!(vp.editor_window().unwrap().size(), (500, 400), "vst3 back to its editor size");
+    }
 }
 
 #[test]
