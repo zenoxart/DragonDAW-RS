@@ -4,7 +4,7 @@
 
 mod color;
 pub use color::{shape as saturation_curve, DragonParticle};
-mod dynamics;
+pub mod dynamics;
 mod eq;
 mod modulation;
 pub mod pitch;

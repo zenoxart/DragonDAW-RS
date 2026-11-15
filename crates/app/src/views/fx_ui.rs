@@ -364,31 +364,84 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 }
 
 fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    grid(p, r, false);
-    let att = h.v("attack") / 100.0;
-    let sus = h.v("sustain") / 100.0;
-    let env = |t: f32, a: f32, s: f32| -> f32 {
-        let hit = (-t * 40.0).exp() * (1.0 + a * 0.8);
-        let tail = (-t * 4.0).exp() * 0.5 * (1.0 + s * 0.8);
-        (hit + tail).min(1.6) / 1.6
+    use dragon_engine::effects::dynamics::{ts_shape, TS_SHAPES};
+    p.rect_filled(r, 6.0, Color32::from_rgb(0x10, 0x12, 0x16));
+    let att = [h.v("attack") / 100.0, h.v("att_dur") / 1000.0, h.v("att_shape").round()];
+    let sus = [h.v("sustain") / 100.0, h.v("sus_dur") / 1000.0, h.v("sus_shape").round()];
+    let weights = |t: f32| -> (f32, f32) {
+        let (ad, sd) = (att[1].max(0.001), sus[1].max(0.01));
+        let wa = if t < ad { ts_shape(att[2] as usize, t / ad) } else { 0.0 };
+        let s0 = ad * 0.6;
+        let ws = if t >= s0 && t < s0 + sd { ((t - s0) / 0.005).min(1.0) * ts_shape(sus[2] as usize, (t - s0) / sd) } else { 0.0 };
+        (wa, ws)
     };
-    let base = r.bottom() - 8.0;
-    let phase = (h.t() * 0.5).fract();
-    for (a, s, c) in [(0.0, 0.0, Color32::from_white_alpha(40)), (att, sus, col)] {
-        let pts: Vec<Pos2> = (0..=120)
-            .map(|k| {
-                let t = k as f32 / 120.0;
-                Pos2::new(r.left() + 8.0 + t * (r.width() - 16.0), base - env(t, a, s) * (r.height() - 20.0))
-            })
-            .collect();
-        if c == col {
-            filled_curve(p, &pts, base, c);
+    // ---- top: scrolling level (grey) and gain change (attack orange-ish, sustain colour)
+    let top = Rect::from_min_max(r.min + Vec2::new(10.0, 10.0), Pos2::new(r.right() - 10.0, r.top() + r.height() * 0.55));
+    p.rect_filled(top, 4.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+    let hist_id = h.key.with("ts.hist");
+    let mut hist: std::collections::VecDeque<[f32; 4]> = p.ctx().data(|d| d.get_temp(hist_id)).unwrap_or_default();
+    if h.time.is_some() {
+        let v = if h.tele.len() >= 4 {
+            [h.tele[0], h.tele[1], h.tele[2], h.tele[3]]
         } else {
-            p.add(Shape::line(pts, Stroke::new(1.0_f32, c)));
+            // Gallery: a hit every 0.5 s.
+            let t = (h.t() % 0.5).max(0.0);
+            let lvl = 0.8 * (-t / 0.09).exp();
+            let (wa, ws) = weights(t);
+            [lvl, wa, ws, att[0] * 18.0 * wa + sus[0] * 18.0 * ws]
+        };
+        hist.push_back(v);
+        while hist.len() > 200 {
+            hist.pop_front();
+        }
+        p.ctx().data_mut(|d| d.insert_temp(hist_id, hist.clone()));
+    }
+    let n = hist.len();
+    let bw = top.width() / 200.0;
+    let mid = top.center().y;
+    let attack_col = Color32::from_rgb(0xf0, 0x8a, 0x4b);
+    for (i, v) in hist.iter().enumerate() {
+        let x = top.right() - (n - i) as f32 * bw;
+        let lv = (dragon_engine::dsp::gain_to_db(v[0].max(1e-4)) + 48.0).max(0.0) / 48.0;
+        let hgt = lv * top.height() * 0.46;
+        p.rect_filled(Rect::from_min_max(Pos2::new(x, mid - hgt), Pos2::new(x + bw * 0.8, mid + hgt)), 0.0, Color32::from_white_alpha(28));
+        // The processed level: input scaled by the gain change.
+        let out = (lv + v[3] / 48.0).clamp(0.0, 1.2);
+        let oh = out * top.height() * 0.46;
+        let c = if v[1] > v[2] { attack_col } else { col };
+        if v[1] > 0.01 || v[2] > 0.01 {
+            p.rect_filled(Rect::from_min_max(Pos2::new(x, mid - oh), Pos2::new(x + bw * 0.8, mid - hgt.min(oh))), 0.0, c.gamma_multiply(0.8));
+            p.rect_filled(Rect::from_min_max(Pos2::new(x, mid + hgt.min(oh)), Pos2::new(x + bw * 0.8, mid + oh)), 0.0, c.gamma_multiply(0.8));
         }
     }
-    let x = r.left() + 8.0 + phase * (r.width() - 16.0);
-    p.line_segment([Pos2::new(x, r.top() + 4.0), Pos2::new(x, base)], Stroke::new(1.0_f32, col.gamma_multiply(0.6)));
+    p.line_segment([Pos2::new(top.left(), mid), Pos2::new(top.right(), mid)], Stroke::new(1.0_f32, Color32::from_white_alpha(20)));
+    // ---- bottom: the attack and sustain gain envelopes
+    let bot = Rect::from_min_max(Pos2::new(r.left() + 10.0, top.bottom() + 8.0), r.max - Vec2::new(10.0, 8.0));
+    let half = bot.width() / 2.0 - 4.0;
+    for (k, (name, amt, dur, shape, color)) in [("ATTACK", att[0], att[1], att[2], attack_col), ("SUSTAIN", sus[0], sus[1], sus[2], col)].into_iter().enumerate() {
+        let pr = Rect::from_min_size(Pos2::new(bot.left() + k as f32 * (half + 8.0), bot.top()), Vec2::new(half, bot.height()));
+        p.rect_filled(pr, 4.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+        let cy = pr.center().y + 6.0;
+        let span = att[1] * 0.6 + sus[1];
+        let pts: Vec<Pos2> = (0..=80)
+            .map(|i| {
+                let t = span * i as f32 / 80.0;
+                let (wa, ws) = weights(t);
+                let w = if k == 0 { wa } else { ws };
+                Pos2::new(pr.left() + 6.0 + (pr.width() - 12.0) * i as f32 / 80.0, cy - amt * w * (pr.height() * 0.32))
+            })
+            .collect();
+        p.line_segment([Pos2::new(pr.left() + 4.0, cy), Pos2::new(pr.right() - 4.0, cy)], Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
+        filled_curve(p, &pts, cy, color);
+        p.text(pr.left_top() + Vec2::new(6.0, 4.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(9.5), color);
+        p.text(
+            pr.right_top() + Vec2::new(-6.0, 4.0),
+            egui::Align2::RIGHT_TOP,
+            format!("{:+.0}% · {:.0} ms · {}", amt * 100.0, dur * 1000.0, TS_SHAPES.get(shape as usize).unwrap_or(&"")),
+            egui::FontId::proportional(9.5),
+            theme::TEXT,
+        );
+    }
 }
 
 // ------------------------------------------------------------------------------------ time based

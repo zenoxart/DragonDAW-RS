@@ -541,37 +541,167 @@ pub fn deesser_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ transient shaper
 
-pub struct TransientShaper {
-    fast: Follower,
-    slow: Follower,
-    attack: f32,
-    sustain: f32,
-    output: f32,
+/// Envelope shapes for the attack and sustain gain curves.
+pub const TS_SHAPES: &[&str] = &["Needle", "Nail", "Blunt"];
+
+/// Shape `k` of a gain envelope at `x` (0 … 1 of its duration) → weight 1 … 0.
+pub fn ts_shape(k: usize, x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    match k {
+        0 => (1.0 - x).powi(4),
+        1 => 1.0 - x,
+        _ => 1.0 - x.powi(4),
+    }
 }
 
-const TS_PARAMS: &[ParamInfo] = &[ParamInfo::lin("attack", "Attack", -100.0, 100.0, 0.0, "%"), ParamInfo::lin("sustain", "Sustain", -100.0, 100.0, 0.0, "%"), ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB")];
+/// Transient designer with separate attack and sustain sections (amount, sensitivity, duration and
+/// shape each), a clip / soft-clip guard, dry/wet mix and a listen mode that solos the change.
+pub struct TransientShaper {
+    rate: f32,
+    fast: Follower,
+    slow: Follower,
+    peak: f32,
+    att: [f32; 4],
+    sus: [f32; 4],
+    guard: usize,
+    listen: usize,
+    mix: f32,
+    output: f32,
+    /// Seconds since the last detected attack (∞ = none yet), and the re-arm hold.
+    since: f32,
+    armed: bool,
+    tele: [f32; 4],
+}
+
+const TS_PARAMS: &[ParamInfo] = &[
+    ParamInfo::lin("attack", "Attack amount", -100.0, 100.0, 0.0, "%"),
+    ParamInfo::lin("att_sens", "Attack sensitivity", 0.0, 100.0, 60.0, "%"),
+    ParamInfo::log("att_dur", "Attack duration", 1.0, 200.0, 25.0, "ms"),
+    ParamInfo::choice("att_shape", "Attack shape", TS_SHAPES, 1.0),
+    ParamInfo::lin("sustain", "Sustain amount", -100.0, 100.0, 0.0, "%"),
+    ParamInfo::lin("sus_sens", "Sustain sensitivity", 0.0, 100.0, 60.0, "%"),
+    ParamInfo::log("sus_dur", "Sustain duration", 10.0, 2000.0, 250.0, "ms"),
+    ParamInfo::choice("sus_shape", "Sustain shape", TS_SHAPES, 1.0),
+    ParamInfo::choice("guard", "Guard", &["Off", "Clip", "Soft clip"], 2.0),
+    ParamInfo::choice("listen", "Listen", &["Output", "Attack only", "Sustain only"], 0.0),
+    ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
+    ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB"),
+];
+
+impl TransientShaper {
+    pub fn new(rate: f32) -> Self {
+        TransientShaper {
+            rate,
+            fast: Follower::new(0.2, 8.0, rate),
+            slow: Follower::new(15.0, 120.0, rate),
+            peak: 0.0,
+            att: [0.0, 0.6, 0.025, 1.0],
+            sus: [0.0, 0.6, 0.25, 1.0],
+            guard: 2,
+            listen: 0,
+            mix: 1.0,
+            output: 1.0,
+            since: f32::INFINITY,
+            armed: true,
+            tele: [0.0; 4],
+        }
+    }
+
+    /// Weights (attack, sustain) at `t` seconds after an attack.
+    pub fn weights(&self, t: f32) -> (f32, f32) {
+        let (ad, sd) = (self.att[2].max(0.001), self.sus[2].max(0.01));
+        let wa = if t < ad { ts_shape(self.att[3] as usize, t / ad) } else { 0.0 };
+        // The sustain section starts as the attack fades and fades in over 5 ms.
+        let s0 = ad * 0.6;
+        let ws = if t >= s0 && t < s0 + sd { ((t - s0) / 0.005).min(1.0) * ts_shape(self.sus[3] as usize, (t - s0) / sd) } else { 0.0 };
+        (wa, ws)
+    }
+}
 
 impl Effect for TransientShaper {
     fn set_param(&mut self, id: &str, v: f32) {
         match id {
-            "attack" => self.attack = v / 100.0,
-            "sustain" => self.sustain = v / 100.0,
+            "attack" => self.att[0] = v / 100.0,
+            "att_sens" => self.att[1] = v / 100.0,
+            "att_dur" => self.att[2] = v / 1000.0,
+            "att_shape" => self.att[3] = v.round().clamp(0.0, 2.0),
+            "sustain" => self.sus[0] = v / 100.0,
+            "sus_sens" => self.sus[1] = v / 100.0,
+            "sus_dur" => self.sus[2] = v / 1000.0,
+            "sus_shape" => self.sus[3] = v.round().clamp(0.0, 2.0),
+            "guard" => self.guard = v.round() as usize,
+            "listen" => self.listen = v.round() as usize,
+            "mix" => self.mix = v.clamp(0.0, 1.0),
             "output" => self.output = db_to_gain(v),
             _ => {}
         }
     }
-    fn reset(&mut self) {}
+    fn reset(&mut self) {
+        self.since = f32::INFINITY;
+        self.armed = true;
+        self.peak = 0.0;
+    }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let dt = 1.0 / self.rate;
+        // Attack sensitivity: the jump (fast over slow envelope) that counts as a hit, 14 dB … 1.5 dB.
+        let thresh = 14.0 - 12.5 * self.att[1];
+        // Sustain sensitivity: how far below the hit's peak the tail still counts (10 … 50 dB).
+        let floor = 10.0 + 40.0 * self.sus[1];
+        let peak_rel = (-dt / 0.4).exp();
+        self.tele = [0.0; 4];
         for i in 0..l.len() {
             let x = l[i].abs().max(r[i].abs());
             let f = self.fast.next(x);
             let s = self.slow.next(x);
-            let diff = gain_to_db(f.max(1e-6)) - gain_to_db(s.max(1e-6)); // > 0 on transients
-            let g_db = if diff > 0.0 { diff.min(24.0) * self.attack } else { (-diff).min(24.0) * self.sustain };
-            let g = db_to_gain(g_db.clamp(-24.0, 24.0)) * self.output;
-            l[i] *= g;
-            r[i] *= g;
+            let jump = gain_to_db(f.max(1e-6)) - gain_to_db(s.max(1e-6));
+            if self.armed && jump > thresh && f > 1e-4 {
+                self.since = 0.0;
+                self.armed = false;
+                self.peak = f;
+            }
+            if !self.armed && jump < thresh * 0.4 && self.since > 0.01 {
+                self.armed = true;
+            }
+            self.peak = (self.peak * peak_rel).max(f);
+            let (wa, mut ws) = self.weights(self.since);
+            // The tail only counts while it is within `floor` dB of the hit.
+            if gain_to_db(s.max(1e-6)) < gain_to_db(self.peak.max(1e-6)) - floor {
+                ws = 0.0;
+            }
+            self.since += dt;
+            let ga = self.att[0] * 18.0 * wa;
+            let gs = self.sus[0] * 18.0 * ws;
+            let g = db_to_gain(ga + gs);
+            for buf in [&mut l[i], &mut r[i]] {
+                let dry = *buf;
+                let wet = match self.listen {
+                    1 => dry * (db_to_gain(ga) - 1.0),
+                    2 => dry * (db_to_gain(gs) - 1.0),
+                    _ => dry * g,
+                };
+                let mut y = (dry * (1.0 - self.mix) + wet * self.mix) * self.output;
+                y = match self.guard {
+                    1 => y.clamp(-1.0, 1.0),
+                    2 => {
+                        if y.abs() > 0.8 {
+                            y.signum() * (0.8 + 0.2 * ((y.abs() - 0.8) / 0.2).tanh())
+                        } else {
+                            y
+                        }
+                    }
+                    _ => y,
+                };
+                *buf = y;
+            }
+            // Display: input level, attack weight, sustain weight, gain (dB) – the block's maxima.
+            self.tele[0] = self.tele[0].max(x);
+            self.tele[1] = self.tele[1].max(wa);
+            self.tele[2] = self.tele[2].max(ws);
+            self.tele[3] = if (ga + gs).abs() > self.tele[3].abs() { ga + gs } else { self.tele[3] };
         }
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
@@ -580,10 +710,10 @@ pub fn transient_def() -> EffectDef {
         id: "transient",
         name: "Transient Shaper",
         category: "Dynamics",
-        description: "Boosts or softens attacks and sustain independently of level.",
+        description: "Transient designer: attack and sustain sections with amount, sensitivity, duration and shape, a clip / soft-clip guard, mix and listen modes.",
         params: TS_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(TransientShaper { fast: Follower::new(0.5, 20.0, rate), slow: Follower::new(20.0, 200.0, rate), attack: 0.0, sustain: 0.0, output: 1.0 }),
+        create: |rate| Box::new(TransientShaper::new(rate)),
     }
 }
 
@@ -591,6 +721,39 @@ pub fn transient_def() -> EffectDef {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// Attack +100 % lifts the first milliseconds of a hit, sustain −100 % ducks its tail; the guard keeps
+    /// the boosted attack under full scale.
+    #[test]
+    fn transient_designer_shapes_hits() {
+        let rate = 48000.0;
+        // A drum-like hit every 0.5 s: instant attack, 300 ms exponential tail.
+        let hit = |i: usize| {
+            let t = (i % 24000) as f32 / rate;
+            (t * 180.0 * std::f32::consts::TAU).sin() * 0.7 * (-t / 0.08).exp()
+        };
+        let x: Vec<f32> = (0..96000).map(hit).collect();
+        let run = |params: &[(&str, f32)]| {
+            let mut e = TransientShaper::new(rate);
+            for (k, v) in params {
+                e.set_param(k, *v);
+            }
+            let (mut l, mut r) = (x.clone(), x.clone());
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                e.process(a, b, None);
+            }
+            l
+        };
+        let rms = |v: &[f32], a: usize, b: usize| (v[a..b].iter().map(|s| s * s).sum::<f32>() / (b - a) as f32).sqrt();
+        let base = rms(&x, 24000, 24000 + 480);
+        let atk = run(&[("attack", 100.0), ("guard", 0.0)]);
+        assert!(rms(&atk, 24000, 24000 + 480) > base * 1.6, "attack boosted");
+        let sus = run(&[("sustain", -100.0), ("sus_dur", 400.0)]);
+        let (b2, s2) = (rms(&x, 24000 + 4800, 24000 + 9600), rms(&sus, 24000 + 4800, 24000 + 9600));
+        assert!(s2 < b2 * 0.6, "tail ducked: {s2} vs {b2}");
+        let guarded = run(&[("attack", 100.0), ("output", 12.0), ("guard", 1.0)]);
+        assert!(guarded.iter().all(|v| v.abs() <= 1.0001));
+    }
 
     #[test]
     fn limiter_holds_ceiling() {
