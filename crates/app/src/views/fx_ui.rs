@@ -186,6 +186,72 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 if s != 0.0 {
                     out.push((format!("b{b}_q"), (h.v(&format!("b{b}_q")) * (1.0 + s / 300.0)).clamp(0.1, 18.0)));
                 }
+                // Alt+click removes the band (FabFilter style).
+                if resp.clicked() && ui.input(|i| i.modifiers.alt) {
+                    out.push((format!("b{b}_on"), 0.0));
+                }
+                if !resp.dragged() {
+                    let ty = EQ_TYPES.get(h.v(&format!("b{b}_type")).round() as usize).copied().unwrap_or("Bell");
+                    egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), resp.id.with("eq.tip"), |ui| {
+                        ui.label(format!("Band {b} · {ty}\n{} · {:+.1} dB · Q {:.2}", hz_text(h.v(&format!("b{b}_freq"))), h.v(&format!("b{b}_gain")), h.v(&format!("b{b}_q"))));
+                        ui.label(egui::RichText::new("drag · wheel = Q · right-click = shape · Alt+click = remove").size(10.0).color(theme::TEXT_DIM));
+                    });
+                }
+            } else if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            // Double-click on empty space adds a band there: a cut near the edges, a bell elsewhere.
+            if resp.double_clicked() && nearest.is_none() && r.contains(pos) {
+                if let Some(b) = (1..=7).find(|b| h.v(&format!("b{b}_on")) < 0.5) {
+                    let f = freq_at(r, pos.x).clamp(20.0, 20_000.0);
+                    let edge = (pos.x - r.left()) / r.width();
+                    let ty = if edge < 0.08 {
+                        4.0
+                    } else if edge > 0.92 {
+                        3.0
+                    } else {
+                        0.0
+                    };
+                    let db = if ty == 0.0 { ((r.center().y - pos.y) / (r.height() * 0.5) * range).clamp(-range, range) } else { 0.0 };
+                    out.extend([(format!("b{b}_on"), 1.0), (format!("b{b}_type"), ty), (format!("b{b}_freq"), f), (format!("b{b}_gain"), (db * 10.0).round() / 10.0), (format!("b{b}_q"), 0.9)]);
+                }
+            }
+            // Right-click on a band: shape, Q presets, gain reset and removal.
+            let menu_id = resp.id.with("eq.menu");
+            if resp.secondary_clicked() {
+                ui.data_mut(|d| d.insert_temp(menu_id, nearest.unwrap_or(0)));
+            }
+            let menu_band: usize = ui.data(|d| d.get_temp(menu_id)).unwrap_or(0);
+            if menu_band > 0 {
+                let b = menu_band;
+                resp.context_menu(|ui| {
+                    ui.label(egui::RichText::new(format!("Band {b}")).strong());
+                    let cur = h.v(&format!("b{b}_type")).round() as usize;
+                    for (k, name) in EQ_TYPES.iter().enumerate() {
+                        if ui.selectable_label(k == cur, *name).clicked() {
+                            out.push((format!("b{b}_type"), k as f32));
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Q");
+                        for q in [0.5f32, 0.9, 2.0, 5.0, 10.0] {
+                            if ui.small_button(format!("{q}")).clicked() {
+                                out.push((format!("b{b}_q"), q));
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    if ui.button("Reset gain").clicked() {
+                        out.push((format!("b{b}_gain"), 0.0));
+                        ui.close_menu();
+                    }
+                    if ui.button("Remove band").clicked() {
+                        out.push((format!("b{b}_on"), 0.0));
+                        ui.close_menu();
+                    }
+                });
             }
         }
         "dragon_particle" => {
@@ -232,6 +298,33 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
 
 // ---------------------------------------------------------------------------------------------- EQ
 
+const EQ_TYPES: [&str; 7] = ["Bell", "Low shelf", "High shelf", "Low pass", "High pass", "Band pass", "Notch"];
+
+fn hz_text(f: f32) -> String {
+    if f >= 1000.0 {
+        format!("{:.2} kHz", f / 1000.0)
+    } else {
+        format!("{f:.0} Hz")
+    }
+}
+
+/// The live analyzer behind the EQ curve: the input spectrum as a faint fill, the output as a line.
+/// `tele` holds the input bands then the output bands (see `dsp::spectrum`).
+fn spectrum(p: &egui::Painter, pr: Rect, tele: &[f32]) {
+    use dragon_engine::dsp::spectrum::{band_freq, BANDS};
+    if tele.len() < BANDS * 2 {
+        return;
+    }
+    let y = |db: f32| pr.bottom() - ((db + 84.0) / 90.0).clamp(0.0, 1.0) * pr.height();
+    let pts = |off: usize| -> Vec<Pos2> { (0..BANDS).map(|b| Pos2::new(fx(pr, band_freq(b)), y(tele[off + b]))).collect() };
+    let pre = pts(0);
+    for w in pre.windows(2) {
+        let q = [w[0], w[1], Pos2::new(w[1].x, pr.bottom()), Pos2::new(w[0].x, pr.bottom())];
+        p.add(Shape::convex_polygon(q.to_vec(), Color32::from_rgba_unmultiplied(120, 140, 170, 22), Stroke::NONE));
+    }
+    p.add(Shape::line(pts(BANDS), Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(200, 215, 235, 90))));
+}
+
 const BAND_COLORS: [Color32; 7] = [
     Color32::from_rgb(0xf0, 0x52, 0x6a),
     Color32::from_rgb(0xf0, 0x8a, 0x4b),
@@ -259,6 +352,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         .collect();
     let out = h.v("output");
     let p = p.with_clip_rect(pr.expand(8.0).intersect(r));
+    spectrum(&p, pr, h.tele);
     // Each band's own shape, faint, then the sum.
     for (k, bq, _, _) in &bands {
         let pts: Vec<Pos2> = (0..=120).map(|i| pr.left() + pr.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
@@ -372,14 +466,18 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         }
     }
     let m = Rect::from_min_max(Pos2::new(meter.right() + 30.0, sq.top()), Pos2::new(r.right() - 12.0, sq.bottom()));
+    let history = h.def.id == "compressor";
     p.text(Pos2::new(m.left(), m.top() + 4.0), egui::Align2::LEFT_TOP, "GAIN REDUCTION", egui::FontId::proportional(9.5), theme::TEXT_DIM);
     p.text(
-        Pos2::new(m.left(), m.top() + 22.0),
-        egui::Align2::LEFT_TOP,
+        Pos2::new(if history { m.right() } else { m.left() }, if history { m.top() } else { m.top() + 22.0 }),
+        if history { egui::Align2::RIGHT_TOP } else { egui::Align2::LEFT_TOP },
         if h.gr > 0.05 { format!("−{:.1} dB", h.gr) } else { "0.0 dB".into() },
-        egui::FontId::monospace(26.0),
+        egui::FontId::monospace(if history { 15.0 } else { 26.0 }),
         if h.gr > 0.1 { theme::WARN } else { theme::TEXT_DIM },
     );
+    if history {
+        level_history(p, Rect::from_min_max(Pos2::new(m.left(), m.top() + 22.0), Pos2::new(m.right(), m.bottom() - 18.0)), h, col, |x| curve(x) - makeup);
+    }
     let caption = match h.def.id {
         "limiter" => format!("ceiling {:.1} dB · +{:.1} dB drive", h.v("ceiling"), h.v("gain")),
         "gate" => format!("range {:.0} dB · hold {:.0} ms", h.v("range"), h.v("hold")),
@@ -388,6 +486,53 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         _ => format!("{:.1}:1 · attack {:.0} ms · release {:.0} ms", ratio, h.v("attack"), h.v("release")),
     };
     p.text(Pos2::new(m.left(), m.bottom()), egui::Align2::LEFT_BOTTOM, caption, egui::FontId::proportional(10.5), theme::TEXT);
+}
+
+/// Pro-C style scrolling history: input level (grey), output level (colour) and gain reduction
+/// (orange, hanging from the top), on one dB scale. `static_gr` gives the curve for the gallery demo.
+fn level_history(p: &egui::Painter, g: Rect, h: &Hero, col: Color32, static_out: impl Fn(f32) -> f32) {
+    const LEN: usize = 240;
+    p.rect_filled(g, 3.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+    let hist_id = h.key.with("comp.hist");
+    let mut hist: std::collections::VecDeque<[f32; 3]> = p.ctx().data(|d| d.get_temp(hist_id)).unwrap_or_default();
+    if h.time.is_some() {
+        let v = if h.tele.len() >= 3 {
+            [h.tele[0], h.tele[1], h.tele[2]]
+        } else {
+            // Gallery: a drum-like level, compressed by the static curve.
+            let t = h.t() % 0.5;
+            let x = -36.0 + 32.0 * (-t / 0.12).exp();
+            let y = static_out(x);
+            [x, y + h.v("makeup"), (x - y).max(0.0)]
+        };
+        hist.push_back(v);
+        while hist.len() > LEN {
+            hist.pop_front();
+        }
+        p.ctx().data_mut(|d| d.insert_temp(hist_id, hist.clone()));
+    }
+    let lo = -60.0;
+    let y = |db: f32| g.bottom() - ((db - lo) / -lo).clamp(0.0, 1.0) * g.height();
+    for db in [-12.0, -24.0, -36.0, -48.0] {
+        p.line_segment([Pos2::new(g.left(), y(db)), Pos2::new(g.right(), y(db))], Stroke::new(1.0_f32, Color32::from_white_alpha(10)));
+        p.text(Pos2::new(g.left() + 2.0, y(db)), egui::Align2::LEFT_BOTTOM, format!("{db:.0}"), egui::FontId::proportional(7.5), Color32::from_white_alpha(60));
+    }
+    let n = hist.len();
+    let dx = g.width() / LEN as f32;
+    let xs = |i: usize| g.right() - (n - i) as f32 * dx;
+    for (i, v) in hist.iter().enumerate() {
+        let x = xs(i);
+        p.rect_filled(Rect::from_min_max(Pos2::new(x, y(v[0])), Pos2::new(x + dx, g.bottom())), 0.0, Color32::from_white_alpha(26));
+        if v[2] > 0.05 {
+            let gh = (v[2] / -lo) * g.height();
+            p.rect_filled(Rect::from_min_max(Pos2::new(x, g.top()), Pos2::new(x + dx, g.top() + gh)), 0.0, Color32::from_rgba_unmultiplied(0xf0, 0x5a, 0x3b, 150));
+        }
+    }
+    if n > 1 {
+        let out: Vec<Pos2> = hist.iter().enumerate().map(|(i, v)| Pos2::new(xs(i) + dx * 0.5, y(v[1]))).collect();
+        p.add(Shape::line(out, Stroke::new(1.3_f32, col)));
+    }
+    p.rect_stroke(g, 3.0, Stroke::new(1.0_f32, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
 }
 
 fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -1469,5 +1614,51 @@ mod tests {
         let last = |k: &str| got.iter().rev().find(|e| e.0 == k).map(|e| e.1).unwrap_or_else(|| panic!("{k} edited: {got:?}"));
         assert!((last("b3_freq") / 4000.0 - 1.0).abs() < 0.05, "{}", last("b3_freq"));
         assert!((last("b3_gain") - 9.0).abs() < 0.3, "{}", last("b3_gain"));
+    }
+
+    /// Double-clicking empty EQ space adds a band there; Alt+clicking a node removes it.
+    #[test]
+    fn eq_bands_are_added_and_removed_by_clicking() {
+        let def = effects::find("eq").unwrap();
+        let params = def.defaults();
+        let ctx = egui::Context::default();
+        let mut area = Rect::NOTHING;
+        let mut got: Vec<(String, f32)> = Vec::new();
+        let mut frame = |events: Vec<egui::Event>, mods: egui::Modifiers, got: &mut Vec<(String, f32)>| {
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0))), events, modifiers: mods, ..Default::default() };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    area = ui.available_rect_before_wrap();
+                    let (e, _) = hero(ui, &Hero { def, params: &params, gr: 0.0, enabled: true, color: theme::ACCENT, time: None, tele: &[], key: egui::Id::new("eq") });
+                    got.extend(e);
+                });
+            });
+            area
+        };
+        let a = frame(vec![], Default::default(), &mut got);
+        let r = plot(Rect::from_min_size(a.min, egui::vec2(a.width().max(260.0), 170.0)));
+        let click = |at: Pos2, mods: egui::Modifiers| -> Vec<egui::Event> {
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: mods },
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: mods },
+            ]
+        };
+        // Between the default bands (100, 300, 1k, 3k, 8k Hz): 550 Hz, +6 dB.
+        let at = Pos2::new(fx(r, 550.0), r.center().y - r.height() * 0.5 / 3.0);
+        frame(click(at, Default::default()), Default::default(), &mut got);
+        frame(click(at, Default::default()), Default::default(), &mut got);
+        let last = |got: &Vec<(String, f32)>, k: &str| got.iter().rev().find(|e| e.0 == k).map(|e| e.1);
+        assert_eq!(last(&got, "b1_on"), Some(1.0), "first free band switched on: {got:?}");
+        assert_eq!(last(&got, "b1_type"), Some(0.0), "a bell in the middle");
+        assert!((last(&got, "b1_freq").unwrap() / 550.0 - 1.0).abs() < 0.05);
+        assert!((last(&got, "b1_gain").unwrap() - 6.0).abs() < 0.3);
+        // Alt+click the 1 kHz node.
+        got.clear();
+        let node = Pos2::new(fx(r, 1000.0), r.center().y);
+        let alt = egui::Modifiers { alt: true, ..Default::default() };
+        frame(vec![egui::Event::PointerMoved(Pos2::new(5.0, 5.0))], Default::default(), &mut got);
+        frame(click(node, alt), alt, &mut got);
+        assert_eq!(last(&got, "b4_on"), Some(0.0), "{got:?}");
     }
 }

@@ -2,6 +2,7 @@
 //! level conversions. Everything is allocation-free after construction.
 
 pub mod loudness;
+pub mod spectrum;
 pub mod stretch;
 pub mod tube;
 

@@ -296,8 +296,9 @@ impl Effect for ClassAStrip {
                 a = self.eq(0, a);
                 b = self.eq(1, b);
             }
-            l[i] = a * self.output;
-            r[i] = b * self.output;
+            // The line amp's rails (~ +24 dBFS): inaudible at normal levels, keeps extreme settings bounded.
+            l[i] = 16.0 * (a * self.output / 16.0).tanh();
+            r[i] = 16.0 * (b * self.output / 16.0).tanh();
             pout = pout.max(l[i].abs().max(r[i].abs()));
         }
         self.gr = peak_gr;

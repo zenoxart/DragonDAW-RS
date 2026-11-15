@@ -1,6 +1,7 @@
 //! 7-band parametric EQ (bell, shelves, cuts, notch, band pass per band) with output gain.
 
 use super::{Effect, EffectDef, ParamInfo};
+use crate::dsp::spectrum::{Analyzer, BANDS};
 use crate::dsp::{db_to_gain, Biquad, BiquadKind};
 
 pub const EQ_BANDS: usize = 7;
@@ -58,12 +59,25 @@ pub struct ParametricEq {
     filters: [[Biquad; 2]; EQ_BANDS],
     output: f32,
     dirty: bool,
+    pre: Analyzer,
+    post: Analyzer,
+    /// Telemetry: the input spectrum, then the output spectrum ([`BANDS`] dB values each).
+    tele: Vec<f32>,
 }
 
 impl ParametricEq {
     pub fn new(rate: f32) -> Self {
         let b = Band { on: false, kind: BiquadKind::Peak, freq: 1000.0, gain: 0.0, q: 0.9 };
-        ParametricEq { rate, bands: [b; EQ_BANDS], filters: [[Biquad::default(); 2]; EQ_BANDS], output: 1.0, dirty: true }
+        ParametricEq {
+            rate,
+            bands: [b; EQ_BANDS],
+            filters: [[Biquad::default(); 2]; EQ_BANDS],
+            output: 1.0,
+            dirty: true,
+            pre: Analyzer::new(rate),
+            post: Analyzer::new(rate),
+            tele: vec![crate::dsp::spectrum::FLOOR; BANDS * 2],
+        }
     }
 
     fn update(&mut self) {
@@ -119,12 +133,15 @@ impl Effect for ParametricEq {
         for f in self.filters.iter_mut().flatten() {
             f.reset();
         }
+        self.pre.reset();
+        self.post.reset();
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         if self.dirty {
             self.update();
         }
+        self.pre.push(l, r);
         for (i, b) in self.bands.iter().enumerate() {
             if !b.on {
                 continue;
@@ -142,6 +159,12 @@ impl Effect for ParametricEq {
                 *x *= self.output;
             }
         }
+        self.post.push(l, r);
+        self.tele[..BANDS].copy_from_slice(&self.pre.bands);
+        self.tele[BANDS..].copy_from_slice(&self.post.bands);
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 

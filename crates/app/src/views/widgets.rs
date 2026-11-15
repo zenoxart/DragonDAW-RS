@@ -218,6 +218,15 @@ pub fn knob_colored(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f
 
 /// The effect-editor knob from the design reference: the name in capitals above, a dark knob with a
 /// coloured value arc and a white pointer, the value printed below. Same gestures as [`knob`].
+/// Parses a typed parameter value: "-6", "-6 dB", "2.5k", "2.5 kHz", "40%", "4:1".
+pub fn parse_value(s: &str) -> Option<f32> {
+    let t = s.trim().to_lowercase().replace(',', ".");
+    let num: String = t.chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')).collect();
+    let x: f32 = num.parse().ok()?;
+    let rest = t[num.len()..].trim_start();
+    Some(if rest.starts_with('k') { x * 1000.0 } else { x })
+}
+
 pub fn fx_knob(ui: &mut Ui, n: &mut f32, default: f32, label: &str, value: &str, color: Color32) -> Response {
     let size = 40.0;
     let w = 64.0;
@@ -234,7 +243,7 @@ pub fn fx_knob(ui: &mut Ui, n: &mut f32, default: f32, label: &str, value: &str,
             r.mark_changed();
         }
     }
-    if r.double_clicked() {
+    if r.double_clicked() || (r.clicked() && ui.input(|i| i.modifiers.command)) {
         *n = default;
         r.mark_changed();
     }
@@ -387,5 +396,19 @@ pub fn snap_floor(beat: f64, grid: f64) -> f64 {
         beat
     } else {
         (beat / grid).floor() * grid
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn typed_values_parse_with_units() {
+        use super::parse_value as p;
+        assert_eq!(p("-6"), Some(-6.0));
+        assert_eq!(p(" -6 dB"), Some(-6.0));
+        assert_eq!(p("2.5k"), Some(2500.0));
+        assert_eq!(p("2,5 kHz"), Some(2500.0));
+        assert_eq!(p("4:1"), Some(4.0));
+        assert_eq!(p("abc"), None);
     }
 }

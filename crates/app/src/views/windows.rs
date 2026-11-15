@@ -240,15 +240,44 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                         }
                         _ => {
                             let mut n = prm.normalize(v);
-                            let r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol).on_hover_text(format!("{} – drag, Shift = fine, double-click resets", prm.name));
+                            let r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol)
+                                .on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
                             v = prm.denormalize(n);
                             widgets::apply(st, &r, prm.name, |p| {
                                 with_insert(p, m, i, |x| {
                                     x.params.insert(key.clone(), v);
                                 })
                             });
-                            let target = Target::InsertParam { channel: m, insert: i, param: key };
+                            let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
                             r.context_menu(|ui| {
+                                // Type an exact value (FabFilter style); units and a k suffix are accepted.
+                                let buf_id = ui.id().with(("fx.type", &target));
+                                let mut buf: String = ui.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| prm.format(v));
+                                let te = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(110.0).hint_text("value"));
+                                ui.data_mut(|d| d.insert_temp(buf_id, buf.clone()));
+                                if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    if let Some(x) = widgets::parse_value(&buf) {
+                                        let x = x.clamp(prm.min.min(prm.max), prm.max.max(prm.min));
+                                        let key = key.clone();
+                                        st.session.edit(prm.name, |p| {
+                                            with_insert(p, m, i, |ins| {
+                                                ins.params.insert(key, x);
+                                            })
+                                        });
+                                    }
+                                    ui.data_mut(|d| d.remove::<String>(buf_id));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Reset to default").clicked() {
+                                    let key = key.clone();
+                                    st.session.edit(prm.name, |p| {
+                                        with_insert(p, m, i, |ins| {
+                                            ins.params.insert(key, prm.default);
+                                        })
+                                    });
+                                    ui.close_menu();
+                                }
+                                ui.separator();
                                 if ui.button("MIDI learn").clicked() {
                                     st.ui.midi_learn = Some(target.clone());
                                     ui.close_menu();

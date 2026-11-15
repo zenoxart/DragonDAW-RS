@@ -54,6 +54,8 @@ pub struct Compressor {
     sc_hp: [Biquad; 2],
     sc_hp_freq: f32,
     auto_makeup: bool,
+    /// Telemetry per block: input peak (dB), output peak (dB), gain reduction (dB).
+    tele: [f32; 3],
 }
 
 const COMP_PARAMS: &[ParamInfo] = &[
@@ -98,7 +100,9 @@ impl Effect for Compressor {
         let auto = if self.auto_makeup { -self.core.static_curve(0.0) * 0.5 } else { 0.0 };
         let makeup = db_to_gain(self.makeup + auto);
         let ext = if self.use_sidechain { sc } else { None };
+        let (mut pin, mut pout, mut gr) = (0.0f32, 0.0f32, 0.0f32);
         for i in 0..l.len() {
+            pin = pin.max(l[i].abs()).max(r[i].abs());
             let (dl, dr) = match ext {
                 Some((a, b)) => (a[i], b[i]),
                 None => (l[i], r[i]),
@@ -108,10 +112,17 @@ impl Effect for Compressor {
             let w = g * makeup;
             l[i] = l[i] * (1.0 - self.mix) + l[i] * w * self.mix;
             r[i] = r[i] * (1.0 - self.mix) + r[i] * w * self.mix;
+            pout = pout.max(l[i].abs()).max(r[i].abs());
+            gr = gr.max(self.core.gr);
         }
+        let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
+        self.tele = [db(pin), db(pout), gr];
     }
     fn gain_reduction(&self) -> f32 {
         self.core.gr
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
@@ -124,7 +135,16 @@ pub fn compressor_def() -> EffectDef {
         params: COMP_PARAMS,
         uses_sidechain: true,
         create: |rate| {
-            Box::new(Compressor { core: CompCore::new(rate), makeup: 0.0, mix: 1.0, use_sidechain: false, sc_hp: [Biquad::new(BiquadKind::HighPass, 20.0, 0.707, 0.0, rate); 2], sc_hp_freq: 20.0, auto_makeup: false })
+            Box::new(Compressor {
+                core: CompCore::new(rate),
+                makeup: 0.0,
+                mix: 1.0,
+                use_sidechain: false,
+                sc_hp: [Biquad::new(BiquadKind::HighPass, 20.0, 0.707, 0.0, rate); 2],
+                sc_hp_freq: 20.0,
+                auto_makeup: false,
+                tele: [-90.0, -90.0, 0.0],
+            })
         },
     }
 }
