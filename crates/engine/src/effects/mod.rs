@@ -9,6 +9,7 @@ mod eq;
 mod modulation;
 pub mod pitch;
 mod reverb;
+pub mod voice;
 
 pub use eq::{ParametricEq, EQ_BANDS};
 
@@ -208,6 +209,7 @@ pub fn registry() -> &'static [EffectDef] {
             color::imager_def(),
             color::dragon_particle_def(),
             pitch::pitch_correct_def(),
+            voice::clean_voice_def(),
         ]
     })
 }

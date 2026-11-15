@@ -412,6 +412,9 @@ pub fn category_color(cat: &str) -> Color32 {
         "Mastering" => Color32::from_rgb(0xf5, 0xc8, 0x42),
         "Pitch" => Color32::from_rgb(0xe0, 0x6e, 0xd8),
         "Utility" => Color32::from_rgb(0x9a, 0xa5, 0xb5),
+        "Vocal" => Color32::from_rgb(0xff, 0x7a, 0xa8),
+        "Channel strip" => Color32::from_rgb(0xd9, 0x9a, 0x4e),
+        "Drums" => Color32::from_rgb(0xff, 0x5a, 0x36),
         _ => theme::ACCENT,
     }
 }

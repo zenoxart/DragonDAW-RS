@@ -111,7 +111,7 @@ fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
 pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
     let height = match h.def.id {
-        "tune" => 230.0,
+        "tune" | "clean_voice" => 230.0,
         "dragon_particle" => 240.0,
         _ => 170.0,
     };
@@ -132,6 +132,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "utility" => stereo(&p, r, h, col),
         "tune" => tune(&p, r, h, col),
         "dragon_particle" => particle(&p, r, h, col),
+        "clean_voice" => clean_voice(&p, r, h, col),
         _ => {
             grid(&p, r, false);
             let pts: Vec<Pos2> = (0..=96).map(|k| Pos2::new(r.left() + r.width() * k as f32 / 96.0, r.center().y + (k as f32 * 0.25 + h.t() * 3.0).sin() * r.height() * 0.3)).collect();
@@ -980,6 +981,91 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         format!("{} {} · retune {:.0} ms", KEYS[key], TUNE_SCALES.get(h.v("scale").round() as usize).map(|s| s.0).unwrap_or(""), h.v("speed")),
         egui::FontId::proportional(10.0),
         theme::TEXT_DIM,
+    );
+}
+
+/// Clean Voice: a valve that glows while the tube stage is in, two moving-coil meters for the leveller and
+/// the vari-mu gain reduction, and gain-reduction bars for the de-esser, the four multiband faders and the
+/// resonance suppressor.
+fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    p.rect_filled(r, 8.0, Color32::from_rgb(0x14, 0x16, 0x1b));
+    let t = h.t();
+    let tele: Vec<f32> = if h.tele.len() >= 9 {
+        h.tele.to_vec()
+    } else {
+        let w = (t * 2.0).sin().abs();
+        vec![3.0 + 3.0 * w, 1.5 + 2.0 * w, 2.0 * w, 1.0, 1.5 * w, 0.8, 1.2, 2.5 * w, if h.v("tube") > 0.5 { 1.0 } else { 0.0 }]
+    };
+    let tube_on = tele[8] > 0.5;
+    // ---- the valve
+    let vx = r.left() + 54.0;
+    let glass = Rect::from_center_size(Pos2::new(vx, r.center().y - 6.0), Vec2::new(54.0, r.height() - 60.0));
+    let glow_id = h.key.with("cv.glow");
+    let mut glow: f32 = p.ctx().data(|d| d.get_temp(glow_id)).unwrap_or(if tube_on { 1.0 } else { 0.0 });
+    let target = if tube_on { 1.0 } else { 0.0 };
+    glow += (target - glow) * if target > glow { 0.05 } else { 0.02 };
+    p.ctx().data_mut(|d| d.insert_temp(glow_id, glow));
+    let heat = Color32::from_rgb(0xff, 0x8a, 0x3c);
+    for k in (1..=5).rev() {
+        p.circle_filled(Pos2::new(vx, glass.center().y + 10.0), 14.0 + k as f32 * 6.0, heat.gamma_multiply(0.04 * glow));
+    }
+    p.rect_filled(glass, egui::CornerRadius { nw: 26, ne: 26, sw: 6, se: 6 }, Color32::from_rgba_unmultiplied(0x90, 0xa0, 0xb0, 22));
+    p.rect_stroke(glass, egui::CornerRadius { nw: 26, ne: 26, sw: 6, se: 6 }, Stroke::new(1.0_f32, Color32::from_white_alpha(60)), egui::StrokeKind::Inside);
+    // Plates and the heater filament.
+    let plate = Rect::from_center_size(Pos2::new(vx, glass.center().y + 4.0), Vec2::new(30.0, glass.height() * 0.45));
+    p.rect_filled(plate, 3.0, Color32::from_gray(48));
+    p.rect_stroke(plate, 3.0, Stroke::new(1.0_f32, Color32::from_gray(90)), egui::StrokeKind::Inside);
+    for k in 0..3 {
+        let x = plate.left() + 8.0 + k as f32 * 7.0;
+        p.line_segment([Pos2::new(x, plate.top() + 4.0), Pos2::new(x, plate.bottom() - 4.0)], Stroke::new(2.0_f32, heat.gamma_multiply(0.15 + 0.85 * glow * (0.85 + 0.15 * (t * 7.0 + k as f32).sin()))));
+    }
+    let base = Rect::from_min_max(Pos2::new(glass.left() - 4.0, glass.bottom()), Pos2::new(glass.right() + 4.0, glass.bottom() + 12.0));
+    p.rect_filled(base, 3.0, Color32::from_gray(30));
+    p.text(Pos2::new(vx, r.bottom() - 8.0), egui::Align2::CENTER_BOTTOM, if tube_on { "TUBE IN" } else { "TUBE OUT" }, egui::FontId::proportional(9.5), if tube_on { heat } else { theme::TEXT_DIM });
+    // ---- two VU meters
+    let vu = |rect: Rect, gr: f32, label: &str| {
+        p.rect_filled(rect, 6.0, Color32::from_rgb(0xec, 0xe2, 0xc6));
+        p.rect_stroke(rect, 6.0, Stroke::new(2.0_f32, Color32::from_gray(40)), egui::StrokeKind::Inside);
+        let pivot = Pos2::new(rect.center().x, rect.bottom() - 8.0);
+        let rad = rect.height() - 22.0;
+        let ang = |db: f32| -std::f32::consts::FRAC_PI_2 - 0.9 * (db.clamp(0.0, 20.0) / 20.0) + 0.0;
+        // Scale: 0 at the right, −20 at the left; red zone at the heavy end.
+        for db in [0.0f32, 3.0, 6.0, 10.0, 15.0, 20.0] {
+            let a = ang(db) + 0.45;
+            let o = Pos2::new(pivot.x + rad * a.cos(), pivot.y + rad * a.sin());
+            let i = Pos2::new(pivot.x + (rad - 7.0) * a.cos(), pivot.y + (rad - 7.0) * a.sin());
+            p.line_segment([i, o], Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xc0, 0x30, 0x30) } else { Color32::from_gray(40) }));
+            p.text(Pos2::new(pivot.x + (rad + 7.0) * a.cos(), pivot.y + (rad + 7.0) * a.sin()), egui::Align2::CENTER_CENTER, format!("{}", -(db as i32)), egui::FontId::proportional(8.0), Color32::from_gray(50));
+        }
+        let a = ang(gr) + 0.45;
+        p.line_segment([pivot, Pos2::new(pivot.x + (rad - 2.0) * a.cos(), pivot.y + (rad - 2.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_rgb(0x20, 0x20, 0x20)));
+        p.circle_filled(pivot, 4.0, Color32::from_gray(30));
+        p.text(Pos2::new(rect.center().x, rect.bottom() - 18.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), Color32::from_gray(60));
+    };
+    let mw = ((r.width() - 120.0) * 0.28).clamp(90.0, 170.0);
+    let m1 = Rect::from_min_size(Pos2::new(vx + 46.0, r.top() + 12.0), Vec2::new(mw, (r.height() - 24.0) * 0.62));
+    let m2 = Rect::from_min_size(Pos2::new(m1.right() + 10.0, m1.top()), m1.size());
+    vu(m1, tele[0], "COMP");
+    vu(m2, tele[1], "VARI MU");
+    // ---- GR bars
+    let bars = [("DE-ESS", tele[2]), ("MB1 LOW", tele[3]), ("MB1 HIGH", tele[4]), ("MB2 LOW", tele[5]), ("MB2 HIGH", tele[6]), ("SOOTHE", tele[7])];
+    let bx0 = m2.right() + 16.0;
+    let bw = ((r.right() - 12.0 - bx0) / bars.len() as f32).max(18.0);
+    for (k, (name, gr)) in bars.iter().enumerate() {
+        let br = Rect::from_min_size(Pos2::new(bx0 + k as f32 * bw + 3.0, r.top() + 22.0), Vec2::new(bw - 10.0, r.height() - 52.0));
+        p.rect_filled(br, 3.0, Color32::from_white_alpha(10));
+        let f = (gr / 12.0).clamp(0.0, 1.0);
+        p.rect_filled(Rect::from_min_max(br.min, Pos2::new(br.right(), br.top() + br.height() * f)), 3.0, col);
+        p.text(Pos2::new(br.center().x, br.bottom() + 4.0), egui::Align2::CENTER_TOP, *name, egui::FontId::proportional(8.0), theme::TEXT_DIM);
+        p.text(Pos2::new(br.center().x, br.top() - 3.0), egui::Align2::CENTER_BOTTOM, format!("{gr:.1}"), egui::FontId::monospace(8.5), theme::TEXT);
+    }
+    // Small readouts under the meters.
+    p.text(
+        Pos2::new(m1.left(), r.bottom() - 10.0),
+        egui::Align2::LEFT_BOTTOM,
+        format!("comp {:.0}% · vari mu {:.0}% · presence {:.0}% · saturation {:.0}% · soothe {:.0}%", h.v("comp"), h.v("varimu"), h.v("presence"), h.v("saturation"), h.v("soothe")),
+        egui::FontId::proportional(10.0),
+        theme::TEXT,
     );
 }
 
