@@ -54,6 +54,10 @@ pub trait InstrumentVoice: Send {
     fn idle(&mut self) -> bool {
         false
     }
+    /// Full screen for the plugin's own editor window.
+    fn editor_fullscreen(&mut self, _on: bool) -> bool {
+        false
+    }
     /// Why the last `editor(true)` failed, if it did (shown to the user).
     fn editor_error(&self) -> Option<String> {
         None

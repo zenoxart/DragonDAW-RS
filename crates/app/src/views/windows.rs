@@ -16,16 +16,17 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     for (m, i) in effects_open {
         let mut open = true;
         let title = effect_title(st, m, i);
-        egui::Window::new(title)
-            .id(egui::Id::new(("fx", m, i)))
-            .open(&mut open)
-            .resizable(true)
-            .default_width(470.0)
-            .vscroll(true)
-            .max_height(ctx.screen_rect().height() - 60.0)
-            .show(ctx, |ui| effect_editor(ui, st, m, i));
+        // A stock editor fits its content; full screen fills the whole app window (and the app goes full screen).
+        let full = st.ui.fx_fullscreen == Some((m, i));
+        let mut w = egui::Window::new(title).id(egui::Id::new(("fx", m, i))).open(&mut open).resizable(true).vscroll(true);
+        w = if full { w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false) } else { w.default_width(520.0).max_height(ctx.screen_rect().height() - 60.0) };
+        w.show(ctx, |ui| effect_editor(ui, st, m, i));
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
             st.ui.effect_windows.retain(|w| *w != (m, i));
+            if st.ui.fx_fullscreen == Some((m, i)) {
+                st.ui.fx_fullscreen = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            }
         }
     }
     let inst = st.ui.instrument_windows.clone();
@@ -116,6 +117,12 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                     }
                 }
                 ui.add_space(6.0);
+                let full = st.ui.fx_fullscreen == Some((m, i));
+                if ui.add(egui::Button::new(RichText::new("⛶").size(14.0)).selected(full).min_size(egui::vec2(24.0, 22.0))).on_hover_text(if full { "Leave full screen" } else { "Full screen" }).clicked() {
+                    st.ui.fx_fullscreen = if full { None } else { Some((m, i)) };
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+                }
+                ui.add_space(4.0);
                 let mut mix = ins.mix;
                 let r = widgets::mini_knob(ui, &mut mix, 0.0, 1.0, 1.0, ccol).on_hover_text(format!("Mix (dry/wet) {:.0}%", mix * 100.0));
                 widgets::apply(st, &r, "Effect mix", |p| with_insert(p, m, i, |x| x.mix = mix));
@@ -414,6 +421,16 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
                     Err(i) => i.lock().unwrap().editor(false),
                 };
                 st.ui.native_editors.retain(|k| *k != key);
+            }
+            // Full screen for the plugin's own window (resizable editors follow the new size).
+            let fs_id = egui::Id::new(("plugin.window.fs", key));
+            let mut fs: bool = ui.data(|d| d.get_temp(fs_id)).unwrap_or(false);
+            if ui.toggle_value(&mut fs, "⛶ Full screen").on_hover_text("Plugin window full screen (editors that can resize fill it)").changed() {
+                let now = match &inst {
+                    Ok(e) => e.lock().unwrap().editor_fullscreen(fs),
+                    Err(i) => i.lock().unwrap().editor_fullscreen(fs),
+                };
+                ui.data_mut(|d| d.insert_temp(fs_id, now));
             }
         } else if ui.button("Open plugin window").on_hover_text("The plugin's own interface").clicked() && !open_gui(st, ui) {
             let why: String = ui.data(|d| d.get_temp(error_id)).unwrap_or_default();

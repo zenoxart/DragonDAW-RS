@@ -110,12 +110,14 @@ fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
 /// changes the gesture made, and whether a drag is running.
 pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
-    let height = match h.def.id {
+    let base = match h.def.id {
         "tune" | "clean_voice" | "class_a_strip" => 230.0,
         "drum_bus" | "alter" => 200.0,
         "dragon_particle" => 240.0,
         _ => 170.0,
     };
+    // Wide windows (full screen) get a taller display in proportion.
+    let height = (base * (w / 520.0).clamp(1.0, 2.2)).min(ui.available_height().max(base));
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, height), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
     let p = ui.painter_at(r);
@@ -1187,7 +1189,7 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(face.center().x, face.top() + 4.0), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(11.0), theme::TEXT);
     if let [hz, out, ..] = h.tele {
         if *hz > 0.0 {
-            p.text(Pos2::new(face.right() - 6.0, face.bottom() - 4.0), egui::Align2::RIGHT_BOTTOM, format!("in {hz:.0} Hz → out {out:.0} Hz"), egui::FontId::monospace(9.5), theme::TEXT_DIM);
+            p.text(Pos2::new(face.right() - 6.0, face.bottom() - 4.0), egui::Align2::RIGHT_BOTTOM, format!("in {hz:.0} Hz > out {out:.0} Hz"), egui::FontId::monospace(9.5), theme::TEXT_DIM);
         }
     }
 }

@@ -145,6 +145,8 @@ pub struct UiState {
     pub about: bool,
     /// The effect gallery window is open.
     pub fx_gallery: bool,
+    /// The stock effect editor shown full screen (mixer insert, effect).
+    pub fx_fullscreen: Option<(Id, Id)>,
     pub midi_learn: Option<Target>,
     pub last_note_len: u32,
     pub tap_times: Vec<Instant>,
@@ -203,6 +205,7 @@ impl UiState {
             recovery: None,
             about: false,
             fx_gallery: false,
+            fx_fullscreen: None,
             midi_learn: None,
             last_note_len: PPQ,
             tap_times: Vec::new(),

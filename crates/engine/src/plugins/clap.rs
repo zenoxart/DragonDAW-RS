@@ -313,6 +313,8 @@ pub struct ClapPlugin {
     steady: i64,
     voices: usize,
     gui_open: bool,
+    gui_resizable: bool,
+    last_size: (u32, u32),
     state: Box<HostState>,
     window: Option<super::window::EditorWindow>,
     /// Parameter values reported by the plugin (GUI edits), plain values, filled during `process`.
@@ -418,6 +420,8 @@ impl ClapPlugin {
                 steady: 0,
                 voices: 0,
                 gui_open: false,
+                gui_resizable: false,
+                last_size: (0, 0),
                 state,
                 window: None,
                 reported: Vec::with_capacity(64),
@@ -607,6 +611,11 @@ impl ClapPlugin {
                                 if let Some(f) = g.show {
                                     f(self.plugin);
                                 }
+                                // Editors that can follow a new size get a resizable window.
+                                let resizable = g.can_resize.map(|f| f(self.plugin)).unwrap_or(false);
+                                win.set_resizable(resizable, win.size());
+                                self.gui_resizable = resizable;
+                                self.last_size = win.size();
                                 self.window = Some(win);
                                 self.gui_open = true;
                                 self.editor_error = None;
@@ -680,6 +689,23 @@ impl ClapPlugin {
                 if let Some(f) = (*self.gui).set_size {
                     f(self.plugin, w, h);
                 }
+                self.last_size = (w, h);
+            }
+            // The user (or full screen) resized the window: let the editor follow when it can.
+            if let Some(win) = &mut self.window {
+                let now = win.size();
+                if now != self.last_size && now.0 > 0 && now.1 > 0 {
+                    self.last_size = now;
+                    if self.gui_resizable {
+                        let (mut w, mut h) = now;
+                        if let Some(f) = (*self.gui).adjust_size {
+                            f(self.plugin, &mut w, &mut h);
+                        }
+                        if let Some(f) = (*self.gui).set_size {
+                            f(self.plugin, w, h);
+                        }
+                    }
+                }
             }
             let ext = |name: &CStr| (*self.plugin).get_extension.map(|g| g(self.plugin, name.as_ptr())).unwrap_or(std::ptr::null());
             let timer = ext(clap_sys::ext::timer_support::CLAP_EXT_TIMER_SUPPORT) as *const clap_sys::ext::timer_support::clap_plugin_timer_support;
@@ -713,6 +739,17 @@ impl ClapPlugin {
             }
         }
         true
+    }
+
+    /// Full screen for the embedded editor's window (the editor follows when it can resize).
+    pub fn set_editor_fullscreen(&mut self, on: bool) -> bool {
+        match &mut self.window {
+            Some(w) => {
+                w.set_fullscreen(on);
+                on
+            }
+            None => false,
+        }
     }
 
     /// Native window of an embedded editor (tests inspect its child windows).
@@ -794,6 +831,9 @@ impl Effect for ClapPlugin {
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
     }
+    fn editor_fullscreen(&mut self, on: bool) -> bool {
+        self.set_editor_fullscreen(on)
+    }
     fn idle(&mut self) -> bool {
         self.idle_editor()
     }
@@ -851,6 +891,9 @@ impl InstrumentVoice for ClapPlugin {
     }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
+    }
+    fn editor_fullscreen(&mut self, on: bool) -> bool {
+        self.set_editor_fullscreen(on)
     }
     fn idle(&mut self) -> bool {
         self.idle_editor()

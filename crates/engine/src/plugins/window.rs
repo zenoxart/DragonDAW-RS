@@ -26,6 +26,25 @@ impl EditorWindow {
         self.inner.resize(width.max(32), height.max(32));
     }
 
+    /// Current inner size in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        self.inner.size()
+    }
+
+    /// Lets the user resize the window (only for editors that can follow a new size).
+    pub fn set_resizable(&mut self, on: bool, size: (u32, u32)) {
+        self.inner.set_resizable(on, size);
+    }
+
+    /// Full screen on (covers the monitor) or back to the previous size.
+    pub fn set_fullscreen(&mut self, on: bool) {
+        self.inner.set_fullscreen(on);
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.inner.fullscreen
+    }
+
     /// Processes pending window events; returns `false` once the user closed the window.
     pub fn pump(&mut self) -> bool {
         self.inner.pump()
@@ -53,6 +72,7 @@ mod imp {
         window: xlib::Window,
         wm_delete: xlib::Atom,
         open: bool,
+        pub fullscreen: bool,
     }
 
     impl Window {
@@ -76,7 +96,10 @@ mod imp {
                 (x.XSelectInput)(display, window, xlib::StructureNotifyMask);
                 (x.XMapWindow)(display, window);
                 (x.XSync)(display, 0);
-                Ok(Window { x, display, window, wm_delete, open: true })
+                let mut win = Window { x, display, window, wm_delete, open: true, fullscreen: false };
+                // Fixed size until the editor says it can follow a new one.
+                win.set_resizable(false, (w, h));
+                Ok(win)
             }
         }
 
@@ -90,6 +113,62 @@ mod imp {
                 (self.x.XResizeWindow)(self.display, self.window, w, h);
                 (self.x.XFlush)(self.display);
             }
+        }
+
+        pub fn size(&self) -> (u32, u32) {
+            // SAFETY: geometry query on our window.
+            unsafe {
+                let mut attrs: xlib::XWindowAttributes = std::mem::zeroed();
+                if (self.x.XGetWindowAttributes)(self.display, self.window, &mut attrs) == 0 {
+                    return (0, 0);
+                }
+                (attrs.width.max(0) as u32, attrs.height.max(0) as u32)
+            }
+        }
+
+        pub fn set_resizable(&mut self, on: bool, size: (u32, u32)) {
+            // SAFETY: WM_NORMAL_HINTS on our window (min = max fixes the size).
+            unsafe {
+                let hints = (self.x.XAllocSizeHints)();
+                if hints.is_null() {
+                    return;
+                }
+                if on {
+                    (*hints).flags = xlib::PMinSize;
+                    (*hints).min_width = 64;
+                    (*hints).min_height = 48;
+                } else {
+                    (*hints).flags = xlib::PMinSize | xlib::PMaxSize;
+                    (*hints).min_width = size.0 as i32;
+                    (*hints).max_width = size.0 as i32;
+                    (*hints).min_height = size.1 as i32;
+                    (*hints).max_height = size.1 as i32;
+                }
+                (self.x.XSetWMNormalHints)(self.display, self.window, hints);
+                (self.x.XFree)(hints as *mut c_void);
+                (self.x.XFlush)(self.display);
+            }
+        }
+
+        pub fn set_fullscreen(&mut self, on: bool) {
+            // SAFETY: EWMH _NET_WM_STATE request to the root window for our window.
+            unsafe {
+                let state = std::ffi::CString::new("_NET_WM_STATE").unwrap();
+                let fs = std::ffi::CString::new("_NET_WM_STATE_FULLSCREEN").unwrap();
+                let a_state = (self.x.XInternAtom)(self.display, state.as_ptr(), 0);
+                let a_fs = (self.x.XInternAtom)(self.display, fs.as_ptr(), 0);
+                let mut ev: xlib::XEvent = std::mem::zeroed();
+                ev.client_message.type_ = xlib::ClientMessage;
+                ev.client_message.window = self.window;
+                ev.client_message.message_type = a_state;
+                ev.client_message.format = 32;
+                ev.client_message.data.set_long(0, if on { 1 } else { 0 });
+                ev.client_message.data.set_long(1, a_fs as i64);
+                let root = (self.x.XDefaultRootWindow)(self.display);
+                (self.x.XSendEvent)(self.display, root, 0, xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask, &mut ev);
+                (self.x.XFlush)(self.display);
+            }
+            self.fullscreen = on;
         }
 
         pub fn pump(&mut self) -> bool {
@@ -151,6 +230,8 @@ mod imp {
 
     pub struct Window {
         hwnd: HWND,
+        pub fullscreen: bool,
+        saved: Option<(u32, windows_sys::Win32::Foundation::RECT)>,
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -224,7 +305,7 @@ mod imp {
                 }
                 ShowWindow(hwnd, SW_SHOW);
                 SetForegroundWindow(hwnd);
-                Ok(Window { hwnd })
+                Ok(Window { hwnd, fullscreen: false, saved: None })
             }
         }
 
@@ -240,6 +321,55 @@ mod imp {
                 AdjustWindowRect(&mut rect, style, 0);
                 SetWindowPos(self.hwnd, std::ptr::null_mut(), 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
+        }
+
+        pub fn size(&self) -> (u32, u32) {
+            // SAFETY: client rect of our window.
+            unsafe {
+                let mut r = windows_sys::Win32::Foundation::RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                GetClientRect(self.hwnd, &mut r);
+                ((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32)
+            }
+        }
+
+        pub fn set_resizable(&mut self, on: bool, _size: (u32, u32)) {
+            // SAFETY: style change on our window.
+            unsafe {
+                let mut style = GetWindowLongW(self.hwnd, GWL_STYLE) as u32;
+                if on {
+                    style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+                } else {
+                    style &= !(WS_THICKFRAME | WS_MAXIMIZEBOX);
+                }
+                SetWindowLongW(self.hwnd, GWL_STYLE, style as i32);
+                SetWindowPos(self.hwnd, std::ptr::null_mut(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+            }
+        }
+
+        pub fn set_fullscreen(&mut self, on: bool) {
+            use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+            // SAFETY: borderless window covering the monitor, and back.
+            unsafe {
+                if on && self.saved.is_none() {
+                    let style = GetWindowLongW(self.hwnd, GWL_STYLE) as u32;
+                    let mut rect = windows_sys::Win32::Foundation::RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                    GetWindowRect(self.hwnd, &mut rect);
+                    self.saved = Some((style, rect));
+                    let mon = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+                    let mut mi: MONITORINFO = std::mem::zeroed();
+                    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+                    GetMonitorInfoW(mon, &mut mi);
+                    SetWindowLongW(self.hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN) as i32);
+                    let r = mi.rcMonitor;
+                    SetWindowPos(self.hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED);
+                } else if !on {
+                    if let Some((style, r)) = self.saved.take() {
+                        SetWindowLongW(self.hwnd, GWL_STYLE, style as i32);
+                        SetWindowPos(self.hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_NOZORDER);
+                    }
+                }
+            }
+            self.fullscreen = on;
         }
 
         pub fn pump(&mut self) -> bool {
@@ -286,9 +416,18 @@ mod imp {
 mod imp {
     use super::*;
 
-    pub struct Window;
+    pub struct Window {
+        pub fullscreen: bool,
+    }
 
     impl Window {
+        pub fn size(&self) -> (u32, u32) {
+            (0, 0)
+        }
+        pub fn set_resizable(&mut self, _on: bool, _size: (u32, u32)) {}
+        pub fn set_fullscreen(&mut self, on: bool) {
+            self.fullscreen = on;
+        }
         pub fn open(_title: &str, _w: u32, _h: u32) -> Result<Window> {
             Err(EngineError::Plugin("embedded plugin editors are not supported on this platform yet".into()))
         }

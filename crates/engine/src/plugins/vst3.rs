@@ -843,7 +843,12 @@ impl Vst3Plugin {
             if (w3, h3) != (w, h) {
                 window.resize(w3, h3);
             }
-            Ok(Editor { view, window, frame })
+            // Views that can resize get a resizable window.
+            let resizable = view.canResize() == kResultTrue;
+            let mut window = window;
+            window.set_resizable(resizable, window.size());
+            let last_size = window.size();
+            Ok(Editor { view, window, frame, resizable, last_size })
         }
     }
 
@@ -869,9 +874,34 @@ impl Vst3Plugin {
             ed.window.resize((r.right - r.left) as u32, (r.bottom - r.top) as u32);
             // SAFETY: tell the view its new size (SDK: host resizes, then calls onSize).
             unsafe { ed.view.onSize(&mut r) };
+            ed.last_size = ((r.right - r.left) as u32, (r.bottom - r.top) as u32);
+        }
+        // The user (or full screen) resized the window: constrain it to what the view allows, then tell it.
+        let now = ed.window.size();
+        if now != ed.last_size && now.0 > 0 && now.1 > 0 {
+            ed.last_size = now;
+            if ed.resizable {
+                let mut r = ViewRect { left: 0, top: 0, right: now.0 as i32, bottom: now.1 as i32 };
+                // SAFETY: IPlugView size negotiation on the UI thread.
+                unsafe {
+                    ed.view.checkSizeConstraint(&mut r);
+                    ed.view.onSize(&mut r);
+                }
+            }
         }
         ed.frame.dispatch();
         true
+    }
+
+    /// Full screen for the editor's window (the view follows when it can resize).
+    pub fn set_editor_fullscreen(&mut self, on: bool) -> bool {
+        match &mut self.editor {
+            Some(ed) => {
+                ed.window.set_fullscreen(on);
+                on
+            }
+            None => false,
+        }
     }
 
     /// Native window of the open editor (tests use it to inspect the embedded child window).
@@ -885,6 +915,8 @@ struct Editor {
     view: ComPtr<IPlugView>,
     window: super::window::EditorWindow,
     frame: ComWrapper<Frame>,
+    resizable: bool,
+    last_size: (u32, u32),
 }
 
 /// Host side of the editor: `IPlugFrame` (resize requests) and, for Linux, `IRunLoop` (the plugin's file
@@ -1028,6 +1060,9 @@ impl Effect for Vst3Plugin {
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
     }
+    fn editor_fullscreen(&mut self, on: bool) -> bool {
+        self.set_editor_fullscreen(on)
+    }
     fn idle(&mut self) -> bool {
         self.idle_editor()
     }
@@ -1082,6 +1117,9 @@ impl InstrumentVoice for Vst3Plugin {
     }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
+    }
+    fn editor_fullscreen(&mut self, on: bool) -> bool {
+        self.set_editor_fullscreen(on)
     }
     fn idle(&mut self) -> bool {
         self.idle_editor()
