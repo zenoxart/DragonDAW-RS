@@ -76,9 +76,36 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let steps = pattern.steps as usize;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let mut rows: Vec<(Id, Rect)> = Vec::new();
-        for c in &channels {
+        if let Some(g) = st.ui.rack_group.clone() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Group: {g}")).strong());
+                if ui.small_button("Show all").on_hover_text("PgUp / PgDn cycle the groups").clicked() {
+                    st.ui.rack_group = None;
+                }
+            });
+        }
+        let group = st.ui.rack_group.clone();
+        for c in channels.iter().filter(|c| group.as_ref().is_none_or(|g| &c.group == g)) {
             let cid = c.id;
-            let selected = st.ui.channel == Some(cid);
+            let selected = st.ui.channel == Some(cid) || st.ui.rack_sel.contains(&cid);
+            if c.zipped {
+                // Zipped (FL Alt+Z): one thin row with the name; click to select, Alt+U unzips.
+                let r = ui.add(
+                    egui::Button::new(RichText::new(format!("▶ {}", c.name)).small())
+                        .fill(theme::rgb(c.color).gamma_multiply(if selected { 0.8 } else { 0.25 }))
+                        .min_size(Vec2::new(ui.available_width().min(260.0), 14.0)),
+                );
+                if r.clicked() {
+                    if ui.input(|i| i.modifiers.ctrl) {
+                        st.ui.rack_sel.push(cid);
+                    } else {
+                        st.ui.rack_sel = vec![cid];
+                        st.ui.channel = Some(cid);
+                    }
+                }
+                r.on_hover_text("Zipped – Alt+U unzips");
+                continue;
+            }
             let row = ui.horizontal(|ui| {
                 ui.set_height(30.0);
                 if widgets::toggle(ui, !c.muted, "⚫", theme::OK).on_hover_text("Mute").clicked() {
@@ -91,21 +118,36 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 let r = mini_knob(ui, &mut vol, 0.0, 1.25, "vol");
                 widgets::apply(st, &r, "Channel volume", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.volume = vol));
                 let mx = mixers.iter().find(|m| m.0 == c.mixer).map(|m| m.1.clone()).unwrap_or("–".into());
-                ui.add_sized([62.0, 20.0], egui::Label::new(RichText::new(format!("➡{}", short(&mx, 7))).small()).truncate()).on_hover_text("Mixer channel (right-click the name for routing)");
-                ui.menu_button(RichText::new("…").small(), |ui| {
-                    for (id, n) in &mixers {
-                        if ui.selectable_label(*id == c.mixer, n).clicked() {
-                            let id = *id;
-                            st.session.edit("Route channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.mixer = id));
-                            ui.close_menu();
+                if st.ui.rack_mixer_sel {
+                    ui.add_sized([62.0, 20.0], egui::Label::new(RichText::new(format!("➡{}", short(&mx, 7))).small()).truncate()).on_hover_text("Mixer channel (right-click the name for routing)");
+                    ui.menu_button(RichText::new("…").small(), |ui| {
+                        for (id, n) in &mixers {
+                            if ui.selectable_label(*id == c.mixer, n).clicked() {
+                                let id = *id;
+                                st.session.edit("Route channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.mixer = id));
+                                ui.close_menu();
+                            }
                         }
-                    }
-                });
+                    });
+                }
                 let name_btn = egui::Button::new(RichText::new(short(&c.name, 14)).color(if selected { Color32::BLACK } else { Color32::WHITE }))
                     .fill(if selected { theme::rgb(c.color) } else { theme::rgb(c.color).gamma_multiply(0.35) })
                     .min_size(Vec2::new(118.0, 24.0));
                 let nb = ui.add(name_btn).on_hover_text(format!("{} – {}\nclick: select · double-click: settings · right-click: menu", c.name, c.instrument.kind_name()));
                 if nb.clicked() {
+                    // FL: Ctrl+click adds the channel to the selection.
+                    if ui.input(|i| i.modifiers.ctrl) {
+                        if let Some(k) = st.ui.rack_sel.iter().position(|x| *x == cid) {
+                            st.ui.rack_sel.remove(k);
+                        } else {
+                            if st.ui.rack_sel.is_empty() {
+                                st.ui.rack_sel.extend(st.ui.channel);
+                            }
+                            st.ui.rack_sel.push(cid);
+                        }
+                    } else {
+                        st.ui.rack_sel = vec![cid];
+                    }
                     st.ui.channel = Some(cid);
                     st.ui.piano_channel = Some(cid);
                 }

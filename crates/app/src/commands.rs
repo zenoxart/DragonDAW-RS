@@ -71,6 +71,41 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tool.mute", "Mute tool", "Edit/Tools", 6, "T"),
     ("tool.slice", "Slice tool", "Edit/Tools", 6, "C"),
     ("tool.select", "Select tool", "Edit/Tools", 6, "E"),
+    ("edit.quick_quantize2", "Quick quantize (piano roll)", "", 0, "Ctrl+Alt+Q"),
+    ("ctx.alt_c", "Clone channels (rack) / colour notes (piano roll)", "", 0, "Alt+C"),
+    ("ctx.alt_g", "Group channels (rack) / ungroup (piano roll, playlist)", "", 0, "Alt+G"),
+    ("ctx.alt_z", "Zip channels (rack) / undo history", "", 0, "Alt+Z"),
+    ("ctx.alt_u", "Unzip channels (rack) / chop tool (piano roll)", "", 0, "Alt+U"),
+    ("ctx.alt_up", "Move channels up (rack) / nudge notes up (piano roll)", "", 0, "Alt+Up"),
+    ("ctx.alt_down", "Move channels down (rack) / nudge notes down (piano roll)", "", 0, "Alt+Down"),
+    ("ctx.alt_left", "Nudge notes left (piano roll)", "", 0, "Alt+Left"),
+    ("ctx.alt_right", "Nudge notes right (piano roll)", "", 0, "Alt+Right"),
+    ("rack.delete", "Delete selected channels", "", 0, "Alt+Delete"),
+    ("rack.up", "Select channel above", "", 0, "Up"),
+    ("rack.down", "Select channel below", "", 0, "Down"),
+    ("ctx.ctrl_enter", "Focus playlist (rack) / select time around the selection (playlist)", "", 0, "Ctrl+Enter"),
+    ("pl.time_prev", "Select time before the selection", "", 0, "Ctrl+Left"),
+    ("pl.time_next", "Select time after the selection", "", 0, "Ctrl+Right"),
+    ("pr.ch_up", "Piano roll: channel above", "", 0, "G"),
+    ("pr.ch_down", "Piano roll: channel below", "", 0, "K"),
+    ("pr.ch_up_notes", "Piano roll: channel above with notes", "", 0, "H"),
+    ("pr.ch_down_notes", "Piano roll: channel below with notes", "", 0, "J"),
+    ("pr.next_notes", "Piano roll: next channel with notes", "", 0, "Shift+H"),
+    ("pr.next_ch", "Piano roll: next channel", "", 0, "Shift+K"),
+    ("pr.keyview", "Piano roll: keyboard / note names", "", 0, "M"),
+    ("pr.porta", "Piano roll: portamento for new notes", "", 0, "O"),
+    ("pr.prop_next", "Piano roll: next property in the event lane", "", 0, "F"),
+    ("pr.prop_cycle", "Piano roll: cycle note properties", "", 0, "Shift+F"),
+    ("pr.discard_len", "Piano roll: discard note lengths", "", 0, "Shift+D"),
+    ("pr.chord_off", "Piano roll: turn off the chord stamp", "", 0, "Shift+N"),
+    ("pr.sel_random", "Piano roll: select at random", "", 0, "Shift+R"),
+    ("ctx.shift_c", "Select by colour (piano roll) / all clips of the source (playlist)", "", 0, "Shift+C"),
+    ("ctx.shift_g", "Group selected notes / clips", "", 0, "Shift+G"),
+    ("pr.helpers", "Piano roll: note helpers", "", 0, "Alt+B"),
+    ("pr.ghosts", "Piano roll: ghost channels", "", 0, "Alt+V"),
+    ("pl.consolidate", "Consolidate selected clips", "Edit/Clips", 9, "Ctrl+Alt+C"),
+    ("pl.time_sig", "Set a time signature at the playhead", "Edit/Clips", 9, "Shift+Alt+T"),
+    ("pl.picker", "Project picker", "", 0, "Ctrl+F8"),
     ("tool.slip", "Slip edit tool (playlist) / slide notes (piano roll)", "Edit/Tools", 6, "S"),
     ("tool.playback", "Playback tool", "Edit/Tools", 6, "Y"),
     ("tool.zoom", "Zoom tool", "Edit/Tools", 6, "Z"),
@@ -81,7 +116,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("ntool.lfo", "LFO…", "Edit/Piano roll tools", 8, "Alt+O"),
     ("ntool.randomize", "Randomize…", "Edit/Piano roll tools", 8, "Alt+R"),
     ("ntool.strum", "Strum…", "Edit/Piano roll tools", 8, "Alt+S"),
-    ("ntool.chop", "Chop…", "Edit/Piano roll tools", 8, "Alt+U"),
+    ("ntool.chop", "Chop…", "Edit/Piano roll tools", 8, ""),
     ("ntool.claw", "Claw machine…", "Edit/Piano roll tools", 8, "Alt+W"),
     ("ntool.levels", "Scale levels…", "Edit/Piano roll tools", 8, "Alt+X"),
     ("ntool.flip", "Score flipper…", "Edit/Piano roll tools", 8, "Alt+Y"),
@@ -150,7 +185,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("view.video", "Video", "View", 1, ""),
     ("view.project", "Project info & tempo", "View", 1, "F11"),
     ("view.automation", "Automation & MIDI mappings", "View", 1, ""),
-    ("view.history", "Undo history", "View", 1, "Alt+Z"),
+    ("view.history", "Undo history", "View", 1, ""),
     ("view.plugins", "Plugin manager", "View", 2, ""),
     ("view.fx_gallery", "Plugin picker (effect gallery)", "View", 2, "F8"),
     ("view.options", "Options", "View", 2, "F10"),
@@ -238,7 +273,207 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         return true;
     }
     let id = id.strip_prefix("dragon.").unwrap_or(id);
+    use crate::state::Editor as Ed;
     match id {
+        // ---------------- FL keys that depend on the editor under the mouse (rack / piano roll / playlist)
+        "edit.legato" if st.ui.editor == Ed::Rack => rack_route_free(st),
+        "edit.mute_sel" if st.ui.editor == Ed::Rack => st.ui.rack_mixer_sel = !st.ui.rack_mixer_sel,
+        "edit.move_up" | "edit.move_down" if st.ui.editor == Ed::Rack => rack_extend(st, if id == "edit.move_up" { -1 } else { 1 }),
+        "zoom.in" | "zoom.out" if st.ui.editor == Ed::Rack => rack_group_step(st, if id == "zoom.in" { -1 } else { 1 }),
+        "transport.metronome" if st.ui.editor == Ed::PianoRoll => {
+            if let Some(f) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
+                st.import_midi(&f);
+            }
+        }
+        "transport.precount" if st.ui.editor == Ed::Playlist => st.ctx.open("dragon.launcher", None),
+        "edit.quick_quantize2" => {
+            let grid = (PPQ as f64 * st.ui.snap.max(0.25)) as u32;
+            notes_apply(st, "Quick quantize", |v| dragon_engine::edit::quantize(v, grid.max(1), 1.0, false));
+        }
+        "ctx.alt_c" if st.ui.editor == Ed::Rack => rack_clone(st),
+        "ctx.alt_c" => {
+            // FL: change the colour of the selected notes (to the next colour group).
+            notes_apply(st, "Note colour", |v| v.iter_mut().for_each(|n| n.color = (n.color + 1) % 16));
+        }
+        "ctx.alt_g" if st.ui.editor == Ed::Rack => {
+            let sel = rack_selection(st);
+            let name = format!("Group {}", st.session.project.channels.iter().filter(|c| !c.group.is_empty()).map(|c| c.group.clone()).collect::<std::collections::BTreeSet<_>>().len() + 1);
+            st.session.edit("Group channels", |p| p.channels.iter_mut().filter(|c| sel.contains(&c.id)).for_each(|c| c.group = name.clone()));
+            st.ui.status = format!("Grouped {} channels as \"{name}\" (PgUp / PgDn shows a group)", sel.len());
+        }
+        "ctx.alt_g" if st.ui.editor == Ed::Playlist => {
+            let sel = st.ui.clips.clone();
+            st.session.edit("Ungroup clips", |p| {
+                for g in p.clip_groups.iter_mut() {
+                    g.retain(|c| !sel.contains(c));
+                }
+                p.clip_groups.retain(|g| g.len() > 1);
+            });
+        }
+        "ctx.alt_g" => notes_apply(st, "Ungroup notes", |v| v.iter_mut().for_each(|n| n.group = 0)),
+        "ctx.shift_g" if st.ui.editor == Ed::Playlist => {
+            let sel = st.ui.clips.clone();
+            if sel.len() > 1 {
+                st.session.edit("Group clips", |p| {
+                    for g in p.clip_groups.iter_mut() {
+                        g.retain(|c| !sel.contains(c));
+                    }
+                    p.clip_groups.retain(|g| g.len() > 1);
+                    p.clip_groups.push(sel.clone());
+                });
+            }
+        }
+        "ctx.shift_g" => {
+            let next = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|c| c.notes.iter().map(|n| n.group).max().unwrap_or(0) + 1).unwrap_or(1);
+            notes_apply(st, "Group notes", |v| v.iter_mut().for_each(|n| n.group = next));
+        }
+        "ctx.alt_z" if st.ui.editor == Ed::Rack => rack_zip(st, true),
+        "ctx.alt_z" => st.ctx.open("dragon.history", None),
+        "ctx.alt_u" if st.ui.editor == Ed::Rack => rack_zip(st, false),
+        "ctx.alt_u" => crate::views::note_tools::open(st, crate::views::note_tools::Tool::Chop),
+        "ctx.alt_up" | "ctx.alt_down" if st.ui.editor == Ed::Rack => rack_move(st, if id == "ctx.alt_up" { -1 } else { 1 }),
+        "ctx.alt_up" | "ctx.alt_down" | "ctx.alt_left" | "ctx.alt_right" if st.ui.editor == Ed::PianoRoll => {
+            // FL Alt+arrows: fine nudge – a quarter of the snap in time, a semitone in pitch.
+            let fine = ((PPQ as f64 * st.ui.snap.max(0.0625) / 4.0) as i64).max(1);
+            notes_apply(st, "Nudge notes", |v| {
+                for n in v.iter_mut() {
+                    match id {
+                        "ctx.alt_up" => n.pitch = (n.pitch + 1).min(127),
+                        "ctx.alt_down" => n.pitch = n.pitch.saturating_sub(1),
+                        "ctx.alt_left" => n.start = (n.start as i64 - fine).max(0) as u32,
+                        _ => n.start += fine as u32,
+                    }
+                }
+            });
+        }
+        "ctx.alt_up" | "ctx.alt_down" | "ctx.alt_left" | "ctx.alt_right" => {}
+        "rack.delete" => {
+            let sel = rack_selection(st);
+            st.session.edit("Delete channels", |p| {
+                p.channels.retain(|c| !sel.contains(&c.id));
+                for pt in p.patterns.iter_mut() {
+                    pt.channels.retain(|k, _| !sel.contains(k));
+                }
+            });
+            st.ui.rack_sel.clear();
+            if st.ui.channel.is_some_and(|c| sel.contains(&c)) {
+                st.ui.channel = st.session.project.channels.first().map(|c| c.id);
+                st.ui.piano_channel = st.ui.channel;
+            }
+        }
+        "rack.up" | "rack.down" if st.ui.editor == Ed::Rack => {
+            let chans = visible_channels(st);
+            let cur = st.ui.channel.and_then(|c| chans.iter().position(|x| *x == c)).unwrap_or(0);
+            let k = if id == "rack.up" { cur.saturating_sub(1) } else { (cur + 1).min(chans.len().saturating_sub(1)) };
+            if let Some(c) = chans.get(k).copied() {
+                st.ui.channel = Some(c);
+                st.ui.piano_channel = Some(c);
+                st.ui.rack_sel = vec![c];
+            }
+        }
+        "rack.up" | "rack.down" => {}
+        "ctx.ctrl_enter" if st.ui.editor == Ed::Rack => st.ctx.open("dragon.playlist", None),
+        "ctx.ctrl_enter" => {
+            let span = st
+                .session
+                .project
+                .tracks
+                .iter()
+                .flat_map(|t| t.clips.iter())
+                .filter(|c| st.ui.clips.contains(&c.id))
+                .fold(None, |a: Option<(f64, f64)>, c| Some(a.map_or((c.start, c.end()), |(x, y)| (x.min(c.start), y.max(c.end())))));
+            if let Some((a, b)) = span {
+                st.session.edit("Select time", |p| p.loop_range = Some(Range::new(a, b)));
+            }
+        }
+        "pl.time_prev" | "pl.time_next" => {
+            if let Some(r) = st.session.project.loop_range.filter(|r| r.len() > 0.0) {
+                let d = if id == "pl.time_prev" { -r.len() } else { r.len() };
+                let s0 = (r.start + d).max(0.0);
+                st.session.edit("Select time", |p| p.loop_range = Some(Range::new(s0, s0 + r.len())));
+            }
+        }
+        "pr.ch_up" | "pr.ch_down" | "pr.ch_up_notes" | "pr.ch_down_notes" | "pr.next_notes" | "pr.next_ch" => {
+            let up = matches!(id, "pr.ch_up" | "pr.ch_up_notes");
+            let with_notes = matches!(id, "pr.ch_up_notes" | "pr.ch_down_notes" | "pr.next_notes");
+            let pat = st.session.project.pattern(st.ui.pattern).cloned();
+            let chans: Vec<Id> = st.session.project.channels.iter().map(|c| c.id).filter(|c| !with_notes || pat.as_ref().and_then(|p| p.channels.get(c)).is_some_and(|x| !x.notes.is_empty())).collect();
+            if !chans.is_empty() {
+                let all: Vec<Id> = st.session.project.channels.iter().map(|c| c.id).collect();
+                let cur = st.ui.piano_channel.and_then(|c| all.iter().position(|x| *x == c)).unwrap_or(0);
+                let pick = if up {
+                    chans.iter().rev().find(|c| all.iter().position(|x| x == *c).unwrap_or(0) < cur).or(chans.last())
+                } else {
+                    chans.iter().find(|c| all.iter().position(|x| x == *c).unwrap_or(0) > cur).or(chans.first())
+                };
+                if let Some(c) = pick.copied() {
+                    st.ui.piano_channel = Some(c);
+                    st.ui.channel = Some(c);
+                    st.ui.notes.clear();
+                }
+            }
+        }
+        "pr.keyview" => st.ui.pr_key_names = !st.ui.pr_key_names,
+        "pr.porta" => {
+            st.ui.porta = !st.ui.porta;
+            st.ui.status = format!("Portamento for new notes {}", if st.ui.porta { "on" } else { "off" });
+        }
+        "pr.prop_next" | "pr.prop_cycle" => st.ui.pr_prop = (st.ui.pr_prop + 1) % 3,
+        "pr.discard_len" => notes_apply(st, "Discard lengths", |v| v.iter_mut().for_each(|n| n.length = PPQ / 4)),
+        "pr.chord_off" => st.ui.chord = 0,
+        "pr.sel_random" => {
+            let n = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|c| c.notes.len()).unwrap_or(0);
+            let mut rng = dragon_engine::dsp::Rng::new(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1));
+            st.ui.notes = (0..n).filter(|_| rng.next_f32() < 0.5).collect();
+        }
+        "ctx.shift_c" if st.ui.editor == Ed::Playlist => {
+            // All clips that play the same source (pattern, audio file or automation lane).
+            let key = |k: &ClipKind| match k {
+                ClipKind::Audio(a) => format!("a{}", a.source.display()),
+                ClipKind::Pattern { pattern } => format!("p{pattern}"),
+                ClipKind::Automation { lane } => format!("l{lane}"),
+            };
+            let keys: Vec<String> = st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).filter(|c| st.ui.clips.contains(&c.id)).map(|c| key(&c.kind)).collect();
+            st.ui.clips = st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).filter(|c| keys.contains(&key(&c.kind))).map(|c| c.id).collect();
+        }
+        "ctx.shift_c" => {
+            let notes = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|c| c.notes.clone()).unwrap_or_default();
+            let colors: Vec<u8> = st.ui.notes.iter().filter_map(|i| notes.get(*i)).map(|n| n.color).collect();
+            st.ui.notes = notes.iter().enumerate().filter(|(_, n)| colors.contains(&n.color)).map(|(i, _)| i).collect();
+        }
+        "pr.helpers" => st.ui.helpers = !st.ui.helpers,
+        "pr.ghosts" => st.ui.ghosts = !st.ui.ghosts,
+        "pl.picker" => st.ui.pl_picker = !st.ui.pl_picker,
+        "pl.time_sig" => {
+            let beat = st.beat_now().floor();
+            let cur = st.session.project.time_signatures.iter().rfind(|t| t.beat <= beat).copied();
+            if let Some(mut ts) = cur {
+                ts.beat = beat;
+                st.session.edit("Time signature", |p| {
+                    p.time_signatures.retain(|t| (t.beat - beat).abs() > 1e-9);
+                    p.time_signatures.push(ts);
+                    p.time_signatures.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+                });
+            }
+            st.ctx.open("dragon.project", None);
+        }
+        "pl.consolidate" => {
+            let ids = st.ui.clips.clone();
+            let Some(tid) = st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| ids.contains(&c.id))).map(|t| t.id) else {
+                st.toast("Select the clips to consolidate", Severity::Info);
+                return true;
+            };
+            let path = st.recordings_dir().join(format!("Consolidated {}.wav", st.session.project.next_id));
+            let pool = dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::Host));
+            match dragon_engine::export::consolidate_clips(&st.session.project, &st.session.cache, &ids, &path, st.audio.rate(), pool) {
+                Ok(start) => {
+                    st.session.edit("Consolidate clips", |p| dragon_engine::edit::delete_clips(p, &ids));
+                    st.add_audio_clip(&path, Some(tid), start);
+                    st.toast("Consolidated into one audio clip", Severity::Success);
+                }
+                Err(e) => st.toast(format!("Consolidate failed: {e}"), Severity::Error),
+            }
+        }
         "file.new" => st.new_project(),
         "file.open" => st.open_dialog(),
         "file.save" => {
@@ -408,6 +643,8 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 // Outside the rack the number keys are FL's playlist keys.
                 match digit {
                     5 => zoom_command(st, "selection", ctx),
+                    // FL 6 zooms on the performance zone; without one, the whole song.
+                    6 => zoom_command(st, "all", ctx),
                     7 => {
                         execute(st, "edit.transpose_clip_down", ctx);
                     }
@@ -944,6 +1181,110 @@ fn notes_edit(st: &mut State, label: &str, f: impl FnOnce(&mut Vec<Note>, &[usiz
     if let Some(s) = new_sel {
         st.ui.notes = s;
     }
+}
+
+/// The selected rack channels (Ctrl+click), or the current one.
+fn rack_selection(st: &State) -> Vec<Id> {
+    if st.ui.rack_sel.is_empty() {
+        st.ui.channel.into_iter().collect()
+    } else {
+        st.ui.rack_sel.clone()
+    }
+}
+
+/// Channels the rack shows (the group filter applied).
+pub fn visible_channels(st: &State) -> Vec<Id> {
+    st.session.project.channels.iter().filter(|c| st.ui.rack_group.as_ref().is_none_or(|g| &c.group == g)).map(|c| c.id).collect()
+}
+
+fn rack_extend(st: &mut State, dir: i32) {
+    let chans = visible_channels(st);
+    let mut sel = rack_selection(st);
+    let edge = if dir < 0 { sel.iter().filter_map(|c| chans.iter().position(|x| x == c)).min() } else { sel.iter().filter_map(|c| chans.iter().position(|x| x == c)).max() };
+    if let Some(k) = edge {
+        let n = (k as i32 + dir).clamp(0, chans.len() as i32 - 1) as usize;
+        if !sel.contains(&chans[n]) {
+            sel.push(chans[n]);
+        }
+        st.ui.rack_sel = sel;
+    }
+}
+
+fn rack_group_step(st: &mut State, dir: i32) {
+    let mut groups: Vec<Option<String>> = vec![None];
+    for c in &st.session.project.channels {
+        if !c.group.is_empty() && !groups.contains(&Some(c.group.clone())) {
+            groups.push(Some(c.group.clone()));
+        }
+    }
+    let k = groups.iter().position(|g| *g == st.ui.rack_group).unwrap_or(0) as i32;
+    st.ui.rack_group = groups[(k + dir).rem_euclid(groups.len() as i32) as usize].clone();
+    st.ui.status = format!("Rack group: {}", st.ui.rack_group.as_deref().unwrap_or("All"));
+}
+
+fn rack_clone(st: &mut State) {
+    let sel = rack_selection(st);
+    let new = st.session.edit("Clone channels", |p| {
+        let mut out = Vec::new();
+        for cid in &sel {
+            let Some(mut c) = p.channels.iter().find(|c| c.id == *cid).cloned() else { continue };
+            let id = p.next_id();
+            c.id = id;
+            c.name = format!("{} (2)", c.name);
+            let at = p.channels.iter().position(|x| x.id == *cid).map(|k| k + 1).unwrap_or(p.channels.len());
+            p.channels.insert(at, c);
+            for pt in p.patterns.iter_mut() {
+                if let Some(data) = pt.channels.get(cid).cloned() {
+                    pt.channels.insert(id, data);
+                }
+            }
+            out.push(id);
+        }
+        out
+    });
+    st.ui.rack_sel = new;
+}
+
+fn rack_zip(st: &mut State, zip: bool) {
+    let sel = rack_selection(st);
+    st.session.edit(if zip { "Zip channels" } else { "Unzip channels" }, |p| p.channels.iter_mut().filter(|c| sel.contains(&c.id)).for_each(|c| c.zipped = zip));
+}
+
+fn rack_move(st: &mut State, dir: i32) {
+    let sel = rack_selection(st);
+    st.session.edit("Move channels", |p| {
+        let n = p.channels.len();
+        let mut idx: Vec<usize> = p.channels.iter().enumerate().filter(|(_, c)| sel.contains(&c.id)).map(|(i, _)| i).collect();
+        if (dir < 0 && idx.first() == Some(&0)) || (dir > 0 && idx.last() == Some(&(n - 1))) {
+            return;
+        }
+        if dir > 0 {
+            idx.reverse();
+        }
+        for i in idx {
+            p.channels.swap(i, (i as i32 + dir) as usize);
+        }
+    });
+}
+
+/// FL Ctrl+L in the rack: each selected channel to its own free mixer track.
+fn rack_route_free(st: &mut State) {
+    let sel = rack_selection(st);
+    st.session.edit("Route to free mixer tracks", |p| {
+        for cid in sel {
+            let used: Vec<Id> = p.channels.iter().map(|c| c.mixer).chain(p.tracks.iter().map(|t| t.mixer)).collect();
+            let master = p.mixer.master.id;
+            let free = p.mixer.channels.iter().find(|m| m.id != master && !used.contains(&m.id) && m.inserts.is_empty()).map(|m| m.id);
+            let name = p.channels.iter().find(|c| c.id == cid).map(|c| c.name.clone()).unwrap_or_default();
+            let target = free.unwrap_or_else(|| p.add_mixer_channel(&name));
+            if let Some(m) = p.mixer.get_mut(target) {
+                m.name = name;
+            }
+            if let Some(c) = p.channels.iter_mut().find(|c| c.id == cid) {
+                c.mixer = target;
+            }
+        }
+    });
 }
 
 /// FL's zoom keys for the playlist or piano roll (whichever was used last): PgUp / PgDn, Shift+0 centre

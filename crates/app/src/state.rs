@@ -164,6 +164,22 @@ pub struct UiState {
     pub about: bool,
     /// The effect gallery window is open.
     pub fx_gallery: bool,
+    /// Selected rack channels (Ctrl+click adds; empty = the current channel).
+    pub rack_sel: Vec<Id>,
+    /// The rack shows only this channel group (PgUp / PgDn cycle through groups).
+    pub rack_group: Option<String>,
+    /// Rack: mixer-track selectors shown (FL Alt+M).
+    pub rack_mixer_sel: bool,
+    /// Piano roll event lane: 0 velocity, 1 pan, 2 release (FL F / Shift+F).
+    pub pr_prop: usize,
+    /// Piano roll: note names on every key (FL M).
+    pub pr_key_names: bool,
+    /// Piano roll: new notes slide (portamento, FL O).
+    pub porta: bool,
+    /// Piano roll: ghost notes of the other channels (FL Alt+V).
+    pub ghosts: bool,
+    /// Piano roll: scale helpers (FL Alt+B).
+    pub helpers: bool,
     /// FL's piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
     pub note_tools: crate::views::note_tools::NoteTools,
     /// The stock effect editor shown full screen (mixer insert, effect).
@@ -227,6 +243,14 @@ impl UiState {
             recovery: None,
             about: false,
             fx_gallery: false,
+            rack_sel: Vec::new(),
+            rack_group: None,
+            rack_mixer_sel: true,
+            pr_prop: 0,
+            pr_key_names: false,
+            porta: false,
+            ghosts: true,
+            helpers: true,
             note_tools: Default::default(),
             fx_fullscreen: None,
             midi_learn: None,

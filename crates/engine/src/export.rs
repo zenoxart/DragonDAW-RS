@@ -390,6 +390,29 @@ pub fn bounce_track_with(p: &Project, cache: &SampleCache, track: Id, path: &Pat
     Ok(start)
 }
 
+/// FL "Consolidate" (Ctrl+Alt+C): renders only the given clips (through their tracks' mixer channels, the
+/// master chain bypassed) into one audio file. Returns the start beat of the rendered range.
+pub fn consolidate_clips(p: &Project, cache: &SampleCache, clips: &[Id], path: &Path, rate: u32, mut pool: Pool) -> Result<f64> {
+    let mut q = p.clone();
+    let (mut start, mut end) = (f64::MAX, 0.0f64);
+    for t in q.tracks.iter_mut() {
+        t.clips.retain(|c| clips.contains(&c.id));
+        for c in &t.clips {
+            start = start.min(c.start);
+            end = end.max(c.end());
+        }
+    }
+    if end <= start {
+        return Err(EngineError::Project("no clips to consolidate".into()));
+    }
+    q.mixer.master.inserts.clear();
+    q.mixer.master.volume = 1.0;
+    let opts = ExportOptions { format: ExportFormat::Wav(BitDepth::Float32), rate, render_rate: rate, range: ExportRange::Range(Range::new(start, end)), tail: 0.0, dither: false, ..Default::default() };
+    let d = render_mix(&q, cache, &opts, &mut pool, &mut |_| {});
+    write(path, &d, &opts)?;
+    Ok(start)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +487,21 @@ mod tests {
             assert!((d.peak() - 0.24).abs() < 0.05, "{name}: peak {}", d.peak());
             assert!(st.integrated > -30.0, "{name}: {:?}", st);
         }
+    }
+
+    /// Consolidate renders only the chosen clips, from the first one's start.
+    #[test]
+    fn consolidate_renders_the_selected_clips() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = project_with_tone(dir.path());
+        let id = p.tracks[0].clips[0].id;
+        p.tracks[0].clips[0].start = 2.0;
+        let out = dir.path().join("c.wav");
+        let start = consolidate_clips(&p, &SampleCache::default(), &[id], &out, 48000, Pool::new()).unwrap();
+        assert_eq!(start, 2.0);
+        let back = crate::samples::decode(&out).unwrap();
+        assert!((back.frames() as f64 / 48000.0 - 2.0 * 60.0 / 120.0).abs() < 0.02, "{}", back.frames());
+        assert!(back.l.iter().fold(0.0f32, |m, x| m.max(x.abs())) > 0.2);
+        assert!(consolidate_clips(&p, &SampleCache::default(), &[], &out, 48000, Pool::new()).is_err());
     }
 }

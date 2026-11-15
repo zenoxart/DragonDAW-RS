@@ -596,7 +596,17 @@ fn shortcuts_follow_fl_studio() {
         ("ntool.limit", "Alt+K"),
         ("ntool.articulate", "Alt+L"),
         ("ntool.lfo", "Alt+O"),
-        ("ntool.chop", "Alt+U"),
+        ("ctx.alt_u", "Alt+U"),
+        ("ctx.alt_c", "Alt+C"),
+        ("ctx.alt_z", "Alt+Z"),
+        ("ctx.shift_g", "Shift+G"),
+        ("pl.consolidate", "Ctrl+Alt+C"),
+        ("pr.ch_up", "G"),
+        ("pr.keyview", "M"),
+        ("pr.porta", "O"),
+        ("pr.prop_next", "F"),
+        ("rack.delete", "Alt+Delete"),
+        ("ctx.alt_up", "Alt+Up"),
         ("ntool.claw", "Alt+W"),
         ("ntool.levels", "Alt+X"),
         ("ntool.flip", "Alt+Y"),
@@ -822,4 +832,70 @@ fn shortcuts_do_not_collide() {
             }
         }
     }
+}
+
+/// FL's channel-rack keys (clone, group, zip, move, route, delete) and piano-roll keys (channel stepping,
+/// groups, colour selection, event lane) and playlist clip groups.
+#[test]
+fn fl_rack_piano_and_group_keys() {
+    let mut h = Harness::new();
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        assert!(crate::commands::execute(&mut h.st, &format!("dragon.{id}"), &ctx), "{id}");
+    };
+    h.st.ui.editor = crate::state::Editor::Rack;
+    let n0 = h.st.session.project.channels.len();
+    let first = h.st.session.project.channels[0].id;
+    h.st.ui.channel = Some(first);
+    h.st.ui.rack_sel = vec![first];
+    run(&mut h, "ctx.alt_c");
+    assert_eq!(h.st.session.project.channels.len(), n0 + 1, "Alt+C clones");
+    let clone = h.st.ui.rack_sel[0];
+    assert_eq!(h.st.session.project.channels[1].id, clone, "clone sits under the original");
+    run(&mut h, "ctx.alt_down");
+    assert_eq!(h.st.session.project.channels[2].id, clone, "Alt+Down moves it");
+    run(&mut h, "ctx.alt_z");
+    assert!(h.st.session.project.channels[2].zipped);
+    run(&mut h, "ctx.alt_u");
+    assert!(!h.st.session.project.channels[2].zipped);
+    run(&mut h, "ctx.alt_g");
+    assert!(!h.st.session.project.channels[2].group.is_empty());
+    run(&mut h, "zoom.out");
+    assert!(h.st.ui.rack_group.is_some(), "PgDn shows the group");
+    run(&mut h, "edit.legato");
+    let mixer = h.st.session.project.channels[2].mixer;
+    assert_eq!(h.st.session.project.channels.iter().filter(|c| c.mixer == mixer).count(), 1, "Ctrl+L: own mixer track");
+    run(&mut h, "rack.delete");
+    assert_eq!(h.st.session.project.channels.len(), n0);
+    // Piano roll.
+    let ch = h.st.session.project.channels[0].id;
+    let pat = h.st.ui.pattern;
+    let notes = vec![
+        Note { pitch: 60, start: 0, length: PPQ, color: 1, ..Default::default() },
+        Note { pitch: 64, start: PPQ, length: PPQ, color: 2, ..Default::default() },
+        Note { pitch: 67, start: 2 * PPQ, length: PPQ, color: 1, ..Default::default() },
+    ];
+    h.st.session.edit("n", |p| p.pattern_mut(pat).unwrap().channels.entry(ch).or_default().notes = notes);
+    h.st.ui.piano_channel = Some(ch);
+    h.st.ui.editor = crate::state::Editor::PianoRoll;
+    h.st.ui.notes = vec![0];
+    run(&mut h, "ctx.shift_c");
+    assert_eq!(h.st.ui.notes, vec![0, 2], "Shift+C selects by colour");
+    run(&mut h, "ctx.shift_g");
+    assert!(h.notes()[0].group > 0 && h.notes()[0].group == h.notes()[2].group);
+    run(&mut h, "pr.prop_next");
+    assert_eq!(h.st.ui.pr_prop, 1);
+    run(&mut h, "pr.ch_down");
+    assert_ne!(h.st.ui.piano_channel, Some(ch), "K: next channel");
+    run(&mut h, "pr.ch_up_notes");
+    assert_eq!(h.st.ui.piano_channel, Some(ch), "H: channel above with notes");
+    // Playlist clip groups: Shift+G, then clicking one clip selects both.
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    let ids: Vec<Id> = h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.id)).take(2).collect();
+    assert_eq!(ids.len(), 2);
+    h.st.ui.clips = ids.clone();
+    run(&mut h, "ctx.shift_g");
+    assert_eq!(h.st.session.project.clip_groups, vec![ids.clone()]);
+    run(&mut h, "ctx.alt_g");
+    assert!(h.st.session.project.clip_groups.is_empty());
 }

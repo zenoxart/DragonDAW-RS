@@ -543,6 +543,9 @@ pub struct RackChannel {
     /// Rack display group (filter).
     #[serde(default)]
     pub group: String,
+    /// Zipped (FL Alt+Z): the row is shown collapsed.
+    #[serde(default)]
+    pub zipped: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -579,11 +582,14 @@ pub struct Note {
     /// Colour group / MIDI channel.
     pub color: u8,
     pub selected: bool,
+    /// Note group (FL Shift+G): notes with the same non-zero group are selected together.
+    #[serde(default)]
+    pub group: u16,
 }
 
 impl Default for Note {
     fn default() -> Self {
-        Note { pitch: 60, start: 0, length: PPQ / 4, velocity: 0.8, pan: 0.0, release: 0.5, slide: false, muted: false, color: 0, selected: false }
+        Note { pitch: 60, start: 0, length: PPQ / 4, velocity: 0.8, pan: 0.0, release: 0.5, slide: false, muted: false, color: 0, selected: false, group: 0 }
     }
 }
 
@@ -981,6 +987,9 @@ pub struct Project {
     pub tempo_points: Vec<TempoPoint>,
     pub time_signatures: Vec<TimeSignature>,
     pub markers: Vec<Marker>,
+    /// Clip groups (FL Shift+G in the playlist): clicking one clip of a group selects the whole group.
+    #[serde(default)]
+    pub clip_groups: Vec<Vec<Id>>,
     pub loop_range: Option<Range>,
     pub loop_enabled: bool,
     pub punch: Option<Range>,
@@ -1019,6 +1028,7 @@ impl Default for Project {
             tempo_points: Vec::new(),
             time_signatures: vec![TimeSignature { beat: 0.0, numerator: 4, denominator: 4 }],
             markers: Vec::new(),
+            clip_groups: Vec::new(),
             loop_range: None,
             loop_enabled: false,
             punch: None,
@@ -1130,6 +1140,7 @@ impl Project {
             cut_by: 0,
             cut_self: false,
             group: String::new(),
+            zipped: false,
         });
         id
     }

@@ -51,6 +51,14 @@ pub enum Drag {
     },
 }
 
+/// A note and the other notes of its group (FL Shift+G groups).
+fn group_of(notes: &[Note], i: usize) -> Vec<usize> {
+    match notes.get(i).map(|n| n.group) {
+        Some(g) if g > 0 => notes.iter().enumerate().filter(|(_, n)| n.group == g).map(|(k, _)| k).collect(),
+        _ => vec![i],
+    }
+}
+
 pub fn show(ui: &mut Ui, st: &mut State) {
     let pat = st.ui.pattern;
     if st.ui.piano_channel.is_none() {
@@ -62,21 +70,24 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     };
     toolbar(ui, st, pat, ch);
     let notes: Vec<Note> = st.session.project.pattern(pat).and_then(|p| p.channels.get(&ch)).map(|c| c.notes.clone()).unwrap_or_default();
-    let ghosts: Vec<(Rgb, Note)> = st
-        .session
-        .project
-        .pattern(pat)
-        .map(|p| {
-            p.channels
-                .iter()
-                .filter(|(id, _)| **id != ch)
-                .flat_map(|(id, c)| {
-                    let col = st.session.project.channel(*id).map(|x| x.color).unwrap_or_default();
-                    c.notes.iter().map(move |n| (col, *n))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let ghosts: Vec<(Rgb, Note)> = if !st.ui.ghosts {
+        Vec::new()
+    } else {
+        st.session
+            .project
+            .pattern(pat)
+            .map(|p| {
+                p.channels
+                    .iter()
+                    .filter(|(id, _)| **id != ch)
+                    .flat_map(|(id, c)| {
+                        let col = st.session.project.channel(*id).map(|x| x.color).unwrap_or_default();
+                        c.notes.iter().map(move |n| (col, *n))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     let ch_color = st.session.project.channel(ch).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT);
     let pat_len = st.session.project.pattern(pat).map(|p| p.length_beats()).unwrap_or(4.0);
 
@@ -177,7 +188,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let tick_of = |x: f32| ((sx + (x - grid.left()) as f64 / zoom) * PPQ as f64).max(0.0);
     let y_of = |pitch: u8| grid.top() + (127 - pitch as i32) as f32 * kh - sy;
     let pitch_of = |y: f32| (127 - ((y - grid.top() + sy) / kh).floor() as i32).clamp(0, 127) as u8;
-    let scale: Option<&[u8]> = st.ui.scale.map(|i| SCALES[i].1);
+    // Note helpers (FL Alt+B) show the scale; off hides them.
+    let scale: Option<&[u8]> = st.ui.scale.filter(|_| st.ui.helpers).map(|i| SCALES[i].1);
     let root = st.ui.scale_root;
 
     // key rows
@@ -313,21 +325,27 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 kp.circle_filled(Pos2::new(r.left() + 6.0, r.center().y), if is_root { 3.5 } else { 2.5 }, if is_root { theme::ACCENT } else { theme::ACCENT_2 });
             }
         }
-        if pitch % 12 == 0 || kh >= 13.0 && !black {
+        if pitch % 12 == 0 || kh >= 13.0 && !black || st.ui.pr_key_names && kh >= 8.0 {
             kp.text(r.right_center() - Vec2::new(3.0, 0.0), egui::Align2::RIGHT_CENTER, note_name(pitch), egui::FontId::proportional(9.0), if black { Color32::WHITE } else { Color32::BLACK });
         }
     }
     // velocity lane
     p.rect_filled(vel, 0.0, theme::PANEL);
     let vp = p.with_clip_rect(vel);
+    // The event lane shows velocity, pan or release (FL F / Shift+F).
+    let prop_of = |n: &Note| match st.ui.pr_prop {
+        1 => (n.pan + 1.0) * 0.5,
+        2 => n.release,
+        _ => n.velocity,
+    };
     for (i, n) in notes.iter().enumerate() {
         let x = x_of(n.start as f64);
-        let h = n.velocity * (vel.height() - 6.0);
+        let h = prop_of(n) * (vel.height() - 6.0);
         let sel = st.ui.notes.contains(&i);
         vp.line_segment([Pos2::new(x, vel.bottom() - 2.0), Pos2::new(x, vel.bottom() - 2.0 - h)], Stroke::new(3.0_f32, if sel { Color32::WHITE } else { ch_color }));
         vp.circle_filled(Pos2::new(x, vel.bottom() - 2.0 - h), 3.0, if sel { Color32::WHITE } else { ch_color });
     }
-    p.text(Pos2::new(rect.left() + 4.0, vel.center().y), egui::Align2::LEFT_CENTER, "velocity", egui::FontId::proportional(10.0), theme::TEXT_DIM);
+    p.text(Pos2::new(rect.left() + 4.0, vel.center().y), egui::Align2::LEFT_CENTER, ["velocity", "pan", "release"][st.ui.pr_prop.min(2)], egui::FontId::proportional(10.0), theme::TEXT_DIM);
 
     // ---------------- interaction
     let grid_ticks = (st.ui.snap * PPQ as f64).round().max(0.0);
@@ -357,7 +375,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 match note_at(pos) {
                     Some((i, r)) if tool != Tool::Erase && tool != Tool::Slice && tool != Tool::Mute => {
                         if !st.ui.notes.contains(&i) {
-                            st.ui.notes = vec![i];
+                            st.ui.notes = group_of(&notes, i);
                         }
                         let anchor_tick = tick_of(pos.x) as i64;
                         if pos.x > r.right() - 5.0 && !shift {
@@ -393,7 +411,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         // FL style: press on empty space draws a note and keeps it on the pointer.
                         let start = snap_tick_floor(tick_of(pos.x)) as u32;
                         let pitch = snap_pitch(st, pitch_of(pos.y));
-                        let n = Note { pitch, start, length: st.ui.last_note_len, velocity: 0.78, ..Default::default() };
+                        let n = Note { pitch, start, length: st.ui.last_note_len, velocity: 0.78, slide: st.ui.porta, ..Default::default() };
                         let k = notes.len();
                         st.session.gesture("Add note", |p| {
                             if let Some(pt) = p.pattern_mut(pat) {
@@ -518,11 +536,16 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 if vel.x_range().contains(pos.x) {
                     let v = ((vel.bottom() - 2.0 - pos.y) / (vel.height() - 6.0)).clamp(0.02, 1.0);
                     let hit: Vec<usize> = notes.iter().enumerate().filter(|(i, n)| (x_of(n.start as f64) - pos.x).abs() < 5.0 && (st.ui.notes.is_empty() || st.ui.notes.contains(i))).map(|(i, _)| i).collect();
+                    let prop = st.ui.pr_prop;
                     if !hit.is_empty() {
-                        st.session.gesture("Velocity", |p| {
+                        st.session.gesture(["Velocity", "Note pan", "Note release"][prop.min(2)], |p| {
                             if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
                                 for i in hit {
-                                    c.notes[i].velocity = v;
+                                    match prop {
+                                        1 => c.notes[i].pan = v * 2.0 - 1.0,
+                                        2 => c.notes[i].release = v,
+                                        _ => c.notes[i].velocity = v,
+                                    }
                                 }
                             }
                         });
@@ -538,7 +561,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         if !notes.iter().any(|n| n.pitch == pitch && n.start <= t && n.end() > t) {
                             st.session.gesture("Paint notes", |p| {
                                 if let Some(pt) = p.pattern_mut(pat) {
-                                    pt.channels.entry(ch).or_default().notes.push(Note { pitch, start: t, length: len, velocity: 0.78, ..Default::default() });
+                                    pt.channels.entry(ch).or_default().notes.push(Note { pitch, start: t, length: len, velocity: 0.78, slide: st.ui.porta, ..Default::default() });
                                 }
                             });
                         }
@@ -620,7 +643,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                                 st.ui.notes.push(i);
                             }
                         } else {
-                            st.ui.notes = vec![i];
+                            st.ui.notes = group_of(&notes, i);
                         }
                         st.ui.last_note_len = notes[i].length;
                     }
@@ -630,7 +653,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 let pitch = snap_pitch(st, pitch_of(pos.y));
                 let len = st.ui.last_note_len;
                 let chord = st.ui.chord;
-                let new: Vec<Note> = if chord == 0 { vec![Note { pitch, start, length: len, velocity: 0.78, ..Default::default() }] } else { edit::chord(pitch, CHORDS[chord - 1].1, start, len, 0.78, false) };
+                let new: Vec<Note> =
+                    if chord == 0 { vec![Note { pitch, start, length: len, velocity: 0.78, slide: st.ui.porta, ..Default::default() }] } else { edit::chord(pitch, CHORDS[chord - 1].1, start, len, 0.78, false) };
                 preview(st, pitch, 0.78);
                 let first = notes.len();
                 let n = new.len();

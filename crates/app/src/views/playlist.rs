@@ -432,6 +432,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 } else {
                     if !st.ui.clips.contains(&cid) {
                         st.ui.clips = vec![cid];
+                        let groups = st.session.project.clip_groups.clone();
+                        for g in groups.iter().filter(|g| g.contains(&cid)) {
+                            st.ui.clips.extend(g.iter().filter(|c| **c != cid));
+                        }
                     }
                     let (mut cid, mut tid) = (cid, tid);
                     if shift && matches!(kind, DragKind::Move { .. }) {
@@ -704,6 +708,15 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                             }
                         } else {
                             st.ui.clips = vec![cid];
+                        }
+                        // Grouped clips (FL Shift+G) are selected together.
+                        let groups = st.session.project.clip_groups.clone();
+                        for g in groups.iter().filter(|g| g.contains(&cid)) {
+                            for c in g {
+                                if !st.ui.clips.contains(c) {
+                                    st.ui.clips.push(*c);
+                                }
+                            }
                         }
                     }
                     (Tool::Draw | Tool::Paint, None) => {
