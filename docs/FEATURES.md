@@ -142,7 +142,7 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 
 ## Comparison with the FabFilter bundle
 
-What the stock effects share with FabFilter's handling, and what is still missing.
+What the stock effects share with FabFilter's handling. Every listed feature is there; the caveats are in the right column (styles are modelled after FabFilter's names, not measured against the originals).
 
 | FabFilter | Dragon DAW stock effects |
 |---|---|
