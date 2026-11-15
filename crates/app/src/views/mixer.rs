@@ -855,6 +855,12 @@ pub fn add_effect_menu_sized(ui: &mut Ui, st: &mut State, mixer: Id, label: &str
                 }
             });
         }
+        if replace.is_none() && ui.button("Browse the effect gallery…").on_hover_text("See every stock effect in action").clicked() {
+            st.ui.mixer = mixer;
+            st.ui.fx_gallery = true;
+            ui.close_menu();
+        }
+        ui.separator();
         let fx: Vec<_> = st.settings.plugins.iter().filter(|p| !p.instrument).cloned().collect();
         ui.menu_button("Plugins", |ui| {
             if fx.is_empty() {

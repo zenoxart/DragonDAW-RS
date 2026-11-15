@@ -119,6 +119,8 @@ pub struct UiState {
     pub export: Option<crate::views::export::ExportDialog>,
     pub recovery: Option<Vec<(PathBuf, std::time::SystemTime)>>,
     pub about: bool,
+    /// The effect gallery window is open.
+    pub fx_gallery: bool,
     pub midi_learn: Option<Target>,
     pub last_note_len: u32,
     pub tap_times: Vec<Instant>,
@@ -170,6 +172,7 @@ impl UiState {
             export: None,
             recovery: None,
             about: false,
+            fx_gallery: false,
             midi_learn: None,
             last_note_len: PPQ,
             tap_times: Vec::new(),

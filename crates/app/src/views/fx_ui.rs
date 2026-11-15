@@ -43,36 +43,61 @@ fn freq_at(r: Rect, x: f32) -> f32 {
     20.0 * 1000f32.powf(((x - r.left()) / r.width()).clamp(0.0, 1.0))
 }
 
-/// A filled curve: the line plus a translucent area down to `base_y`.
+/// A filled curve: a glowing line over a vertical gradient that fades towards `base_y` (the look of the
+/// reference sheet).
 fn filled_curve(p: &egui::Painter, pts: &[Pos2], base_y: f32, col: Color32) {
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    let mut mesh = Mesh::default();
+    let top = col.gamma_multiply(0.42);
+    let bottom = col.gamma_multiply(0.02);
     for w in pts.windows(2) {
-        let quad = vec![w[0], w[1], Pos2::new(w[1].x, base_y), Pos2::new(w[0].x, base_y)];
-        p.add(Shape::convex_polygon(quad, col.gamma_multiply(0.16), Stroke::NONE));
+        let i = mesh.vertices.len() as u32;
+        for (pos, c) in [(w[0], top), (w[1], top), (Pos2::new(w[1].x, base_y), bottom), (Pos2::new(w[0].x, base_y), bottom)] {
+            mesh.vertices.push(Vertex { pos, uv: WHITE_UV, color: c });
+        }
+        mesh.indices.extend_from_slice(&[i, i + 1, i + 2, i, i + 2, i + 3]);
     }
-    // Glow under the line.
-    p.add(Shape::line(pts.to_vec(), Stroke::new(5.0_f32, col.gamma_multiply(0.18))));
+    p.add(Shape::mesh(mesh));
+    p.add(Shape::line(pts.to_vec(), Stroke::new(6.0_f32, col.gamma_multiply(0.14))));
     p.add(Shape::line(pts.to_vec(), Stroke::new(2.0_f32, col)));
+}
+
+/// The graph area inside a display, leaving room for the value axis (left) and the frequency /
+/// time axis (bottom).
+fn plot(r: Rect) -> Rect {
+    Rect::from_min_max(r.min + Vec2::new(32.0, 10.0), r.max - Vec2::new(10.0, 18.0))
+}
+
+/// Labels down the left edge: `(value, text)` placed with `y_of`.
+fn y_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, &str)], y_of: impl Fn(f32) -> f32) {
+    for (v, t) in marks {
+        let y = y_of(*v);
+        p.line_segment([Pos2::new(pr.left(), y), Pos2::new(pr.right(), y)], Stroke::new(1.0_f32, Color32::from_white_alpha(if *v == 0.0 { 28 } else { 10 })));
+        p.text(Pos2::new(pr.left() - 5.0, y), egui::Align2::RIGHT_CENTER, *t, egui::FontId::proportional(9.0), Color32::from_white_alpha(110));
+    }
+}
+
+/// Labels along the bottom edge: `(value, text)` placed with `x_of`.
+fn x_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, String)], x_of: impl Fn(f32) -> f32) {
+    for (v, t) in marks {
+        let x = x_of(*v);
+        p.line_segment([Pos2::new(x, pr.top()), Pos2::new(x, pr.bottom())], Stroke::new(1.0_f32, Color32::from_white_alpha(10)));
+        p.text(Pos2::new(x, pr.bottom() + 3.0), egui::Align2::CENTER_TOP, t, egui::FontId::proportional(9.0), Color32::from_white_alpha(110));
+    }
 }
 
 fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
     p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
-    let g = Stroke::new(1.0_f32, Color32::from_white_alpha(10));
+    let pr = plot(r);
     if log_freq {
-        for f in [50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
-            let x = fx(r, f);
-            p.line_segment([Pos2::new(x, r.top()), Pos2::new(x, r.bottom())], g);
-            let lbl = if f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") };
-            p.text(Pos2::new(x + 2.0, r.bottom() - 2.0), egui::Align2::LEFT_BOTTOM, lbl, egui::FontId::proportional(8.5), Color32::from_white_alpha(50));
-        }
+        let marks: Vec<(f32, String)> = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0].iter().map(|f| (*f, if *f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") })).collect();
+        x_axis(p, pr, &marks, |f| fx(pr, f));
     } else {
+        let g = Stroke::new(1.0_f32, Color32::from_white_alpha(10));
         for k in 1..8 {
-            let x = r.left() + r.width() * k as f32 / 8.0;
-            p.line_segment([Pos2::new(x, r.top()), Pos2::new(x, r.bottom())], g);
+            let x = pr.left() + pr.width() * k as f32 / 8.0;
+            p.line_segment([Pos2::new(x, pr.top()), Pos2::new(x, pr.bottom())], g);
         }
-    }
-    for k in 1..4 {
-        let y = r.top() + r.height() * k as f32 / 4.0;
-        p.line_segment([Pos2::new(r.left(), y), Pos2::new(r.right(), y)], g);
     }
 }
 
@@ -81,7 +106,7 @@ fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
 /// changes the gesture made, and whether a drag is running.
 pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 150.0), egui::Sense::click_and_drag());
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 170.0), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
     let p = ui.painter_at(r);
     let col = if h.enabled { h.color } else { theme::TEXT_DIM };
@@ -111,9 +136,9 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     (edits, resp.dragged())
 }
 
-/// Square area of the transfer-curve displays (dynamics, shaper).
+/// Square area of the transfer-curve displays (dynamics, shaper), with room for axis labels.
 fn square(r: Rect) -> Rect {
-    Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::splat(r.height() - 16.0))
+    Rect::from_min_size(r.min + Vec2::new(34.0, 10.0), Vec2::splat(r.height() - 32.0))
 }
 
 fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f32)> {
@@ -122,8 +147,9 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
     let grab = resp.id.with("grab");
     match h.def.id {
         "eq" => {
+            let r = plot(r);
             let range = 18.0;
-            let y_of = |db: f32| r.center().y - db.clamp(-range, range) / range * r.height() * 0.45;
+            let y_of = |db: f32| r.center().y - db.clamp(-range, range) / range * r.height() * 0.5;
             let node = |b: usize| Pos2::new(fx(r, h.v(&format!("b{b}_freq"))), y_of(h.v(&format!("b{b}_gain"))));
             let near = |at: Pos2| (1..=7).filter(|b| h.v(&format!("b{b}_on")) > 0.5).min_by(|a, b| node(*a).distance(at).total_cmp(&node(*b).distance(at))).filter(|b| node(*b).distance(at) < 16.0);
             let nearest = near(pos);
@@ -134,7 +160,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
             if resp.dragged() && held > 0 {
                 out.push((format!("b{held}_freq"), freq_at(r, pos.x).clamp(20.0, 20_000.0)));
-                let db = ((r.center().y - pos.y) / (r.height() * 0.45) * range).clamp(-range, range);
+                let db = ((r.center().y - pos.y) / (r.height() * 0.5) * range).clamp(-range, range);
                 out.push((format!("b{held}_gain"), (db * 10.0).round() / 10.0));
             }
             if let Some(b) = nearest {
@@ -146,6 +172,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
         }
         "filter" => {
+            let r = plot(r);
             if resp.dragged() {
                 out.push(("cutoff".into(), freq_at(r, pos.x).clamp(20.0, 20_000.0)));
                 out.push(("resonance".into(), (1.0 - (pos.y - r.top()) / r.height()).clamp(0.0, 0.98)));
@@ -185,8 +212,9 @@ const BAND_COLORS: [Color32; 7] = [
 fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     grid(p, r, true);
     let range = 18.0;
-    let y_of = |db: f32| r.center().y - db.clamp(-range, range) / range * r.height() * 0.45;
-    p.line_segment([Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
+    let pr = plot(r);
+    let y_of = |db: f32| pr.center().y - db.clamp(-range, range) / range * pr.height() * 0.5;
+    y_axis(p, pr, &[(12.0, "+12"), (6.0, "+6"), (0.0, "0"), (-6.0, "-6"), (-12.0, "-12")], y_of);
     let bands: Vec<(usize, Biquad, f32, f32)> = (1..=7)
         .filter(|b| h.v(&format!("b{b}_on")) > 0.5)
         .map(|b| {
@@ -197,30 +225,33 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         })
         .collect();
     let out = h.v("output");
+    let p = p.with_clip_rect(pr.expand(8.0).intersect(r));
     // Each band's own shape, faint, then the sum.
     for (k, bq, _, _) in &bands {
-        let pts: Vec<Pos2> = (0..=120).map(|i| r.left() + r.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(r, x), RATE)))).collect();
-        p.add(Shape::line(pts, Stroke::new(1.0_f32, BAND_COLORS[*k].gamma_multiply(0.45))));
+        let pts: Vec<Pos2> = (0..=120).map(|i| pr.left() + pr.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
+        p.add(Shape::line(pts, Stroke::new(1.0_f32, BAND_COLORS[*k].gamma_multiply(0.4))));
     }
-    let pts: Vec<Pos2> = (0..=160)
-        .map(|i| r.left() + r.width() * i as f32 / 160.0)
+    let pts: Vec<Pos2> = (0..=180)
+        .map(|i| pr.left() + pr.width() * i as f32 / 180.0)
         .map(|x| {
-            let f = freq_at(r, x);
+            let f = freq_at(pr, x);
             Pos2::new(x, y_of(bands.iter().map(|b| b.1.response_db(f, RATE)).sum::<f32>() + out))
         })
         .collect();
-    filled_curve(p, &pts, r.center().y, col);
+    filled_curve(&p, &pts, pr.bottom(), col);
     for (k, bq, f, _) in &bands {
-        let c = Pos2::new(fx(r, *f), y_of(bq.response_db(*f, RATE)));
+        let c = Pos2::new(fx(pr, *f), y_of(bq.response_db(*f, RATE)));
         let pulse = 1.0 + 0.15 * (h.t() * 2.0 + *k as f32).sin();
-        p.circle_filled(c, 9.0 * pulse, BAND_COLORS[*k].gamma_multiply(0.25));
-        p.circle_filled(c, 6.0, BAND_COLORS[*k]);
+        p.circle_filled(c, 10.0 * pulse, BAND_COLORS[*k].gamma_multiply(0.22));
+        p.circle_filled(c, 6.5, BAND_COLORS[*k]);
+        p.circle_stroke(c, 6.5, Stroke::new(1.5_f32, Color32::from_white_alpha(200)));
         p.text(c, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(8.5), Color32::BLACK);
     }
 }
 
 fn filter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     grid(p, r, true);
+    let pr = plot(r);
     let kind = match h.v("type").round() as i32 {
         0 => BiquadKind::LowPass,
         1 => BiquadKind::HighPass,
@@ -231,12 +262,17 @@ fn filter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let cutoff = (h.v("cutoff") * 2f32.powf(lfo)).clamp(20.0, 20_000.0);
     let q = 0.707 + h.v("resonance") * 12.0;
     let bq = Biquad::new(kind, cutoff, q, 0.0, RATE);
-    let y_of = |db: f32| r.top() + 18.0 - db.clamp(-48.0, 18.0) / 66.0 * (r.height() - 22.0) + 18.0 / 66.0 * (r.height() - 22.0) - 18.0;
-    let pts: Vec<Pos2> = (0..=160).map(|i| r.left() + r.width() * i as f32 / 160.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(r, x), RATE)))).collect();
-    filled_curve(p, &pts, r.bottom(), col);
-    let x = fx(r, cutoff);
-    p.line_segment([Pos2::new(x, r.top()), Pos2::new(x, r.bottom())], Stroke::new(1.0_f32, col.gamma_multiply(0.5)));
-    p.circle_filled(Pos2::new(x, y_of(bq.response_db(cutoff, RATE))), 6.0, col);
+    let (top, bottom) = (12.0, -24.0);
+    let y_of = |db: f32| pr.top() + (top - db.clamp(bottom, top)) / (top - bottom) * pr.height();
+    y_axis(p, pr, &[(12.0, "+12"), (6.0, "+6"), (0.0, "0"), (-6.0, "-6"), (-12.0, "-12"), (-18.0, "-18"), (-24.0, "-24")], y_of);
+    let p = p.with_clip_rect(pr.expand(10.0).intersect(r));
+    let pts: Vec<Pos2> = (0..=180).map(|i| pr.left() + pr.width() * i as f32 / 180.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
+    filled_curve(&p, &pts, pr.bottom(), col);
+    // The cutoff node: a ring with a glow, like the reference.
+    let c = Pos2::new(fx(pr, cutoff), y_of(bq.response_db(cutoff, RATE)));
+    p.circle_filled(c, 11.0, col.gamma_multiply(0.25));
+    p.circle_filled(c, 6.0, theme::BG);
+    p.circle_stroke(c, 6.0, Stroke::new(2.0_f32, Color32::WHITE));
 }
 
 // --------------------------------------------------------------------------------------- dynamics
@@ -249,7 +285,10 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let to_x = |db: f32| sq.left() + (db - lo) / -lo * sq.width();
     let to_y = |db: f32| sq.bottom() - ((db - lo) / -lo).clamp(0.0, 1.0) * sq.height();
     p.rect_stroke(sq, 3.0, Stroke::new(1.0_f32, Color32::from_white_alpha(20)), egui::StrokeKind::Inside);
-    p.line_segment([Pos2::new(sq.left(), sq.bottom()), Pos2::new(sq.right(), sq.top())], Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
+    y_axis(p, sq, &[(0.0, "0"), (-12.0, "-12"), (-24.0, "-24"), (-36.0, "-36"), (-48.0, "-48")], to_y);
+    x_axis(p, sq, &[(-48.0, "-48".into()), (-36.0, "-36".into()), (-24.0, "-24".into()), (-12.0, "-12".into()), (0.0, "0".into())], to_x);
+    // The 1:1 line, dashed.
+    p.extend(Shape::dashed_line(&[Pos2::new(sq.left(), sq.bottom()), Pos2::new(sq.right(), sq.top())], Stroke::new(1.0_f32, Color32::from_white_alpha(45)), 4.0, 4.0));
     let (thr, ratio, knee, makeup) = match h.def.id {
         "limiter" => (h.v("ceiling") - h.v("gain"), 100.0, 0.0, h.v("gain")),
         "gate" => (h.v("threshold"), 1.0 / 8.0, 0.0, 0.0),
@@ -285,21 +324,24 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let ball = Pos2::new(to_x(x_in), to_y(curve(x_in)));
     p.circle_filled(ball, 8.0, col.gamma_multiply(0.3));
     p.circle_filled(ball, 4.5, Color32::WHITE);
-    // GR meter.
-    let m = Rect::from_min_max(Pos2::new(sq.right() + 18.0, r.top() + 22.0), Pos2::new(r.right() - 14.0, r.bottom() - 14.0));
-    p.text(Pos2::new(m.left(), r.top() + 6.0), egui::Align2::LEFT_TOP, "GAIN REDUCTION", egui::FontId::proportional(9.5), theme::TEXT_DIM);
-    let bar = Rect::from_min_max(m.min, Pos2::new(m.right(), m.top() + 16.0));
-    p.rect_filled(bar, 4.0, Color32::from_white_alpha(12));
-    let frac = (h.gr / 24.0).clamp(0.0, 1.0);
-    if frac > 0.0 {
-        p.rect_filled(Rect::from_min_max(Pos2::new(bar.right() - bar.width() * frac, bar.top()), bar.max), 4.0, theme::WARN);
+    // Segmented, LED-style gain-reduction meter (orange), then the reading.
+    let meter = Rect::from_min_max(Pos2::new(sq.right() + 34.0, sq.top() + 14.0), Pos2::new(sq.right() + 50.0, sq.bottom()));
+    p.text(Pos2::new(meter.center().x, r.top() + 4.0), egui::Align2::CENTER_TOP, "GR", egui::FontId::proportional(9.0), theme::TEXT_DIM);
+    let segs = 16;
+    let seg_h = meter.height() / segs as f32;
+    let lit = ((h.gr / 24.0).clamp(0.0, 1.0) * segs as f32).round() as usize;
+    for k in 0..segs {
+        let y0 = meter.top() + k as f32 * seg_h;
+        let sr = Rect::from_min_max(Pos2::new(meter.left(), y0 + 1.0), Pos2::new(meter.right(), y0 + seg_h - 1.0));
+        p.rect_filled(sr, 1.5, if k < lit { Color32::from_rgb(0xf0, 0x8a, 0x4b) } else { Color32::from_white_alpha(14) });
+        if k % 4 == 0 {
+            p.text(Pos2::new(meter.right() + 4.0, sr.center().y), egui::Align2::LEFT_CENTER, format!("-{}", k * 24 / segs), egui::FontId::proportional(8.0), Color32::from_white_alpha(90));
+        }
     }
-    for k in 0..=4 {
-        let x = bar.right() - bar.width() * k as f32 / 4.0;
-        p.text(Pos2::new(x, bar.bottom() + 2.0), egui::Align2::CENTER_TOP, format!("{}", k * 6), egui::FontId::proportional(8.5), theme::TEXT_DIM);
-    }
+    let m = Rect::from_min_max(Pos2::new(meter.right() + 30.0, sq.top()), Pos2::new(r.right() - 12.0, sq.bottom()));
+    p.text(Pos2::new(m.left(), m.top() + 4.0), egui::Align2::LEFT_TOP, "GAIN REDUCTION", egui::FontId::proportional(9.5), theme::TEXT_DIM);
     p.text(
-        Pos2::new(m.left(), m.top() + 40.0),
+        Pos2::new(m.left(), m.top() + 22.0),
         egui::Align2::LEFT_TOP,
         if h.gr > 0.05 { format!("−{:.1} dB", h.gr) } else { "0.0 dB".into() },
         egui::FontId::monospace(26.0),
@@ -347,91 +389,120 @@ fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 fn delay(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     grid(p, r, false);
+    let pr = plot(r);
     let fb = h.v("feedback");
     let ping = h.v("mode").round() as i32 == 1;
-    let span_ms: f32 = 2000.0;
     let time = h.v("time").max(1.0);
-    let base = r.center().y;
-    // Dry hit and the repeats, decaying by the feedback; ping-pong alternates up/down.
+    // Show about eight repeats (at least half a second).
+    let span_ms: f32 = (time * 8.0).max(500.0);
+    let x_of = |ms: f32| pr.left() + 6.0 + ms / span_ms * (pr.width() - 12.0);
+    let y_of = |db: f32| pr.top() + (-db.clamp(-30.0, 0.0) / 30.0) * pr.height();
+    y_axis(p, pr, &[(0.0, "0 dB"), (-6.0, "-6"), (-12.0, "-12"), (-18.0, "-18"), (-24.0, "-24"), (-30.0, "-30")], y_of);
+    let marks: Vec<(f32, String)> = (0..=4).map(|k| span_ms * k as f32 / 4.0).map(|ms| (ms, if ms >= 1000.0 { format!("{:.1} s", ms / 1000.0) } else { format!("{ms:.0} ms") })).collect();
+    x_axis(p, pr, &marks, x_of);
+    // Lollipop taps (dry hit in orange, repeats in the effect colour), one lights as the echo passes.
+    let travel = (h.t() * 1000.0) % (span_ms + 300.0);
     let mut level = 1.0f32;
     let mut k = 0;
-    let travel = (h.t() * 1000.0) % (span_ms.min(time * 8.0) + 400.0);
-    while k < 32 && level > 0.02 {
+    while k < 48 && level > 0.03 {
         let t = time * k as f32;
         if t > span_ms {
             break;
         }
-        let x = r.left() + 10.0 + t / span_ms * (r.width() - 20.0);
-        let hgt = level * r.height() * 0.42;
-        let up = !ping || k % 2 == 0;
-        let lit = (travel - t).abs() < 60.0;
-        let c = if k == 0 { Color32::WHITE } else { col.gamma_multiply(0.4 + 0.6 * level) };
-        let (y0, y1) = if up { (base, base - hgt) } else { (base, base + hgt) };
-        p.line_segment([Pos2::new(x, y0), Pos2::new(x, y1)], Stroke::new(if lit { 7.0_f32 } else { 4.0 }, if lit { Color32::WHITE } else { c }));
-        p.circle_filled(Pos2::new(x, y1), if lit { 5.0 } else { 3.0 }, c);
+        let x = x_of(t);
+        let db = dragon_engine::dsp::gain_to_db(level.max(1e-4));
+        let y = y_of(db);
+        let lit = (travel - t).abs() < 50.0;
+        let c = if k == 0 { Color32::from_rgb(0xf0, 0x8a, 0x4b) } else { col.gamma_multiply(0.45 + 0.55 * level) };
+        let side = if ping && k % 2 == 1 { 1.5 } else { 0.0 };
+        p.line_segment([Pos2::new(x + side, pr.bottom()), Pos2::new(x + side, y)], Stroke::new(if lit { 4.0_f32 } else { 2.5 }, c.gamma_multiply(0.75)));
+        p.circle_filled(Pos2::new(x + side, y), if lit { 8.0 } else { 6.0 }, c.gamma_multiply(0.25));
+        p.circle_filled(Pos2::new(x + side, y), if lit { 4.5 } else { 3.5 }, if lit { Color32::WHITE } else { c });
         level *= fb.max(0.0);
         k += 1;
         if fb <= 0.0 {
             break;
         }
     }
-    p.line_segment([Pos2::new(r.left() + 6.0, base), Pos2::new(r.right() - 6.0, base)], Stroke::new(1.0_f32, Color32::from_white_alpha(35)));
-    p.text(r.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, format!("{:.0} ms · {:.0}% feedback{}", time, fb * 100.0, if ping { " · ping-pong" } else { "" }), egui::FontId::proportional(10.5), theme::TEXT);
+    p.text(
+        pr.right_top() + Vec2::new(-4.0, 2.0),
+        egui::Align2::RIGHT_TOP,
+        format!("{:.0} ms · {:.0}% feedback{}", time, fb * 100.0, if ping { " · ping-pong" } else { "" }),
+        egui::FontId::proportional(10.5),
+        theme::TEXT,
+    );
 }
 
 fn reverb(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     grid(p, r, false);
+    let pr = plot(r);
     let decay = h.v("decay");
     let pre = h.v("predelay");
     let size = h.v("size");
     let early = h.v("early");
     let late = h.v("late");
-    let span = (decay * 1.2 + pre / 1000.0).clamp(0.5, 24.0);
-    let x_of = |s: f32| r.left() + 8.0 + s / span * (r.width() - 16.0);
-    let base = r.bottom() - 10.0;
-    let hmax = r.height() - 26.0;
-    // Late tail: an exponential envelope filled with shimmering grains.
+    let span = (decay * 1.1 + pre / 1000.0).clamp(0.5, 24.0);
+    let x_of = |s: f32| pr.left() + s / span * pr.width();
+    let y_of = |db: f32| pr.top() + (-db.clamp(-30.0, 0.0) / 30.0) * pr.height();
+    y_axis(p, pr, &[(0.0, "0 dB"), (-6.0, "-6"), (-12.0, "-12"), (-18.0, "-18"), (-24.0, "-24"), (-30.0, "-30")], y_of);
+    let marks: Vec<(f32, String)> = (0..=4).map(|k| span * k as f32 / 4.0).map(|s| (s, format!("{s:.1} s"))).collect();
+    x_axis(p, pr, &marks, x_of);
+    // The tail as a dense "impulse response": one thin bar per pixel column, its height a noisy sample
+    // under the exponential envelope (in dB), shimmering slowly.
     let start = pre / 1000.0;
-    let tail: Vec<Pos2> = (0..=120)
-        .map(|k| {
-            let s = start + k as f32 / 120.0 * (span - start);
-            let env = (-6.9 * (s - start) / decay.max(0.1)).exp() * late.max(0.15);
-            Pos2::new(x_of(s), base - env * hmax)
-        })
-        .collect();
-    filled_curve(p, &tail, base, col);
+    let level = |s: f32| -> f32 {
+        if s < start {
+            0.0
+        } else {
+            (-6.9 * (s - start) / decay.max(0.1)).exp() * late.max(0.15)
+        }
+    };
+    let mut env_pts = Vec::new();
+    let mut x = pr.left();
     let mut seed = 0x9e37_79b9u32;
-    for g in 0..140 {
+    while x < pr.right() {
+        let s = (x - pr.left()) / pr.width() * span;
         seed ^= seed << 13;
         seed ^= seed >> 17;
         seed ^= seed << 5;
-        let u = (seed % 1000) as f32 / 1000.0;
-        let s = start + u * (span - start);
-        let env = (-6.9 * (s - start) / decay.max(0.1)).exp() * late.max(0.15);
-        let tw = ((h.t() * (2.0 + g as f32 % 5.0) + g as f32).sin() * 0.5 + 0.5) * env;
-        let y = base - tw * hmax * ((seed >> 10) % 100) as f32 / 100.0;
-        p.circle_filled(Pos2::new(x_of(s), y), 1.2 + size, col.gamma_multiply(0.25 + 0.6 * env));
+        let noise = ((seed % 1000) as f32 / 1000.0) * (0.75 + 0.25 * (h.t() * 3.0 + x * 0.3).sin());
+        let a = level(s) * (0.35 + 0.65 * noise);
+        if a > 0.0 {
+            let y = y_of(dragon_engine::dsp::gain_to_db(a.max(1e-4)));
+            let ty = y.max(pr.top());
+            p.line_segment([Pos2::new(x, pr.bottom()), Pos2::new(x, ty)], Stroke::new(1.0_f32, col.gamma_multiply(0.7)));
+        }
+        if s >= start {
+            env_pts.push(Pos2::new(x, y_of(dragon_engine::dsp::gain_to_db(level(s).max(1e-4)))));
+        }
+        x += 1.5;
     }
-    // Early reflections: a few spikes after the pre-delay.
+    if env_pts.len() > 1 {
+        p.add(Shape::line(env_pts.clone(), Stroke::new(5.0_f32, col.gamma_multiply(0.15))));
+        p.add(Shape::line(env_pts, Stroke::new(1.5_f32, col)));
+    }
+    // Early reflections: bright spikes after the pre-delay.
     for k in 0..8 {
         let s = start + (k as f32 + 1.0) * 0.008 * h.v("er_size") * (1.0 + size);
         let a = early * (1.0 - k as f32 / 9.0);
-        p.line_segment([Pos2::new(x_of(s), base), Pos2::new(x_of(s), base - a * hmax * 0.8)], Stroke::new(2.0_f32, theme::ACCENT_2.gamma_multiply(0.8)));
+        if a > 0.01 {
+            let y = y_of(dragon_engine::dsp::gain_to_db(a));
+            p.line_segment([Pos2::new(x_of(s), pr.bottom()), Pos2::new(x_of(s), y)], Stroke::new(2.0_f32, Color32::from_rgb(0xf0, 0x8a, 0x4b)));
+        }
     }
-    p.line_segment([Pos2::new(x_of(0.0), base), Pos2::new(x_of(0.0), base - hmax)], Stroke::new(3.0_f32, Color32::WHITE));
     let modes = match h.def.param("mode").map(|p| p.kind) {
         Some(effects::ParamKind::Choice(n)) => n,
         _ => &[],
     };
     let mode = modes.get(h.v("mode").round() as usize).copied().unwrap_or("");
-    p.text(r.right_top() + Vec2::new(-8.0, 6.0), egui::Align2::RIGHT_TOP, format!("{mode} · {decay:.1} s decay · {pre:.0} ms pre-delay"), egui::FontId::proportional(10.5), theme::TEXT);
+    p.text(pr.right_top() + Vec2::new(-4.0, 2.0), egui::Align2::RIGHT_TOP, format!("{mode} · {decay:.1} s decay · {pre:.0} ms pre-delay"), egui::FontId::proportional(10.5), theme::TEXT);
 }
 
 // ---------------------------------------------------------------------------------- distortion
 
 fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
-    let sq = Rect::from_min_size(r.min + Vec2::new(8.0, 8.0), Vec2::splat(r.height() - 16.0));
+    let sq = square(r);
     p.rect_stroke(sq, 3.0, Stroke::new(1.0_f32, Color32::from_white_alpha(20)), egui::StrokeKind::Inside);
     let crush = h.def.id == "bitcrusher";
     let shape = |x: f32| -> f32 {
@@ -444,13 +515,22 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         }
     };
     let c = sq.center();
-    let half = sq.width() / 2.0 - 4.0;
-    p.line_segment([Pos2::new(sq.left(), sq.bottom()), Pos2::new(sq.right(), sq.top())], Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
-    let pts: Vec<Pos2> = (0..=100).map(|k| -1.0 + 2.0 * k as f32 / 100.0).map(|x| Pos2::new(c.x + x * half, c.y - shape(x) * half)).collect();
-    p.add(Shape::line(pts.clone(), Stroke::new(5.0_f32, col.gamma_multiply(0.2))));
-    p.add(Shape::line(pts, Stroke::new(2.0_f32, col)));
+    let half = sq.width() / 2.0;
+    let ax = |v: f32| c.x + v * half;
+    let ay = |v: f32| c.y - v * half;
+    y_axis(p, sq, &[(1.0, "+1.0"), (0.5, "+0.5"), (0.0, "0"), (-0.5, "-0.5"), (-1.0, "-1.0")], ay);
+    x_axis(p, sq, &[(-1.0, "-1".into()), (-0.5, "-0.5".into()), (0.0, "0".into()), (0.5, "+0.5".into()), (1.0, "+1".into())], ax);
+    p.extend(Shape::dashed_line(&[Pos2::new(sq.left(), sq.bottom()), Pos2::new(sq.right(), sq.top())], Stroke::new(1.0_f32, Color32::from_white_alpha(50)), 4.0, 4.0));
+    let pts: Vec<Pos2> = (0..=120).map(|k| -1.0 + 2.0 * k as f32 / 120.0).map(|x| Pos2::new(ax(x), ay(shape(x).clamp(-1.0, 1.0)))).collect();
+    let p2 = p.with_clip_rect(sq.expand(2.0));
+    filled_curve(&p2, &pts, c.y, col);
+    // A dot rides the curve with the test sine.
+    let xin = (h.t() * 2.0).sin() * 0.9;
+    let dot = Pos2::new(ax(xin), ay(shape(xin).clamp(-1.0, 1.0)));
+    p.circle_filled(dot, 7.0, col.gamma_multiply(0.3));
+    p.circle_filled(dot, 3.5, Color32::WHITE);
     // Right: a sine going in, and what comes out, scrolling.
-    let w = Rect::from_min_max(Pos2::new(sq.right() + 14.0, r.top() + 10.0), Pos2::new(r.right() - 10.0, r.bottom() - 10.0));
+    let w = Rect::from_min_max(Pos2::new(sq.right() + 24.0, r.top() + 10.0), Pos2::new(r.right() - 10.0, r.bottom() - 10.0));
     let ph = h.t() * 2.0;
     let mid = w.center().y;
     let amp = w.height() * 0.42;
@@ -708,9 +788,9 @@ mod tests {
         };
         frame(vec![], &params, &mut area, &mut got);
         let w = area.width().max(260.0);
-        let r = Rect::from_min_size(area.min, egui::vec2(w, 150.0));
+        let r = plot(Rect::from_min_size(area.min, egui::vec2(w, 170.0)));
         let node = Pos2::new(fx(r, 1000.0), r.center().y);
-        let to = Pos2::new(fx(r, 4000.0), r.center().y - r.height() * 0.45 * 0.5);
+        let to = Pos2::new(fx(r, 4000.0), r.center().y - r.height() * 0.5 * 0.5);
         frame(vec![egui::Event::PointerMoved(node)], &params, &mut area, &mut got);
         frame(vec![egui::Event::PointerButton { pos: node, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }], &params, &mut area, &mut got);
         for k in 1..=6 {

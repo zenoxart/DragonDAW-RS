@@ -71,6 +71,49 @@ pub fn knob_colored(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f
     r.on_hover_text(format!("{label}: {}", fmt(*value)))
 }
 
+/// The effect-editor knob from the design reference: the name in capitals above, a dark knob with a
+/// coloured value arc and a white pointer, the value printed below. Same gestures as [`knob`].
+pub fn fx_knob(ui: &mut Ui, n: &mut f32, default: f32, label: &str, value: &str, color: Color32) -> Response {
+    let size = 40.0;
+    let w = 64.0;
+    let (rect, mut r) = ui.allocate_exact_size(Vec2::new(w, size + 32.0), Sense::click_and_drag());
+    if r.dragged() {
+        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+        *n = (*n - r.drag_delta().y / 180.0 * fine).clamp(0.0, 1.0);
+        r.mark_changed();
+    }
+    if r.hovered() {
+        let s = ui.input(|i| i.smooth_scroll_delta.y);
+        if s != 0.0 {
+            *n = (*n + s / 600.0).clamp(0.0, 1.0);
+            r.mark_changed();
+        }
+    }
+    if r.double_clicked() {
+        *n = default;
+        r.mark_changed();
+    }
+    let p = ui.painter();
+    p.text(Pos2::new(rect.center().x, rect.top()), egui::Align2::CENTER_TOP, label.to_uppercase(), egui::FontId::proportional(9.5), theme::TEXT);
+    let c = Pos2::new(rect.center().x, rect.top() + 14.0 + size / 2.0);
+    let rad = size / 2.0 - 2.0;
+    let active = r.hovered() || r.dragged();
+    if active {
+        p.circle_filled(c, rad + 4.0, color.gamma_multiply(0.12));
+    }
+    p.circle_filled(c, rad - 4.0, Color32::from_rgb(0x2a, 0x2e, 0x36));
+    p.circle_stroke(c, rad - 4.0, Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
+    let a0 = std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.5;
+    let arc = |from: f32, to: f32| -> Vec<Pos2> { (0..=28).map(|i| from + (to - from) * i as f32 / 28.0).map(|a| Pos2::new(c.x + rad * a.cos(), c.y + rad * a.sin())).collect() };
+    p.add(egui::Shape::line(arc(a0, a0 + sweep), Stroke::new(3.0_f32, Color32::from_white_alpha(18))));
+    p.add(egui::Shape::line(arc(a0, a0 + sweep * *n), Stroke::new(3.0_f32, color)));
+    let a = a0 + sweep * *n;
+    p.line_segment([Pos2::new(c.x + (rad - 13.0) * a.cos(), c.y + (rad - 13.0) * a.sin()), Pos2::new(c.x + (rad - 5.0) * a.cos(), c.y + (rad - 5.0) * a.sin())], Stroke::new(2.0_f32, Color32::WHITE));
+    p.text(Pos2::new(rect.center().x, rect.bottom()), egui::Align2::CENTER_BOTTOM, value, egui::FontId::proportional(10.0), if active { color } else { theme::TEXT_DIM });
+    r
+}
+
 /// A small coloured knob without a label (effect-slot mix, compact rows). Same gestures as [`knob`].
 pub fn mini_knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32, color: Color32) -> Response {
     let size = 24.0;

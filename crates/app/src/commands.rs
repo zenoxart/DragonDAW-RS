@@ -67,6 +67,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("view.automation", "Automation & MIDI mappings", "View", 1, ""),
     ("view.history", "Undo history", "View", 1, "Alt+Z"),
     ("view.plugins", "Plugin manager", "View", 2, "F8"),
+    ("view.fx_gallery", "Effect gallery", "View", 2, ""),
     ("view.options", "Options", "View", 2, "F10"),
     ("view.palette", "Command palette", "View", 3, "Ctrl+Shift+P"),
     ("view.reset_layout", "Reset layout", "View", 3, ""),
@@ -384,6 +385,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             });
         }
         "view.palette" => st.ui.palette = Some(String::new()),
+        "view.fx_gallery" => st.ui.fx_gallery = true,
         "view.reset_layout" => st.ctx.run("dragon.internal.reset_layout", serde_json::Value::Null),
         "tools.scan_plugins" => crate::views::plugins::start_scan(st),
         "tools.detect" => {

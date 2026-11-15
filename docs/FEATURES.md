@@ -73,6 +73,8 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Automation clips in the playlist (the lane plays relative to each clip) | ✅ | `ClipKind::Automation`, `AutomationLane::value_in_clips` |
 | Visual routing cables in the mixer, drag a cable to route | ✅ | `views/mixer.rs` (`cables`) |
 | Large effect slots, animated interactive effect / synth displays | ✅ | `views/mixer.rs`, `views/fx_ui.rs` |
+| Effect editor A/B compare, effect gallery | ✅ | `views/windows.rs`, `views/fx_gallery.rs` |
+| Design after Higgsfield references (effect suite sheet, level-up animation) | ✅ | `docs/images/design/` |
 | FL-style project folder on save (Samples, Recordings, Renders, Backup) | ✅ | `project_io::save_in_folder` |
 | Mixer and Mastering as default tabs next to the playlist | ✅ | `docking::default_layout` (layout version 2) |
 | Quests, XP, levels, daily streak, celebrations | ✅ | `views/quests.rs` |

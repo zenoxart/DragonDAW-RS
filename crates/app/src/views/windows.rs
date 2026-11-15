@@ -16,7 +16,14 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     for (m, i) in effects_open {
         let mut open = true;
         let title = effect_title(st, m, i);
-        egui::Window::new(title).id(egui::Id::new(("fx", m, i))).open(&mut open).resizable(true).default_width(470.0).show(ctx, |ui| effect_editor(ui, st, m, i));
+        egui::Window::new(title)
+            .id(egui::Id::new(("fx", m, i)))
+            .open(&mut open)
+            .resizable(true)
+            .default_width(470.0)
+            .vscroll(true)
+            .max_height(ctx.screen_rect().height() - 60.0)
+            .show(ctx, |ui| effect_editor(ui, st, m, i));
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
             st.ui.effect_windows.retain(|w| *w != (m, i));
         }
@@ -65,28 +72,54 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let gr = st.audio.meters().snapshot().gain_reduction.get(&i).copied().unwrap_or(0.0);
     let cat = effects::find(&ins.effect).map(|d| d.category).unwrap_or("Plugin");
     let ccol = super::mixer::category_color(cat);
-    // Header: category stripe, power LED, mix and gain reduction.
+    // Header, after the design reference: colour stripe, "Dragon <name> | category", A/B compare, power
+    // button and the mix knob.
+    let fx_name = effects::find(&ins.effect).map(|d| d.name.to_string()).or_else(|| ins.plugin.as_ref().map(|p| p.name.clone())).unwrap_or_default();
+    let brand = if fx_name.starts_with("Dragon") || ins.plugin.is_some() { fx_name.clone() } else { format!("Dragon {fx_name}") };
     egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            let (lr, lresp) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
-            let led = if ins.enabled { theme::OK } else { theme::GRID_BAR };
-            if ins.enabled {
-                ui.painter().circle_filled(lr.center(), 10.0, led.gamma_multiply(0.25));
-            }
-            ui.painter().circle_filled(lr.center(), 6.5, led);
-            if lresp.on_hover_text(if ins.enabled { "On – click to bypass" } else { "Bypassed – click to enable" }).clicked() {
-                let en = !ins.enabled;
-                st.session.edit("Bypass effect", |p| with_insert(p, m, i, |x| x.enabled = en));
-            }
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new(cat.to_uppercase()).size(9.5).color(ccol).strong());
-                ui.label(RichText::new(effect_title(st, m, i)).size(14.0).strong());
-            });
+            let (bar, _) = ui.allocate_exact_size(egui::vec2(4.0, 22.0), egui::Sense::hover());
+            ui.painter().rect_filled(bar, 2.0, if ins.enabled { ccol } else { theme::GRID_BAR });
+            ui.label(RichText::new(&brand).size(15.0).strong().color(theme::TEXT));
+            ui.label(RichText::new(format!("|  {cat}")).size(11.0).color(theme::TEXT_DIM));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Power button: a ring with a stem, orange when on.
+                let (pr, presp) = ui.allocate_exact_size(egui::Vec2::splat(24.0), egui::Sense::click());
+                let pc = if ins.enabled { egui::Color32::from_rgb(0xf0, 0x8a, 0x4b) } else { theme::TEXT_DIM };
+                let c = pr.center();
+                let pts: Vec<egui::Pos2> = (0..=24).map(|k| -std::f32::consts::FRAC_PI_2 + 0.6 + (std::f32::consts::TAU - 1.2) * k as f32 / 24.0).map(|a| egui::pos2(c.x + 7.5 * a.cos(), c.y + 7.5 * a.sin())).collect();
+                if presp.hovered() || ins.enabled {
+                    ui.painter().circle_filled(c, 11.0, pc.gamma_multiply(0.15));
+                }
+                ui.painter().add(egui::Shape::line(pts, egui::Stroke::new(2.0_f32, pc)));
+                ui.painter().line_segment([egui::pos2(c.x, c.y - 9.0), egui::pos2(c.x, c.y - 1.0)], egui::Stroke::new(2.0_f32, pc));
+                if presp.on_hover_text(if ins.enabled { "On – click to bypass" } else { "Bypassed – click to switch on" }).clicked() {
+                    let en = !ins.enabled;
+                    st.session.edit("Bypass effect", |p| with_insert(p, m, i, |x| x.enabled = en));
+                }
+                ui.add_space(4.0);
+                // A/B compare: two settings to flip between while listening.
+                let ab_id = egui::Id::new(("fx.ab", m, i));
+                let (active_b, other): (bool, Option<BTreeMap<String, f32>>) = ui.data(|d| d.get_temp(ab_id)).unwrap_or((false, None));
+                for (is_b, label) in [(true, "B"), (false, "A")] {
+                    let on = active_b == is_b;
+                    let b = ui.add(
+                        egui::Button::new(RichText::new(label).strong().color(if on { egui::Color32::BLACK } else { theme::TEXT }))
+                            .fill(if on { egui::Color32::from_rgb(0xf0, 0x8a, 0x4b) } else { theme::PANEL })
+                            .min_size(egui::vec2(24.0, 22.0)),
+                    );
+                    if b.on_hover_text("A/B compare: flip between two settings of this effect").clicked() && !on {
+                        let cur = ins.params.clone();
+                        let next = other.clone().unwrap_or_else(|| cur.clone());
+                        st.session.edit("A/B compare", |p| with_insert(p, m, i, |x| x.params = next));
+                        ui.data_mut(|d| d.insert_temp(ab_id, (is_b, Some(cur))));
+                    }
+                }
+                ui.add_space(6.0);
                 let mut mix = ins.mix;
-                let r = widgets::knob_colored(ui, &mut mix, 0.0, 1.0, 1.0, "mix", widgets::pct, ccol);
+                let r = widgets::mini_knob(ui, &mut mix, 0.0, 1.0, 1.0, ccol).on_hover_text(format!("Mix (dry/wet) {:.0}%", mix * 100.0));
                 widgets::apply(st, &r, "Effect mix", |p| with_insert(p, m, i, |x| x.mix = mix));
+                ui.label(RichText::new("MIX").size(9.5).color(theme::TEXT_DIM));
                 if gr > 0.05 {
                     ui.label(RichText::new(format!("GR −{gr:.1} dB")).color(theme::WARN).monospace());
                 }
@@ -199,7 +232,7 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                         }
                         _ => {
                             let mut n = prm.normalize(v);
-                            let r = widgets::knob_colored(ui, &mut n, 0.0, 1.0, prm.normalize(prm.default), short, |x| prm.format(prm.denormalize(x)), ccol);
+                            let r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol).on_hover_text(format!("{} – drag, Shift = fine, double-click resets", prm.name));
                             v = prm.denormalize(n);
                             widgets::apply(st, &r, prm.name, |p| {
                                 with_insert(p, m, i, |x| {

@@ -331,33 +331,83 @@ fn celebrations(ctx: &egui::Context, st: &mut State, now: f64) {
         1.0
     }
     .clamp(0.0, 1.0);
-    let slide = (1.0 - (age * 5.0).min(1.0)).powi(2) * 40.0;
-    let card = Rect::from_center_size(Pos2::new(screen.center().x, screen.top() + 110.0 - slide), Vec2::new(380.0, 74.0));
-    if !st.settings.reduced_motion {
-        // Embers bursting from the card.
+    // Motion after the Higgsfield animation reference: a capsule card drops in from the top with a slight
+    // overshoot, glows orange, embers burst out of its border, and the cyan XP bar fills with a shine.
+    let reduced = st.settings.reduced_motion;
+    let drop = if reduced {
+        0.0
+    } else {
+        let t = (age / 0.45).min(1.0);
+        // Ease-out-back: overshoots a little and settles.
+        let s = 1.70158;
+        let e = 1.0 + (s + 1.0) * (t - 1.0).powi(3) + s * (t - 1.0).powi(2);
+        (1.0 - e) * 90.0
+    };
+    let card = Rect::from_center_size(Pos2::new(screen.center().x, screen.top() + 110.0 - drop), Vec2::new(400.0, 72.0));
+    let radius = card.height() / 2.0;
+    let orange = Color32::from_rgb(0xf0, 0x8a, 0x4b);
+    let gold = Color32::from_rgb(0xf5, 0xc8, 0x42);
+    let cyan = Color32::from_rgb(0x4b, 0xc0, 0xf0);
+    if !reduced {
+        // Embers start on the card's border and fly outwards, rising slightly and fading.
         let mut rng = c.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        for _ in 0..70 {
+        let mut next = || {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let a = (rng >> 33) as f32 / (1u64 << 31) as f32 * std::f32::consts::TAU;
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let speed = 120.0 + (rng >> 33) as f32 / (1u64 << 31) as f32 * 260.0;
-            let pos = card.center() + Vec2::new(a.cos(), a.sin() * 0.6) * speed * age + Vec2::new(0.0, 90.0 * age * age);
-            let col = if rng % 3 == 0 {
-                theme::ACCENT_2
-            } else if rng % 3 == 1 {
-                theme::ACCENT
-            } else {
-                theme::PLAYHEAD
-            };
-            painter.circle_filled(pos, (3.0 - age).max(0.6), col.gamma_multiply(fade * (1.0 - age / LIFE as f32)));
+            (rng >> 33) as f32 / (1u64 << 31) as f32
+        };
+        for k in 0..80 {
+            let a = next() * std::f32::consts::TAU;
+            let speed = 60.0 + next() * 180.0;
+            let delay = next() * 0.6;
+            let life = 1.4 + next() * 0.8;
+            let t = age - 0.2 - delay;
+            if t <= 0.0 || t > life {
+                continue;
+            }
+            let dir = Vec2::new(a.cos(), a.sin());
+            let start = card.center() + Vec2::new(dir.x * (card.width() / 2.0 - radius * 0.3), dir.y * radius);
+            let pos = start + dir * speed * t * (1.0 - t / (2.0 * life)) - Vec2::new(0.0, 25.0 * t);
+            let f = 1.0 - t / life;
+            let col = if k % 3 == 0 { gold } else { orange };
+            painter.circle_filled(pos, 1.0 + 2.2 * f, col.gamma_multiply(fade * f));
+            if k % 4 == 0 {
+                painter.line_segment([pos, pos - dir * 6.0 * f], Stroke::new(1.0_f32, col.gamma_multiply(fade * f * 0.6)));
+            }
         }
     }
-    painter.rect_filled(card.expand(3.0), 14.0, theme::ACCENT.gamma_multiply(0.35 * fade));
-    painter.rect_filled(card, 12.0, theme::PANEL.gamma_multiply(fade));
-    painter.rect_stroke(card, 12.0, Stroke::new(2.0_f32, theme::ACCENT.gamma_multiply(fade)), egui::StrokeKind::Inside);
-    painter.text(Pos2::new(card.left() + 36.0, card.center().y), egui::Align2::CENTER_CENTER, c.icon, egui::FontId::proportional(28.0), Color32::WHITE.gamma_multiply(fade));
-    painter.text(Pos2::new(card.left() + 66.0, card.center().y - 11.0), egui::Align2::LEFT_CENTER, &c.title, egui::FontId::proportional(16.0), theme::ACCENT.gamma_multiply(fade));
-    painter.text(Pos2::new(card.left() + 66.0, card.center().y + 13.0), egui::Align2::LEFT_CENTER, &c.subtitle, egui::FontId::proportional(12.0), theme::TEXT.gamma_multiply(fade));
+    // Glow: a few widening, fading outlines.
+    let pulse = if reduced { 1.0 } else { 0.8 + 0.2 * (age * 4.0).sin() };
+    for (k, w) in [(1.0_f32, 10.0_f32), (2.0, 6.0), (3.0, 3.0)] {
+        painter.rect_stroke(card.expand(w), radius + w, Stroke::new(2.0_f32, orange.gamma_multiply(fade * pulse * 0.12 * k)), egui::StrokeKind::Outside);
+    }
+    painter.rect_filled(card, radius, Color32::from_rgb(0x1b, 0x1e, 0x24).gamma_multiply(fade));
+    painter.rect_stroke(card, radius, Stroke::new(2.0_f32, orange.gamma_multiply(fade)), egui::StrokeKind::Inside);
+    // Emblem: orange disc with the icon, then a divider.
+    let ec = Pos2::new(card.left() + radius, card.center().y);
+    painter.circle_filled(ec, radius - 12.0, orange.gamma_multiply(0.25 * fade));
+    painter.circle_stroke(ec, radius - 12.0, Stroke::new(2.0_f32, orange.gamma_multiply(fade)));
+    painter.text(ec, egui::Align2::CENTER_CENTER, c.icon, egui::FontId::proportional(24.0), Color32::WHITE.gamma_multiply(fade));
+    let dx = card.left() + radius * 2.0 - 2.0;
+    painter.line_segment([Pos2::new(dx, card.top() + 14.0), Pos2::new(dx, card.bottom() - 14.0)], Stroke::new(1.0_f32, Color32::from_white_alpha(40).gamma_multiply(fade)));
+    let tx = dx + 14.0;
+    painter.text(Pos2::new(tx, card.top() + 20.0), egui::Align2::LEFT_CENTER, &c.title, egui::FontId::proportional(16.0), Color32::WHITE.gamma_multiply(fade));
+    // XP bar: fills from empty to the current progress, a shine sweeps across.
+    let (_, _, into, need) = st.quests.progress.level();
+    let frac = if need == 0 { 1.0 } else { (into as f32 / need as f32).clamp(0.04, 1.0) };
+    let fill_t = if reduced { 1.0 } else { ((age - 0.5) / 0.9).clamp(0.0, 1.0) };
+    let ease = 1.0 - (1.0 - fill_t).powi(3);
+    let bar = Rect::from_min_max(Pos2::new(tx, card.top() + 38.0), Pos2::new(card.right() - 22.0, card.top() + 48.0));
+    painter.rect_filled(bar, 5.0, Color32::from_white_alpha(18).gamma_multiply(fade));
+    let filled = Rect::from_min_max(bar.min, Pos2::new(bar.left() + bar.width() * frac * ease, bar.bottom()));
+    painter.rect_filled(filled, 5.0, cyan.gamma_multiply(fade));
+    if !reduced {
+        let sx = filled.left() + ((age * 0.9).fract()) * (filled.width() + 30.0) - 15.0;
+        let shine = Rect::from_min_max(Pos2::new((sx - 8.0).max(filled.left()), filled.top()), Pos2::new((sx + 8.0).min(filled.right()), filled.bottom()));
+        if shine.width() > 0.0 {
+            painter.rect_filled(shine, 3.0, Color32::from_white_alpha(120).gamma_multiply(fade));
+        }
+    }
+    painter.text(Pos2::new(tx, card.bottom() - 12.0), egui::Align2::LEFT_CENTER, &c.subtitle, egui::FontId::proportional(11.0), theme::TEXT_DIM.gamma_multiply(fade));
     ctx.request_repaint();
 }
 

@@ -45,7 +45,7 @@ docking, command pool, shortcuts, palette, navigation and i18n. Dragon DAW is no
 | 🎙️ **Record** | Arm tracks, choose stereo or mono inputs, monitoring modes, metronome with count-in, loop and punch ranges, automatic round-trip latency compensation, takes stacked into lanes with **comping** by dragging a range, MIDI note recording into patterns |
 | ✂️ **Arrange & edit** | Playlist with audio, pattern and **automation clips**, a **picker panel** on its left listing every pattern (split ones included), the project's audio files and its automation clips – drag any of them onto a track, FL-style **Ctrl + right-drag zoom to area** (also in the piano roll), middle-drag panning, move / trim / resize / split / duplicate / mute, cross-track moves, clip gain, pan, fades with three curves, reverse, pitch, varispeed and pitch-preserving **time-stretch** (WSOLA), fit-to-tempo with BPM detection, markers, tempo and time-signature changes, unlimited undo with a history list |
 | 🎛️ **Mix** | FL Studio-style mixer: insert strips with **hanging routing cables** (pull a cable from a strip's jack onto another strip to route it; signal flows along the cables while audio plays), route arrows and send knobs, the selected insert's **large effect slots on the right** (category colour, drag to reorder, bypass LED, mix knob, gain-reduction bar, replace), click-free parameter smoothing, pre/post-fader sends, output routing to buses, sidechain inputs, VCA faders, stereo width, polarity, L/R swap, solo-safe, peak and gain-reduction meters, **plugin delay compensation** across the whole routing graph, automation lanes (read / write / touch / latch / trim), MIDI learn |
-| 🧪 **20 stock effects** | Dragon Tune pitch correction, parametric EQ, compressor, multiband compressor, gate, limiter, de-esser, transient shaper, reverb (separate early / late levels and EQ), delay (tempo-synced), chorus, flanger, phaser, tremolo, saturator, bitcrusher, filter, utility, stereo imager and a showcase "Dragon Particle" effect, with presets. Every editor has an **animated, interactive display**: drag EQ nodes (wheel = Q), drag the filter's cutoff / resonance or a compressor's threshold, watch the transfer curve, echo taps, reverb tail, saturation curve, LFO motion or stereo field |
+| 🧪 **20 stock effects** | Dragon Tune pitch correction, parametric EQ, compressor, multiband compressor, gate, limiter, de-esser, transient shaper, reverb (separate early / late levels and EQ), delay (tempo-synced), chorus, flanger, phaser, tremolo, saturator, bitcrusher, filter, utility, stereo imager and a showcase "Dragon Particle" effect, with presets. Every editor has an **animated, interactive display**: drag EQ nodes (wheel = Q), drag the filter's cutoff / resonance or a compressor's threshold, watch the transfer curve, echo taps, reverb tail, saturation curve, LFO motion or stereo field; **A/B compare**, and an **Effect gallery** (View menu or the empty-slot menu) to browse and add them |
 | 🏁 **Master** | Momentary / short-term / integrated LUFS and true peak (ITU-R BS.1770), loudness targets for streaming, broadcast and club, a spectrum analyser, a **reference track** comparison (pick a region; loudness, RMS, crest, LRA, stereo and tonal balance side by side, with suggestions and loudness-matched A/B), a one-click mastering chain, and export normalised to a LUFS target or peak |
 | 💾 **Export** | WAV 16 / 24 / 32-float, FLAC 16 / 24, MP3, Ogg Vorbis, 44.1–96 kHz, song / loop / pattern range, tail, TPDF dither, mono, **stems** (one file per mixer channel), bounce-in-place, MIDI export |
 | 🔌 **Plugins** | CLAP and VST3 instruments and effects, **crash-isolated scanning** (each file in its own process), plugin GUIs embedded in native host windows (Linux X11, Windows), generic parameter editors, sidechain into plugins, full plugin state saved in the project, latency reported to PDC |
@@ -80,7 +80,39 @@ The full list, compared item by item with the prioritised roadmap, is in **[docs
     <td align="center"><b>Piano roll</b> — a generated vi–IV–I–V progression</td>
     <td align="center"><b>Mixer</b> — one-click mastering chain, 7-band EQ editor</td>
   </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/mixer-cables.png" alt="Mixer routing cables and large effect slots" /></td>
+    <td width="50%"><img src="docs/images/picker.png" alt="Playlist with the picker panel" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Routing cables</b> — drag a cable between strips; big effect slots</td>
+    <td align="center"><b>Picker</b> — patterns, audio and automation clips to drag into the playlist</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/effect-gallery.png" alt="Effect gallery: EQ, dynamics, reverb, delay" /></td>
+    <td width="50%"><img src="docs/images/effect-gallery-2.png" alt="Effect gallery: modulation, distortion, filter, utility, pitch" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Effect gallery</b> — every stock effect with its live display</td>
+    <td align="center"><b>Effect gallery</b> — saturation curves, filter, stereo field, Dragon Tune</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/eq-editor.png" alt="Parametric EQ editor with draggable nodes and A/B" /></td>
+    <td width="50%"><img src="docs/images/level-up.png" alt="Quest celebration" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Effect editor</b> — drag EQ nodes, A/B compare, power button</td>
+    <td align="center"><b>Dragon Quests</b> — quest celebration with embers and XP bar</td>
+  </tr>
 </table>
+
+The look of the effect editors and the quest celebration follows design references generated with
+**Higgsfield AI**: an [effect-suite UI sheet](docs/images/design/higgsfield-effect-suite-reference.jpg)
+(header with category stripe and power button, axis-labelled graphs with gradient fills, LED-segment
+gain-reduction meter, lollipop delay taps, dense reverb tail, labelled knobs with values, A/B) and an
+[animated level-up GIF](docs/images/design/higgsfield-levelup-reference.jpg) (capsule card dropping in,
+glowing orange border, ember burst, cyan XP bar with a shine). Both are re-created procedurally in egui so
+they scale, animate live and respect *Reduce motion*.
 
 ## 🏗️ Architecture
 
