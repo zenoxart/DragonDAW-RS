@@ -641,6 +641,54 @@ pub struct Insert {
     /// Name of the loaded preset (UI only).
     #[serde(default)]
     pub preset: String,
+    /// Modulation (FabFilter style): LFOs and envelope followers moving the effect's parameters.
+    #[serde(default)]
+    pub mods: Vec<Modulation>,
+}
+
+/// A modulation source.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ModSource {
+    /// An LFO: rate in Hz (or, when `sync` is on, cycles per beat), shape 0 sine, 1 triangle, 2 saw up,
+    /// 3 square, 4 random (sample & hold).
+    Lfo { rate: f32, shape: u8, sync: bool },
+    /// An envelope follower on the effect's input: attack / release in ms, gain in dB.
+    Envelope { attack: f32, release: f32, gain: f32 },
+}
+
+/// One modulation route: a source moving a parameter by `depth` (−1 … 1 of its range) around its value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Modulation {
+    pub source: ModSource,
+    /// Parameter id of the effect.
+    pub target: String,
+    pub depth: f32,
+}
+
+impl ModSource {
+    pub const SHAPES: [&'static str; 5] = ["Sine", "Triangle", "Saw", "Square", "Random"];
+
+    /// LFO value −1 … 1 at a phase 0 … 1 (`seed` for the random shape's step).
+    pub fn lfo_shape(shape: u8, phase: f32, step: u64) -> f32 {
+        let p = phase.rem_euclid(1.0);
+        match shape {
+            1 => 1.0 - 4.0 * (p - 0.5).abs(),
+            2 => 2.0 * p - 1.0,
+            3 => {
+                if p < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            4 => {
+                let mut x = step.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+                x ^= x >> 29;
+                (x % 2001) as f32 / 1000.0 - 1.0
+            }
+            _ => (p * std::f32::consts::TAU).sin(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

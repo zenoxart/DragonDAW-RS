@@ -79,7 +79,7 @@ impl Tool {
         (Tool::Slice, "✂", "Slice (C)"),
         (Tool::Erase, "🗙", "Delete (D)"),
         (Tool::Mute, "🔇", "Mute (T)"),
-        (Tool::Slip, "⇔", "Slip edit (S)"),
+        (Tool::Slip, "↔", "Slip edit (S)"),
         (Tool::Playback, "▶", "Playback (Y)"),
         (Tool::Zoom, "🔍", "Zoom (Z)"),
     ];
@@ -313,7 +313,7 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
     let ins = p.next_id();
     if let Some(m) = p.mixer.get_mut(bus) {
         let def = dragon_engine::effects::find("reverb").unwrap();
-        m.inserts.push(Insert { id: ins, effect: "reverb".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new() });
+        m.inserts.push(Insert { id: ins, effect: "reverb".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
     }
     let lim = p.next_id();
     p.mixer.master.inserts.push(Insert {
@@ -325,6 +325,7 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
         sidechain: None,
         plugin: None,
         preset: String::new(),
+        mods: Vec::new(),
     });
     // The beat on the first track, four bars.
     if let Some(t) = p.tracks.first().map(|t| t.id) {

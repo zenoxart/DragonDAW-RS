@@ -112,7 +112,8 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
     let base = match h.def.id {
         "tune" | "clean_voice" | "class_a_strip" => 230.0,
-        "drum_bus" | "alter" => 200.0,
+        "alter" => 200.0,
+        "drum_bus" => 230.0,
         "dragon_particle" => 240.0,
         _ => 170.0,
     };
@@ -242,6 +243,25 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                                 ui.close_menu();
                             }
                         }
+                    });
+                    ui.menu_button("Stereo placement", |ui| {
+                        let cur = h.v(&format!("b{b}_stereo")).round() as usize;
+                        for (k, name) in dragon_engine::effects::eq::PLACEMENTS.iter().enumerate() {
+                            if ui.selectable_label(k == cur, *name).clicked() {
+                                out.push((format!("b{b}_stereo"), k as f32));
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.menu_button("Dynamic", |ui| {
+                        let cur = h.v(&format!("b{b}_dyn"));
+                        for (label, v) in [("Off (static)", 0.0f32), ("Cut up to −3 dB", -3.0), ("Cut up to −6 dB", -6.0), ("Cut up to −12 dB", -12.0), ("Boost up to +6 dB", 6.0)] {
+                            if ui.selectable_label((cur - v).abs() < 0.05, label).clicked() {
+                                out.push((format!("b{b}_dyn"), v));
+                                ui.close_menu();
+                            }
+                        }
+                        ui.label(egui::RichText::new(format!("threshold {:.0} dB (knob below)", h.v(&format!("b{b}_thr")))).small());
                     });
                     let soloed = h.v("solo").round() as usize == b;
                     if ui.selectable_label(soloed, "🎧 Solo (listen to this band)").clicked() {
@@ -392,6 +412,21 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         if solo == k + 1 {
             p.circle_stroke(c, 11.0, Stroke::new(2.0_f32, Color32::WHITE));
         }
+        let b = k + 1;
+        let range = h.v(&format!("b{b}_dyn"));
+        if range.abs() > 0.05 {
+            // Pro-Q style: the dynamic range as a bar from the static gain, the live change as a dot.
+            let g = h.v(&format!("b{b}_gain"));
+            let x = c.x;
+            p.line_segment([Pos2::new(x, y_of(g)), Pos2::new(x, y_of(g + range))], Stroke::new(3.0_f32, BAND_COLORS[*k].gamma_multiply(0.5)));
+            let live = h.tele.get(dragon_engine::dsp::spectrum::BANDS * 2 + k).copied().unwrap_or(0.0);
+            p.circle_filled(Pos2::new(x, y_of(g + live)), 3.5, Color32::WHITE);
+        }
+        let place = h.v(&format!("b{b}_stereo")).round() as usize;
+        if place > 0 {
+            let tag = ["", "M", "S", "L", "R"][place.min(4)];
+            p.text(c + Vec2::new(9.0, -9.0), egui::Align2::LEFT_BOTTOM, tag, egui::FontId::proportional(9.0), BAND_COLORS[*k]);
+        }
     }
     let mut tags = Vec::new();
     if solo > 0 {
@@ -399,6 +434,9 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     }
     if auto {
         tags.push(format!("AUTO GAIN {:+.1} dB", out - h.v("output")));
+    }
+    if h.v("phase") > 0.5 {
+        tags.push("LINEAR PHASE".into());
     }
     if !tags.is_empty() {
         p.text(Pos2::new(pr.right() - 4.0, pr.top() + 2.0), egui::Align2::RIGHT_TOP, tags.join(" · "), egui::FontId::proportional(9.5), theme::WARN);
@@ -508,11 +546,15 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         level_history(p, Rect::from_min_max(Pos2::new(m.left(), m.top() + 22.0), Pos2::new(m.right(), m.bottom() - 18.0)), h, col, |x| curve(x) - makeup);
     }
     let caption = match h.def.id {
-        "limiter" => format!("ceiling {:.1} dB · +{:.1} dB drive", h.v("ceiling"), h.v("gain")),
+        "limiter" => format!("{} · ceiling {:.1} dB · +{:.1} dB drive", dragon_engine::effects::dynamics::LIMITER_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Allround"), h.v("ceiling"), h.v("gain")),
         "gate" => format!("range {:.0} dB · hold {:.0} ms", h.v("range"), h.v("hold")),
         "deesser" => format!("listening at {:.1} kHz", h.v("freq") / 1000.0),
         "multiband" => format!("split {:.0} Hz / {:.1} kHz", h.v("low_mid"), h.v("mid_high") / 1000.0),
-        _ => format!("{:.1}:1 · attack {:.0} ms · release {:.0} ms", ratio, h.v("attack"), h.v("release")),
+        _ => {
+            let style = dragon_engine::effects::dynamics::COMP_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Clean");
+            let look = if h.v("lookahead") > 0.05 { format!(" · look-ahead {:.1} ms", h.v("lookahead")) } else { String::new() };
+            format!("{style} · {ratio:.1}:1 · {:.0} / {:.0} ms{look}", h.v("attack"), h.v("release"))
+        }
     };
     p.text(Pos2::new(m.left(), m.bottom()), egui::Align2::LEFT_BOTTOM, caption, egui::FontId::proportional(10.5), theme::TEXT);
 }
@@ -565,7 +607,7 @@ fn level_history(p: &egui::Painter, g: Rect, h: &Hero, col: Color32, static_out:
 }
 
 fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    use dragon_engine::effects::dynamics::{ts_shape, TS_SHAPES};
+    use dragon_engine::effects::dynamics::{ts_shape, ts_sus_shape, TS_SHAPES, TS_SUS_SHAPES};
     p.rect_filled(r, 6.0, Color32::from_rgb(0x10, 0x12, 0x16));
     let att = [h.v("attack") / 100.0, h.v("att_dur") / 1000.0, h.v("att_shape").round()];
     let sus = [h.v("sustain") / 100.0, h.v("sus_dur") / 1000.0, h.v("sus_shape").round()];
@@ -573,7 +615,7 @@ fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         let (ad, sd) = (att[1].max(0.001), sus[1].max(0.01));
         let wa = if t < ad { ts_shape(att[2] as usize, t / ad) } else { 0.0 };
         let s0 = ad * 0.6;
-        let ws = if t >= s0 && t < s0 + sd { ((t - s0) / 0.005).min(1.0) * ts_shape(sus[2] as usize, (t - s0) / sd) } else { 0.0 };
+        let ws = if t >= s0 && t < s0 + sd { ((t - s0) / 0.005).min(1.0) * ts_sus_shape(sus[2] as usize, (t - s0) / sd, sus[0]) } else { 0.0 };
         (wa, ws)
     };
     // ---- top: scrolling level (grey) and gain change (attack orange-ish, sustain colour)
@@ -638,7 +680,7 @@ fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.text(
             pr.right_top() + Vec2::new(-6.0, 4.0),
             egui::Align2::RIGHT_TOP,
-            format!("{:+.0}% · {:.0} ms · {}", amt * 100.0, dur * 1000.0, TS_SHAPES.get(shape as usize).unwrap_or(&"")),
+            format!("{:+.0}% · {:.0} ms · {}", amt * 100.0, dur * 1000.0, if k == 0 { TS_SHAPES } else { TS_SUS_SHAPES }.get(shape as usize).unwrap_or(&"")),
             egui::FontId::proportional(9.5),
             theme::TEXT,
         );
@@ -1261,53 +1303,78 @@ fn gain_to_db_ui(x: f32) -> f32 {
 /// Drum Bus: a pad that flashes with the punch, in / out meters, the smack compressor's gain reduction and
 /// the macro settings as rings around the pad.
 fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::strips::{DRUM_COLOURS, HEQ_FREQS};
     p.rect_filled(r, 8.0, Color32::from_rgb(0x12, 0x10, 0x10));
     let t = h.t();
-    let (pin, pout, gr, hit) = match h.tele {
-        [a, b, c, d, ..] => (*a, *b, *c, *d),
+    let (pin, pout, gr, rin, rout) = match h.tele {
+        [a, b, c, d, e, ..] => (*a, *b, *c, *d, *e),
         _ => {
             let ph = (t * 2.0).fract();
-            ((-ph * 6.0).exp() * 0.8, (-ph * 4.0).exp() * 0.9, 6.0 * (-ph * 3.0).exp(), (-ph * 12.0).exp())
+            ((-ph * 6.0).exp() * 0.7, (-ph * 4.0).exp() * 0.85, 4.0 * (-ph * 3.0).exp(), 0.18, 0.3)
         }
     };
-    let c = r.center() + Vec2::new(0.0, 6.0);
-    let rad = r.height() * 0.24;
-    // Macro rings: punch, smack, drive, clip, width – each an arc around the pad.
-    let rings = [("PUNCH", h.v("punch")), ("SMACK", h.v("smack")), ("DRIVE", h.v("drive")), ("CLIP", h.v("clip")), ("WIDTH", h.v("width"))];
-    for (k, (name, v)) in rings.iter().enumerate() {
-        let rr = rad + 12.0 + k as f32 * 7.0;
-        let a0 = -std::f32::consts::FRAC_PI_2;
-        let pts: Vec<Pos2> = (0..=48).map(|i| a0 + std::f32::consts::TAU * (v / 100.0) * i as f32 / 48.0).map(|a| Pos2::new(c.x + rr * a.cos(), c.y + rr * a.sin())).collect();
-        p.circle_stroke(c, rr, Stroke::new(3.0_f32, Color32::from_white_alpha(10)));
-        if pts.len() > 1 {
-            p.add(Shape::line(pts, Stroke::new(3.0_f32, col.gamma_multiply(0.45 + 0.11 * k as f32))));
-        }
-        let _ = name;
-    }
-    // The pad flashes on hits.
-    p.circle_filled(c, rad, Color32::from_rgb(0x2a, 0x22, 0x22));
-    p.circle_filled(c, rad * (0.6 + 0.3 * hit.min(1.0)), col.gamma_multiply(0.25 + 0.6 * hit.min(1.0)));
-    p.circle_stroke(c, rad, Stroke::new(2.0_f32, col));
-    p.text(c, egui::Align2::CENTER_CENTER, "DRUMS", egui::FontId::proportional(14.0), Color32::WHITE);
-    // Meters.
-    let meter = |x: f32, v: f32, label: &str| {
-        let mr = Rect::from_min_max(Pos2::new(x - 8.0, r.top() + 24.0), Pos2::new(x + 8.0, r.bottom() - 24.0));
+    // Orion-style meters: peak bar, RMS line and a target zone (−12 … −8 dB RMS) for gain staging.
+    let meter = |x: f32, peak: f32, rms: f32, label: &str| {
+        let mr = Rect::from_min_max(Pos2::new(x - 9.0, r.top() + 22.0), Pos2::new(x + 9.0, r.bottom() - 22.0));
         p.rect_filled(mr, 4.0, Color32::from_white_alpha(10));
-        let f = ((gain_to_db_ui(v) + 36.0) / 36.0).clamp(0.0, 1.0);
-        p.rect_filled(Rect::from_min_max(Pos2::new(mr.left(), mr.bottom() - mr.height() * f), mr.max), 4.0, if f > 0.95 { theme::REC } else { col });
+        let y = |db: f32| mr.bottom() - ((db + 36.0) / 36.0).clamp(0.0, 1.0) * mr.height();
+        p.rect_filled(Rect::from_min_max(Pos2::new(mr.left(), y(-12.0)), Pos2::new(mr.right(), y(-8.0))), 0.0, theme::OK.gamma_multiply(0.25));
+        let pk = gain_to_db_ui(peak);
+        p.rect_filled(Rect::from_min_max(Pos2::new(mr.left() + 3.0, y(pk)), Pos2::new(mr.right() - 3.0, mr.bottom())), 3.0, if pk > -0.5 { theme::REC } else { col });
+        let rm = gain_to_db_ui(rms);
+        p.line_segment([Pos2::new(mr.left() - 2.0, y(rm)), Pos2::new(mr.right() + 2.0, y(rm))], Stroke::new(2.0_f32, Color32::WHITE));
         p.text(Pos2::new(x, mr.top() - 4.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), theme::TEXT_DIM);
+        p.text(Pos2::new(x, mr.bottom() + 3.0), egui::Align2::CENTER_TOP, format!("{rm:.0}"), egui::FontId::monospace(8.5), if (-12.0..=-8.0).contains(&rm) { theme::OK } else { theme::TEXT_DIM });
     };
-    meter(r.left() + 24.0, pin, "IN");
-    meter(r.right() - 24.0, pout, "OUT");
-    p.text(Pos2::new(r.left() + 46.0, r.top() + 8.0), egui::Align2::LEFT_TOP, format!("punch {:.0}% · smack {:.0}% (GR {gr:.1} dB)", h.v("punch"), h.v("smack")), egui::FontId::proportional(10.0), theme::TEXT);
-    p.text(
-        Pos2::new(r.right() - 46.0, r.top() + 8.0),
-        egui::Align2::RIGHT_TOP,
-        format!("low {:+.1} · body {:+.1} · crack {:+.1} · air {:+.1} dB", h.v("low"), h.v("body"), h.v("crack"), h.v("air")),
-        egui::FontId::proportional(10.0),
-        theme::TEXT_DIM,
-    );
-    p.text(Pos2::new(r.left() + 46.0, r.bottom() - 8.0), egui::Align2::LEFT_BOTTOM, "rings: punch · smack · drive · clip · width", egui::FontId::proportional(9.0), theme::TEXT_DIM);
+    meter(r.left() + 22.0, pin, rin, "IN");
+    meter(r.right() - 22.0, pout, rout, "OUT");
+    // Modules as tiles: Drive, Harmonics, Compression, Lift; then Harmonic EQ and Parallels as bars.
+    let body = Rect::from_min_max(Pos2::new(r.left() + 46.0, r.top() + 8.0), Pos2::new(r.right() - 46.0, r.bottom() - 8.0));
+    let top = Rect::from_min_max(body.min, Pos2::new(body.right(), body.top() + body.height() * 0.45));
+    let tiles = [
+        ("DRIVE", h.v("drive"), DRUM_COLOURS.get(h.v("colour").round() as usize).copied().unwrap_or("A").split(' ').next().unwrap_or("A").to_string()),
+        ("HARMONICS", h.v("harmonics"), if h.v("focus") > 0.5 { "80 Hz".into() } else { "50 Hz".into() }),
+        ("COMP", h.v("comp_mix"), format!("{} · {gr:.1} dB", if h.v("comp_mode") > 0.5 { "B" } else { "A" })),
+        ("LIFT", h.v("lift"), String::new()),
+    ];
+    let tw = top.width() / 4.0;
+    for (k, (name, v, sub)) in tiles.iter().enumerate() {
+        let tr = Rect::from_min_size(Pos2::new(top.left() + k as f32 * tw + 3.0, top.top()), Vec2::new(tw - 6.0, top.height()));
+        p.rect_filled(tr, 6.0, Color32::from_rgb(0x1e, 0x1a, 0x1a));
+        let c = Pos2::new(tr.center().x, tr.center().y + 4.0);
+        let rad = (tr.height() * 0.32).min(tr.width() * 0.3);
+        let a0 = std::f32::consts::PI * 0.75;
+        let sweep = std::f32::consts::PI * 1.5;
+        let arc = |to: f32| -> Vec<Pos2> { (0..=32).map(|i| a0 + sweep * to * i as f32 / 32.0).map(|a| Pos2::new(c.x + rad * a.cos(), c.y + rad * a.sin())).collect() };
+        p.add(Shape::line(arc(1.0), Stroke::new(3.0_f32, Color32::from_white_alpha(14))));
+        if *v > 0.0 {
+            p.add(Shape::line(arc(v / 100.0), Stroke::new(3.0_f32, col)));
+        }
+        p.text(Pos2::new(tr.center().x, tr.top() + 3.0), egui::Align2::CENTER_TOP, *name, egui::FontId::proportional(9.0), theme::TEXT);
+        p.text(c, egui::Align2::CENTER_CENTER, format!("{v:.0}"), egui::FontId::monospace(11.0), Color32::WHITE);
+        if !sub.is_empty() {
+            p.text(Pos2::new(tr.center().x, tr.bottom() - 2.0), egui::Align2::CENTER_BOTTOM, sub, egui::FontId::proportional(8.5), theme::TEXT_DIM);
+        }
+    }
+    let bottom = Rect::from_min_max(Pos2::new(body.left(), top.bottom() + 8.0), body.max);
+    let half = bottom.width() / 2.0;
+    let bars = |x0: f32, title: &str, items: &[(String, f32, f32)]| {
+        let area = Rect::from_min_max(Pos2::new(x0 + 3.0, bottom.top()), Pos2::new(x0 + half - 3.0, bottom.bottom()));
+        p.rect_filled(area, 6.0, Color32::from_rgb(0x1e, 0x1a, 0x1a));
+        p.text(Pos2::new(area.left() + 6.0, area.top() + 3.0), egui::Align2::LEFT_TOP, title, egui::FontId::proportional(9.0), theme::TEXT);
+        let bw = (area.width() - 12.0) / items.len() as f32;
+        for (k, (name, v, max)) in items.iter().enumerate() {
+            let br = Rect::from_min_max(Pos2::new(area.left() + 6.0 + k as f32 * bw + 3.0, area.top() + 16.0), Pos2::new(area.left() + 6.0 + (k + 1) as f32 * bw - 3.0, area.bottom() - 14.0));
+            p.rect_filled(br, 3.0, Color32::from_white_alpha(10));
+            let f = (v / max).clamp(0.0, 1.0);
+            p.rect_filled(Rect::from_min_max(Pos2::new(br.left(), br.bottom() - br.height() * f), br.max), 3.0, col.gamma_multiply(0.5 + 0.5 * f));
+            p.text(Pos2::new(br.center().x, area.bottom() - 2.0), egui::Align2::CENTER_BOTTOM, name, egui::FontId::proportional(8.0), theme::TEXT_DIM);
+        }
+    };
+    let heq: Vec<(String, f32, f32)> = HEQ_FREQS.iter().enumerate().map(|(k, f)| (if *f >= 1000.0 { format!("{:.1}k", f / 1000.0) } else { format!("{f:.0}") }, h.v(&format!("heq{}", k + 1)), 10.0)).collect();
+    bars(bottom.left(), "HARMONIC EQ", &heq);
+    let pars: Vec<(String, f32, f32)> = [("SUB", "sub"), ("LOW", "low"), ("LOUD", "loud"), ("GRIT", "grit")].iter().map(|(n, id)| (n.to_string(), h.v(id), 100.0)).collect();
+    bars(bottom.left() + half, "PARALLELS", &pars);
 }
 
 /// Alter: the pitch and formant shifts as two big vertical sliders around a voice "face" whose mouth (the
@@ -1317,7 +1384,9 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let t = h.t();
     let pitch = h.v("pitch");
     let formant = h.v("formant");
-    let robot = h.v("mode") > 0.5;
+    let mode = h.v("mode").round() as usize;
+    let robot = mode == 2;
+    let link = h.v("link") > 0.5;
     let slider = |x: f32, v: f32, label: &str, c: Color32| {
         let sr = Rect::from_min_max(Pos2::new(x - 10.0, r.top() + 26.0), Pos2::new(x + 10.0, r.bottom() - 24.0));
         p.rect_filled(sr, 10.0, Color32::from_white_alpha(10));
@@ -1328,22 +1397,18 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.text(Pos2::new(x, sr.top() - 6.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.5), theme::TEXT_DIM);
         p.text(Pos2::new(x, sr.bottom() + 4.0), egui::Align2::CENTER_TOP, format!("{v:+.1}"), egui::FontId::monospace(10.0), theme::TEXT);
     };
-    slider(r.left() + 34.0, if robot { 0.0 } else { pitch }, "PITCH", col);
-    slider(r.right() - 34.0, formant, "FORMANT", Color32::from_rgb(0x5d, 0xe0, 0xa8));
+    slider(r.left() + 34.0, pitch, "PITCH", col);
+    slider(r.right() - 34.0, formant + if link { pitch } else { 0.0 }, if link { "FORMANT (LINK)" } else { "FORMANT" }, Color32::from_rgb(0x5d, 0xe0, 0xa8));
     // The "voice": a spectral envelope (mouth) shifted by the formant, a wave whose period follows the pitch.
     let face = Rect::from_min_max(Pos2::new(r.left() + 70.0, r.top() + 14.0), Pos2::new(r.right() - 70.0, r.bottom() - 14.0));
     p.rect_filled(face, 8.0, Color32::from_rgb(0x1c, 0x22, 0x2e));
-    let fshift = 2f32.powf(formant / 12.0);
+    let fshift = 2f32.powf((formant + if link { pitch } else { 0.0 }) / 12.0);
     let env = |f: f32| -> f32 { (1.0 / (1.0 + ((f / fshift - 700.0) / 260.0).powi(2))) + 0.6 / (1.0 + ((f / fshift - 1700.0) / 380.0).powi(2)) + 0.3 / (1.0 + ((f / fshift - 2800.0) / 500.0).powi(2)) };
     let spec = Rect::from_min_max(Pos2::new(face.left() + 10.0, face.center().y), face.max - Vec2::new(10.0, 10.0));
     let pts: Vec<Pos2> = (0..=120).map(|k| k as f32 / 120.0).map(|u| Pos2::new(spec.left() + u * spec.width(), spec.bottom() - env(100.0 + u * 4400.0).min(1.3) / 1.3 * spec.height())).collect();
     filled_curve(p, &pts, spec.bottom(), Color32::from_rgb(0x5d, 0xe0, 0xa8));
-    let base_hz = if robot {
-        let midi = 12.0 * (h.v("robot_octave") + 1.0) + h.v("robot_note").round();
-        440.0 * 2f32.powf((midi - 69.0) / 12.0)
-    } else {
-        150.0 * 2f32.powf(pitch / 12.0)
-    };
+    let robot_midi = dragon_engine::effects::alter::ROBOT_BASE + pitch.round();
+    let base_hz = if robot { 440.0 * 2f32.powf((robot_midi - 69.0) / 12.0) } else { 150.0 * 2f32.powf(pitch / 12.0) };
     let wave = Rect::from_min_max(face.min + Vec2::new(10.0, 10.0), Pos2::new(face.right() - 10.0, face.center().y - 6.0));
     let cycles = (base_hz / 150.0 * 4.0).clamp(1.0, 16.0);
     let wp: Vec<Pos2> = (0..=200)
@@ -1355,10 +1420,10 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         })
         .collect();
     p.add(Shape::line(wp, Stroke::new(2.0_f32, col)));
-    let label = if robot {
-        format!("ROBOT · {}{} ({base_hz:.0} Hz)", dragon_engine::effects::alter::ALTER_NOTES[(h.v("robot_note").round() as usize).min(11)], h.v("robot_octave"))
-    } else {
-        format!("{pitch:+.1} st · formant {formant:+.1} st")
+    let label = match mode {
+        2 => format!("ROBOT · {} ({base_hz:.0} Hz)", dragon_engine::instruments::note_name(robot_midi.clamp(0.0, 127.0) as u8)),
+        1 => format!("QUANTIZE · {pitch:+.0} st · formant {formant:+.1}{}", if link { " · LINK" } else { "" }),
+        _ => format!("TRANSPOSE · {pitch:+.1} st · formant {formant:+.1}{}", if link { " · LINK" } else { "" }),
     };
     p.text(Pos2::new(face.center().x, face.top() + 4.0), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(11.0), theme::TEXT);
     if let [hz, out, ..] = h.tele {

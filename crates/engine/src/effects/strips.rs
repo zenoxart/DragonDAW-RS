@@ -32,11 +32,11 @@ const STRIP_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("high_gain", "EQ high gain (12 kHz)", -16.0, 16.0, 0.0, "dB"),
     ParamInfo::toggle("comp_on", "Comp in", true),
     ParamInfo::lin("threshold", "Comp threshold", -40.0, 0.0, -18.0, "dB"),
-    ParamInfo::lin("ratio", "Comp ratio", 1.0, 20.0, 4.0, ":1"),
-    ParamInfo::choice("comp_mode", "Comp timing", &["Fixed (opto)", "Fixed / manual", "Manual"], 0.0),
-    ParamInfo::log("attack", "Comp attack", 0.2, 80.0, 10.0, "ms"),
-    ParamInfo::log("release", "Comp release", 40.0, 5000.0, 400.0, "ms"),
-    ParamInfo::lin("comp_gain", "Comp gain", 0.0, 24.0, 4.0, "dB"),
+    ParamInfo::lin("ratio", "Comp ratio", 2.0, 10.0, 4.0, ":1"),
+    ParamInfo::choice("comp_mode", "Comp timing", &["Fixed", "Fix / Man", "Manual"], 0.0),
+    ParamInfo::log("attack", "Comp attack", 0.5, 300.0, 10.0, "ms"),
+    ParamInfo::log("release", "Comp release", 50.0, 10000.0, 400.0, "ms"),
+    ParamInfo::lin("comp_gain", "Comp gain", 0.0, 30.0, 4.0, "dB"),
     ParamInfo::choice("order", "Order", &["Pre → EQ → Comp", "Pre → Comp → EQ"], 0.0),
     ParamInfo::lin("output", "Output", -24.0, 12.0, -6.0, "dB"),
 ];
@@ -91,6 +91,35 @@ impl Preamp {
     }
 }
 
+/// The compressor's timing switch (CL 1B: Fixed, Fix/Man, Manual).
+#[derive(Clone, Copy)]
+enum Timing {
+    Fixed,
+    FixMan(f32),
+    Manual(f32, f32),
+}
+
+/// First-order high-pass (the third pole of the 18 dB/oct filter).
+#[derive(Clone, Copy, Default)]
+struct Hp1 {
+    a: f32,
+    x1: f32,
+    y1: f32,
+}
+
+impl Hp1 {
+    fn new(f: f32, rate: f32) -> Self {
+        Hp1 { a: (-std::f32::consts::TAU * f / rate).exp(), x1: 0.0, y1: 0.0 }
+    }
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let y = (1.0 + self.a) * 0.5 * (x - self.x1) + self.a * self.y1;
+        self.x1 = x;
+        self.y1 = y;
+        y
+    }
+}
+
 /// Electro-optical gain cell (T4-style): the light follows the control signal with a program-dependent
 /// attack; the cell's resistance recovers in two stages – fast at first, then slowly, and more slowly the
 /// longer and harder it was lit (memory).
@@ -105,12 +134,15 @@ struct OptoCell {
 impl OptoCell {
     /// `drive_db` = dB over threshold × (1 − 1/ratio): the reduction asked for. Returns the reduction applied.
     #[inline]
-    fn next(&mut self, want: f32, rate: f32, manual: Option<(f32, f32)>) -> f32 {
+    fn next(&mut self, want: f32, rate: f32, timing: Timing) -> f32 {
         let dt = 1.0 / rate;
-        let (att, rel_fast, rel_slow) = match manual {
-            Some((a, r)) => (a * 0.001, r * 0.001, r * 0.004),
-            // Program-dependent: harder hits light the cell faster.
-            None => (0.010 / (1.0 + want * 0.15), 0.06, 0.5 + 2.5 * self.memory),
+        // CL 1B manual: Fixed = 1 ms attack / 50 ms release (the opto cell's own slow recovery and memory
+        // still follow); Fix/Man = the fixed attack, fast 50 ms release for short peaks and the manual release
+        // for long ones; Manual = attack 0.5–300 ms, release 0.05–10 s.
+        let (att, rel_fast, rel_slow) = match timing {
+            Timing::Manual(a, r) => (a * 0.001, r * 0.001, r * 0.004),
+            Timing::FixMan(r) => (0.001, 0.05, r * 0.001),
+            Timing::Fixed => (0.001, 0.05, 0.5 + 2.5 * self.memory),
         };
         let a_c = (-dt / att.max(1e-4)).exp();
         if want > self.light {
@@ -135,7 +167,8 @@ pub struct ClassAStrip {
     rate: f32,
     drive: f32,
     eq_on: bool,
-    hpf: [[Biquad; 2]; 2],
+    hpf: [Biquad; 2],
+    hpf1: [Hp1; 2],
     hpf_on: bool,
     low: [Biquad; 2],
     mid: [Biquad; 2],
@@ -165,7 +198,8 @@ impl ClassAStrip {
             rate,
             drive: db_to_gain(6.0),
             eq_on: true,
-            hpf: [[Biquad::default(); 2]; 2],
+            hpf: [Biquad::default(); 2],
+            hpf1: [Hp1::default(); 2],
             hpf_on: false,
             low: [Biquad::default(); 2],
             mid: [Biquad::default(); 2],
@@ -195,9 +229,10 @@ impl ClassAStrip {
         let r = self.rate;
         self.hpf_on = h > 0;
         if h > 0 {
-            // 18 dB/oct high-pass like the inductor filter: a 2nd-order plus a gentle 1st-order-ish section.
+            // 18 dB/oct (third-order Butterworth) like the 1073's: a 2nd-order section (Q 1) and a 1st-order one.
             for ch in 0..2 {
-                self.hpf[ch] = [Biquad::new(BiquadKind::HighPass, HPF_HZ[h], 0.71, 0.0, r), Biquad::new(BiquadKind::HighPass, HPF_HZ[h] * 0.8, 0.5, 0.0, r)];
+                self.hpf[ch] = Biquad::new(BiquadKind::HighPass, HPF_HZ[h], 1.0, 0.0, r);
+                self.hpf1[ch] = Hp1::new(HPF_HZ[h], r);
             }
         }
         // Inductor-style shelves have a broad bump before the shelf; a low Q gets close.
@@ -217,8 +252,8 @@ impl ClassAStrip {
         }
         let mut y = x;
         if self.hpf_on {
-            y = self.hpf[ch][0].process(y);
-            y = self.hpf[ch][1].process(y);
+            y = self.hpf[ch].process(y);
+            y = self.hpf1[ch].process(y);
         }
         y = self.low[ch].process(y);
         y = self.mid[ch].process(y);
@@ -258,10 +293,9 @@ impl Effect for ClassAStrip {
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let manual = match self.mode {
-            0 => None,
-            // Fixed / manual: fixed opto attack, manual release.
-            1 => Some((10.0, self.release)),
-            _ => Some((self.attack, self.release)),
+            0 => Timing::Fixed,
+            1 => Timing::FixMan(self.release),
+            _ => Timing::Manual(self.attack, self.release),
         };
         let mut peak_gr = 0.0f32;
         let (mut pin, mut pout) = (0.0f32, 0.0f32);
@@ -326,164 +360,290 @@ pub fn class_a_strip_def() -> EffectDef {
 
 // ============================================================================================ drum bus
 
+/// Drum Bus, laid out after Cradle Orion's modules (from its manual): Input with target meter, Drive
+/// (three colours, high-pass after it), Harmonics (low-end focus at 50 or 80 Hz), Compression (two modes,
+/// mix), Lift, a five-band Harmonic EQ in 1 dB steps, four Parallels (Sub, Low, Loud, Grit) and Output.
+pub const DRUM_COLOURS: &[&str] = &["A (warm)", "B (tape)", "C (crunch)"];
+/// The Harmonic EQ's fixed bands (Hz). Orion does not publish its frequencies; these are ours.
+pub const HEQ_FREQS: [f32; 5] = [60.0, 180.0, 900.0, 3500.0, 10000.0];
+
 const DRUM_PARAMS: &[ParamInfo] = &[
-    ParamInfo::lin("punch", "Punch", 0.0, 100.0, 40.0, "%"),
-    ParamInfo::lin("smack", "Smack (parallel crush)", 0.0, 100.0, 30.0, "%"),
-    ParamInfo::lin("low", "Low end", -6.0, 12.0, 3.0, "dB"),
-    ParamInfo::lin("body", "Body", -6.0, 6.0, 0.0, "dB"),
-    ParamInfo::lin("crack", "Crack", -6.0, 9.0, 2.0, "dB"),
-    ParamInfo::lin("air", "Air", -6.0, 9.0, 1.5, "dB"),
-    ParamInfo::lin("drive", "Drive", 0.0, 100.0, 25.0, "%"),
-    ParamInfo::lin("clip", "Clipper", 0.0, 100.0, 30.0, "%"),
-    ParamInfo::lin("width", "Width", 0.0, 100.0, 50.0, "%"),
-    ParamInfo::lin("mix", "Mix", 0.0, 100.0, 100.0, "%"),
-    ParamInfo::lin("output", "Output", -18.0, 12.0, 0.0, "dB"),
+    ParamInfo::lin("input", "Input", -24.0, 24.0, 0.0, "dB"),
+    ParamInfo::lin("drive", "Drive", 0.0, 100.0, 20.0, "%"),
+    ParamInfo::choice("colour", "Drive colour", DRUM_COLOURS, 0.0),
+    ParamInfo::log("drive_hp", "Drive high-pass", 10.0, 120.0, 20.0, "Hz"),
+    ParamInfo::lin("harmonics", "Harmonics", 0.0, 100.0, 20.0, "%"),
+    ParamInfo::choice("focus", "Harmonics focus", &["50 Hz", "80 Hz"], 0.0),
+    ParamInfo::choice("comp_mode", "Compression mode", &["A (glue)", "B (punch)"], 0.0),
+    ParamInfo::lin("comp_mix", "Compression", 0.0, 100.0, 30.0, "%"),
+    ParamInfo::lin("lift", "Lift", 0.0, 100.0, 15.0, "%"),
+    ParamInfo::lin("heq1", "Harmonic EQ 60 Hz", 0.0, 10.0, 0.0, "dB"),
+    ParamInfo::lin("heq2", "Harmonic EQ 180 Hz", 0.0, 10.0, 0.0, "dB"),
+    ParamInfo::lin("heq3", "Harmonic EQ 900 Hz", 0.0, 10.0, 0.0, "dB"),
+    ParamInfo::lin("heq4", "Harmonic EQ 3.5 kHz", 0.0, 10.0, 0.0, "dB"),
+    ParamInfo::lin("heq5", "Harmonic EQ 10 kHz", 0.0, 10.0, 0.0, "dB"),
+    ParamInfo::lin("sub", "Parallel: Sub", 0.0, 100.0, 0.0, "%"),
+    ParamInfo::lin("low", "Parallel: Low", 0.0, 100.0, 0.0, "%"),
+    ParamInfo::lin("loud", "Parallel: Loud", 0.0, 100.0, 0.0, "%"),
+    ParamInfo::lin("grit", "Parallel: Grit", 0.0, 100.0, 0.0, "%"),
+    ParamInfo::lin("output", "Output", -24.0, 12.0, 0.0, "dB"),
 ];
+
+const NP: usize = 19;
+
+#[derive(Clone, Copy, Default)]
+struct Pair([Biquad; 2]);
+
+impl Pair {
+    fn new(kind: BiquadKind, f: f32, q: f32, g: f32, r: f32) -> Self {
+        Pair([Biquad::new(kind, f, q, g, r); 2])
+    }
+    #[inline]
+    fn run(&mut self, ch: usize, x: f32) -> f32 {
+        self.0[ch].process(x)
+    }
+}
 
 pub struct DrumBus {
     rate: f32,
-    p: [f32; 11],
-    punch: Box<dyn Effect>,
-    crush: Box<dyn Effect>,
+    p: [f32; NP],
     sat: Box<dyn Effect>,
-    eq: [[Biquad; 4]; 2],
-    tight: [Biquad; 2],
-    side_hp: Biquad,
-    dry: Vec<f32>,
-    dry_r: Vec<f32>,
-    par_l: Vec<f32>,
-    par_r: Vec<f32>,
-    tele: [f32; 4],
+    drive_hp: Pair,
+    harm_bp: Pair,
+    harm_lp: Pair,
+    comp: Box<dyn Effect>,
+    lift_hp: Pair,
+    heq: [Pair; 5],
+    sub_lp: Pair,
+    low_lp: Pair,
+    low_comp: Box<dyn Effect>,
+    loud_comp: Box<dyn Effect>,
+    grit_hp: Pair,
+    grit_ts: Box<dyn Effect>,
+    buf: [Vec<f32>; 2],
+    par: [Vec<f32>; 2],
+    acc: [Vec<f32>; 2],
+    rms_in: f32,
+    rms_out: f32,
+    /// Telemetry: input peak, output peak, compression GR (dB), input RMS, output RMS, last hit.
+    tele: [f32; 6],
 }
 
 impl DrumBus {
     pub fn new(rate: f32) -> Self {
         let mut d = DrumBus {
             rate,
-            p: [40.0, 30.0, 3.0, 0.0, 2.0, 1.5, 25.0, 30.0, 50.0, 100.0, 0.0],
-            punch: (dynamics::transient_def().create)(rate),
-            crush: (dynamics::compressor_def().create)(rate),
+            p: std::array::from_fn(|k| DRUM_PARAMS[k].default),
             sat: (super::color::saturator_def().create)(rate),
-            eq: [[Biquad::default(); 4]; 2],
-            tight: [Biquad::new(BiquadKind::HighPass, 25.0, 0.7, 0.0, rate); 2],
-            side_hp: Biquad::new(BiquadKind::HighPass, 180.0, 0.7, 0.0, rate),
-            dry: Vec::new(),
-            dry_r: Vec::new(),
-            par_l: Vec::new(),
-            par_r: Vec::new(),
-            tele: [0.0; 4],
+            drive_hp: Pair::default(),
+            harm_bp: Pair::default(),
+            harm_lp: Pair::default(),
+            comp: (dynamics::compressor_def().create)(rate),
+            lift_hp: Pair::new(BiquadKind::HighPass, 2500.0, 0.7, 0.0, rate),
+            heq: [Pair::default(); 5],
+            sub_lp: Pair::new(BiquadKind::LowPass, 70.0, 0.7, 0.0, rate),
+            low_lp: Pair::new(BiquadKind::LowPass, 160.0, 0.7, 0.0, rate),
+            low_comp: (dynamics::compressor_def().create)(rate),
+            loud_comp: (dynamics::compressor_def().create)(rate),
+            grit_hp: Pair::new(BiquadKind::HighPass, 1200.0, 0.7, 0.0, rate),
+            grit_ts: (dynamics::transient_def().create)(rate),
+            buf: [Vec::new(), Vec::new()],
+            par: [Vec::new(), Vec::new()],
+            acc: [Vec::new(), Vec::new()],
+            rms_in: 0.0,
+            rms_out: 0.0,
+            tele: [0.0; 6],
         };
+        for (c, set) in [
+            (&mut d.low_comp, [("threshold", -30.0), ("ratio", 8.0), ("attack", 15.0), ("release", 120.0), ("makeup", 14.0)]),
+            (&mut d.loud_comp, [("threshold", -36.0), ("ratio", 20.0), ("attack", 0.5), ("release", 60.0), ("makeup", 22.0)]),
+        ] {
+            for (k, v) in set {
+                c.set_param(k, v);
+            }
+        }
+        d.grit_ts.set_param("attack", 80.0);
+        d.grit_ts.set_param("sustain", -40.0);
+        d.grit_ts.set_param("att_dur", 12.0);
         d.update();
         d
     }
 
+    fn v(&self, id: &str) -> f32 {
+        DRUM_PARAMS.iter().position(|p| p.id == id).map(|k| self.p[k]).unwrap_or(0.0)
+    }
+
     fn update(&mut self) {
-        let [punch, _smack, low, body, crack, air, drive, ..] = self.p;
         let r = self.rate;
-        for ch in 0..2 {
-            self.eq[ch] = [
-                Biquad::new(BiquadKind::LowShelf, 70.0, 0.7, low, r),
-                Biquad::new(BiquadKind::Peak, 280.0, 0.9, body, r),
-                Biquad::new(BiquadKind::Peak, 3500.0, 0.8, crack, r),
-                Biquad::new(BiquadKind::HighShelf, 11000.0f32.min(r * 0.45), 0.6, air, r),
-            ];
+        let drive = self.v("drive") / 100.0;
+        // Drive colours: a = warm triode, b = tape, c = hard pentode crunch.
+        let (mode, tube) = match self.v("colour").round() as i32 {
+            1 => (1.0, 0.0),
+            2 => (0.0, 5.0),
+            _ => (0.0, 0.0),
+        };
+        self.sat.set_param("mode", mode);
+        self.sat.set_param("tube", tube);
+        self.sat.set_param("drive", drive * 24.0);
+        self.sat.set_param("output", -drive * 10.0);
+        self.sat.set_param("mix", 1.0);
+        self.drive_hp = Pair::new(BiquadKind::HighPass, self.v("drive_hp"), 0.7, 0.0, r);
+        let focus = if self.v("focus") >= 0.5 { 80.0 } else { 50.0 };
+        self.harm_bp = Pair::new(BiquadKind::BandPass, focus, 1.2, 0.0, r);
+        self.harm_lp = Pair::new(BiquadKind::LowPass, focus * 4.0, 0.7, 0.0, r);
+        // Compression modes: A glue (bus style), B punch (slower attack lets the hit through).
+        let b = self.v("comp_mode") >= 0.5;
+        for (k, v) in
+            [("style", if b { 6.0 } else { 5.0 }), ("threshold", -22.0), ("ratio", if b { 6.0 } else { 4.0 }), ("attack", if b { 25.0 } else { 10.0 }), ("release", if b { 80.0 } else { 150.0 }), ("auto_makeup", 1.0)]
+        {
+            self.comp.set_param(k, v);
         }
-        self.punch.set_param("attack", punch);
-        self.punch.set_param("att_dur", 22.0);
-        self.punch.set_param("att_sens", 70.0);
-        self.punch.set_param("sustain", -punch * 0.25);
-        self.punch.set_param("guard", 0.0);
-        // Smack: a hard, fast "crush" compressor blended in parallel (New York style).
-        self.crush.set_param("threshold", -30.0);
-        self.crush.set_param("ratio", 10.0);
-        self.crush.set_param("attack", 1.0);
-        self.crush.set_param("release", 60.0);
-        self.crush.set_param("knee", 2.0);
-        self.crush.set_param("makeup", 18.0);
-        self.sat.set_param("mode", 0.0);
-        self.sat.set_param("tube", 5.0);
-        self.sat.set_param("drive", drive / 100.0 * 18.0);
-        self.sat.set_param("output", -drive / 100.0 * 9.0);
-        self.sat.set_param("mix", 0.4 + drive / 100.0 * 0.5);
+        for (k, f) in HEQ_FREQS.iter().enumerate() {
+            self.heq[k] = Pair::new(BiquadKind::BandPass, f.min(r * 0.45), 0.9, 0.0, r);
+        }
     }
 }
 
 impl Effect for DrumBus {
     fn set_param(&mut self, id: &str, v: f32) {
         if let Some(k) = DRUM_PARAMS.iter().position(|p| p.id == id) {
-            self.p[k] = v;
+            // The Harmonic EQ moves in 1 dB steps, like Orion's.
+            self.p[k] = if id.starts_with("heq") { v.round() } else { v };
             self.update();
         }
     }
     fn reset(&mut self) {
-        self.punch.reset();
-        self.crush.reset();
-        self.sat.reset();
+        for e in [&mut self.sat, &mut self.comp, &mut self.low_comp, &mut self.loud_comp, &mut self.grit_ts] {
+            e.reset();
+        }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let n = l.len();
-        let [_, smack, _, _, _, _, drive, clip, width, mix, out] = self.p;
-        self.dry.clear();
-        self.dry.extend_from_slice(l);
-        self.dry_r.clear();
-        self.dry_r.extend_from_slice(r);
-        let pin = l.iter().chain(r.iter()).fold(0.0f32, |m, v| m.max(v.abs()));
-        // Tone (with a sub tightening high-pass) → punch.
+        let ig = db_to_gain(self.v("input"));
+        let mut pin = 0.0f32;
+        let mut sq_in = 0.0f32;
         for i in 0..n {
-            for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
-                let mut y = self.tight[ch].process(*x);
-                for b in &mut self.eq[ch] {
-                    y = b.process(y);
-                }
-                *x = y;
-            }
+            l[i] *= ig;
+            r[i] *= ig;
+            pin = pin.max(l[i].abs()).max(r[i].abs());
+            sq_in += 0.5 * (l[i] * l[i] + r[i] * r[i]);
         }
-        self.punch.process(l, r, None);
-        // Smack: crushed copy mixed in.
-        if smack > 0.0 {
-            self.par_l.clear();
-            self.par_l.extend_from_slice(l);
-            self.par_r.clear();
-            self.par_r.extend_from_slice(r);
-            self.crush.process(&mut self.par_l, &mut self.par_r, None);
-            let m = smack / 100.0 * 0.6;
-            for i in 0..n {
-                l[i] += self.par_l[i] * m;
-                r[i] += self.par_r[i] * m;
-            }
-        }
-        if drive > 0.0 {
+        // Drive, then its high-pass.
+        if self.v("drive") > 0.0 {
             self.sat.process(l, r, None);
         }
-        // Width on the side above 180 Hz (kick and bass stay centred).
-        let w = width / 50.0;
         for i in 0..n {
-            let m = (l[i] + r[i]) * 0.5;
-            let s = self.side_hp.process((l[i] - r[i]) * 0.5) * w;
-            l[i] = m + s;
-            r[i] = m - s;
+            l[i] = self.drive_hp.run(0, l[i]);
+            r[i] = self.drive_hp.run(1, r[i]);
         }
-        // Clipper: soft knee towards −0.3 dBFS.
-        let ceil = db_to_gain(-0.3);
-        let knee = ceil * (1.0 - clip / 100.0 * 0.5);
-        let og = db_to_gain(out);
-        let m = mix / 100.0;
-        let mut pout = 0.0f32;
-        for i in 0..n {
-            for (x, d) in [(&mut l[i], self.dry[i]), (&mut r[i], self.dry_r[i])] {
-                let mut y = *x * og;
-                if clip > 0.0 && y.abs() > knee {
-                    let over = y.abs() - knee;
-                    y = y.signum() * (knee + (ceil - knee) * (over / (ceil - knee + 1e-6)).tanh());
+        // Harmonics: the kick's fundamental region, rectified and saturated into upper harmonics.
+        let harm = self.v("harmonics") / 100.0;
+        if harm > 0.0 {
+            for i in 0..n {
+                for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
+                    let b = self.harm_bp.run(ch, *x);
+                    let h = self.harm_lp.run(ch, (b * 6.0).tanh() * 0.5 + (b.abs() * 3.0).tanh() * 0.3);
+                    *x += h * harm * 1.5;
                 }
-                *x = d + (y - d) * m;
-                pout = pout.max(x.abs());
             }
         }
-        self.tele = [pin, pout, self.crush.gain_reduction(), self.punch.telemetry().get(1).copied().unwrap_or(0.0)];
+        // Compression, blended in parallel by the mix.
+        let cmix = self.v("comp_mix") / 100.0;
+        if cmix > 0.0 {
+            for ch in 0..2 {
+                self.buf[ch].clear();
+                self.buf[ch].extend_from_slice(if ch == 0 { &*l } else { &*r });
+            }
+            let [bl, br] = &mut self.buf;
+            self.comp.process(bl, br, None);
+            for i in 0..n {
+                l[i] += (self.buf[0][i] - l[i]) * cmix;
+                r[i] += (self.buf[1][i] - r[i]) * cmix;
+            }
+        }
+        // Lift: excitement across the spectrum, mostly the top (presence and transient detail).
+        let lift = self.v("lift") / 100.0;
+        if lift > 0.0 {
+            for i in 0..n {
+                for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
+                    let h = self.lift_hp.run(ch, *x);
+                    *x += (h * 3.0).tanh() * 0.35 * lift + ((*x * 1.5).tanh() / 1.5 - *x) * 0.3 * lift;
+                }
+            }
+        }
+        // Harmonic EQ: each band adds saturated content of its region (gain in dB of that region).
+        let heq: [f32; 5] = std::array::from_fn(|k| self.p[9 + k]);
+        if heq.iter().any(|g| *g > 0.0) {
+            for i in 0..n {
+                for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
+                    let src = *x;
+                    let mut add = 0.0;
+                    for k in 0..5 {
+                        if heq[k] > 0.0 {
+                            let b = self.heq[k].run(ch, src);
+                            add += ((b * 2.0).tanh() * 0.5 + b * 0.5) * (db_to_gain(heq[k]) - 1.0);
+                        }
+                    }
+                    *x = src + add;
+                }
+            }
+        }
+        // Parallels: Sub (saturated sub), Low (squashed lows), Loud (crushed full band), Grit (transients).
+        let (sub, low, loud, grit) = (self.v("sub") / 100.0, self.v("low") / 100.0, self.v("loud") / 100.0, self.v("grit") / 100.0);
+        for ch in 0..2 {
+            self.acc[ch].clear();
+            self.acc[ch].resize(n, 0.0);
+        }
+        if sub > 0.0 {
+            for i in 0..n {
+                for ch in 0..2 {
+                    let x = if ch == 0 { l[i] } else { r[i] };
+                    let s = self.sub_lp.run(ch, x);
+                    self.acc[ch][i] += (s * 4.0).tanh() * 0.5 * sub;
+                }
+            }
+        }
+        let par_with = |sel: f32, pre: &mut dyn FnMut(usize, f32) -> f32, comp: &mut Box<dyn Effect>, me: &mut [Vec<f32>; 2], acc: &mut [Vec<f32>; 2]| {
+            if sel <= 0.0 {
+                return;
+            }
+            for (ch, buf) in me.iter_mut().enumerate() {
+                buf.clear();
+                for i in 0..n {
+                    buf.push(pre(ch, if ch == 0 { l[i] } else { r[i] }));
+                }
+            }
+            let [a, b] = me;
+            comp.process(a, b, None);
+            for ch in 0..2 {
+                for i in 0..n {
+                    acc[ch][i] += me[ch][i] * sel * 0.6;
+                }
+            }
+        };
+        let low_lp = &mut self.low_lp;
+        par_with(low, &mut |ch, x| low_lp.run(ch, x), &mut self.low_comp, &mut self.par, &mut self.acc);
+        par_with(loud, &mut |_, x| x, &mut self.loud_comp, &mut self.par, &mut self.acc);
+        let grit_hp = &mut self.grit_hp;
+        par_with(grit, &mut |ch, x| (grit_hp.run(ch, x) * 3.0).tanh() * 0.6, &mut self.grit_ts, &mut self.par, &mut self.acc);
+        let og = db_to_gain(self.v("output"));
+        let mut pout = 0.0f32;
+        let mut sq_out = 0.0f32;
+        for i in 0..n {
+            // Output stage rails (~ +24 dBFS) keep extreme settings bounded; inaudible at normal levels.
+            l[i] = 16.0 * ((l[i] + self.acc[0][i]) * og / 16.0).tanh();
+            r[i] = 16.0 * ((r[i] + self.acc[1][i]) * og / 16.0).tanh();
+            pout = pout.max(l[i].abs()).max(r[i].abs());
+            sq_out += 0.5 * (l[i] * l[i] + r[i] * r[i]);
+        }
+        // RMS over ~300 ms for the target meters.
+        let a = (-(n as f32) / (0.3 * self.rate)).exp();
+        self.rms_in = sq_in / n.max(1) as f32 + (self.rms_in - sq_in / n.max(1) as f32) * a;
+        self.rms_out = sq_out / n.max(1) as f32 + (self.rms_out - sq_out / n.max(1) as f32) * a;
+        self.tele = [pin, pout, self.comp.gain_reduction() * cmix, self.rms_in.sqrt(), self.rms_out.sqrt(), if pin > self.rms_in.sqrt() * 3.0 { 1.0 } else { 0.0 }];
     }
     fn gain_reduction(&self) -> f32 {
-        self.crush.gain_reduction() * self.p[1] / 100.0
+        self.comp.gain_reduction() * self.v("comp_mix") / 100.0
     }
     fn telemetry(&self) -> &[f32] {
         &self.tele
@@ -495,7 +655,7 @@ pub fn drum_bus_def() -> EffectDef {
         id: "drum_bus",
         name: "Drum Bus",
         category: "Drums",
-        description: "All-in-one drum processor: punch, smack (parallel crush), low end, body, crack, air, tube drive, clipper and width – each a single macro.",
+        description: "Drum bus processor after Cradle Orion: input with target meter, drive (three colours, high-pass), harmonics (50 / 80 Hz focus), compression (glue / punch, mix), lift, five-band harmonic EQ in 1 dB steps, parallel Sub / Low / Loud / Grit, output.",
         params: DRUM_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(DrumBus::new(rate)),
@@ -546,10 +706,10 @@ mod tests {
         let recover = |hold_s: f32| {
             let mut c = OptoCell::default();
             for _ in 0..(hold_s * rate) as usize {
-                c.next(12.0, rate, None);
+                c.next(12.0, rate, Timing::Fixed);
             }
             let mut t = 0;
-            while c.next(0.0, rate, None) > 3.0 && t < 10 * 48000 {
+            while c.next(0.0, rate, Timing::Fixed) > 3.0 && t < 10 * 48000 {
                 t += 1;
             }
             t as f32 / rate
@@ -573,23 +733,110 @@ mod tests {
         assert!(l.iter().all(|v| v.is_finite() && v.abs() < 2.0));
     }
 
-    #[test]
-    fn drum_bus_punches_and_clips() {
-        let rate = 48000.0;
-        let x: Vec<f32> = (0..96000)
+    fn kick_loop(rate: f32) -> Vec<f32> {
+        (0..96000)
             .map(|i| {
                 let t = (i % 24000) as f32 / rate;
-                (t * 70.0 * std::f32::consts::TAU).sin() * 0.8 * (-t / 0.12).exp()
+                (t * 55.0 * std::f32::consts::TAU).sin() * 0.5 * (-t / 0.15).exp() + if t < 0.003 { (i as f32 * 1.7).sin() * 0.3 } else { 0.0 }
             })
-            .collect();
-        let mut d = DrumBus::new(rate);
-        d.set_param("output", 6.0);
-        let (mut l, mut r) = (x.clone(), x.clone());
+            .collect()
+    }
+
+    fn run(set: &[(&str, f32)]) -> Vec<f32> {
+        let mut d = DrumBus::new(48000.0);
+        for (k, v) in DRUM_PARAMS.iter().map(|p| (p.id, 0.0f32)) {
+            if !matches!(k, "colour" | "focus" | "comp_mode" | "drive_hp") {
+                d.set_param(k, v);
+            }
+        }
+        for (k, v) in set {
+            d.set_param(k, *v);
+        }
+        let x = kick_loop(48000.0);
+        let (mut l, mut r) = (x.clone(), x);
         for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
             d.process(a, b, None);
         }
-        assert!(l.iter().all(|v| v.abs() <= 1.0), "clipper holds the ceiling");
-        let rms = |v: &[f32]| (v[24000..].iter().map(|s| s * s).sum::<f32>() / 72000.0).sqrt();
-        assert!(rms(&l) > rms(&x), "louder, denser");
+        l
+    }
+
+    /// Every Orion module does something on a kick loop, and with everything at zero the bus is (nearly)
+    /// transparent apart from the drive high-pass.
+    #[test]
+    fn drum_bus_modules_after_orion() {
+        let x = kick_loop(48000.0);
+        let flat = run(&[]);
+        let diff = |a: &[f32], b: &[f32]| (a[24000..].iter().zip(&b[24000..]).map(|(p, q)| (p - q).powi(2)).sum::<f32>() / a[24000..].iter().map(|p| p * p).sum::<f32>()).sqrt();
+        let rms = |v: &[f32]| (v[24000..].iter().map(|p| p * p).sum::<f32>() / 72000.0).sqrt();
+        assert!((gain_to_db(rms(&flat) / rms(&x))).abs() < 1.0, "neutral level: {} vs {}", rms(&flat), rms(&x));
+        for (name, set) in [
+            ("drive", vec![("drive", 80.0)]),
+            ("harmonics", vec![("harmonics", 80.0)]),
+            ("compression", vec![("comp_mix", 100.0), ("input", 12.0)]),
+            ("lift", vec![("lift", 100.0)]),
+            ("harmonic EQ", vec![("heq1", 6.0)]),
+            ("sub", vec![("sub", 100.0)]),
+            ("low", vec![("low", 100.0)]),
+            ("loud", vec![("loud", 100.0)]),
+            ("grit", vec![("grit", 100.0)]),
+        ] {
+            let y = run(&set);
+            let mut base = run(&set.iter().filter(|(k, _)| *k == "input").copied().collect::<Vec<_>>());
+            if base.is_empty() {
+                base = flat.clone();
+            }
+            assert!(diff(&y, &base) > 0.05, "{name} changes the sound ({})", diff(&y, &base));
+            assert!(y.iter().all(|v| v.is_finite()));
+        }
+        // Harmonics: the 80 Hz focus puts more energy around 160–320 Hz than the 50 Hz one does on a kick.
+        let band = |y: &[f32], f: f32| harmonic(&y[24000..], f);
+        let h50 = run(&[("harmonics", 100.0), ("focus", 0.0)]);
+        let h80 = run(&[("harmonics", 100.0), ("focus", 1.0)]);
+        assert!(band(&h50, 110.0) > band(&flat, 110.0), "harmonics add the kick's upper harmonics");
+        assert!(h50 != h80);
+        // The harmonic EQ moves in whole dB.
+        let mut d = DrumBus::new(48000.0);
+        d.set_param("heq3", 2.4);
+        assert_eq!(d.v("heq3"), 2.0);
+    }
+
+    /// Published 1073 / CL 1B values: EQ points, ±16 / ±18 dB ranges, an 18 dB/oct high-pass, ratio 2–10,
+    /// attack 0.5–300 ms, release 0.05–10 s, gain up to 30 dB.
+    #[test]
+    fn class_a_strip_matches_the_published_specs() {
+        assert_eq!(HPF_HZ[1..], [50.0, 80.0, 160.0, 300.0]);
+        assert_eq!(LOW_HZ, [35.0, 60.0, 110.0, 220.0]);
+        assert_eq!(MID_HZ, [360.0, 700.0, 1600.0, 3200.0, 4800.0, 7200.0]);
+        let p = |id: &str| *STRIP_PARAMS.iter().find(|p| p.id == id).unwrap();
+        assert_eq!((p("low_gain").min, p("low_gain").max), (-16.0, 16.0));
+        assert_eq!((p("mid_gain").min, p("mid_gain").max), (-18.0, 18.0));
+        assert_eq!((p("high_gain").min, p("high_gain").max), (-16.0, 16.0));
+        assert_eq!((p("ratio").min, p("ratio").max), (2.0, 10.0));
+        assert_eq!((p("attack").min, p("attack").max), (0.5, 300.0));
+        assert_eq!((p("release").min, p("release").max), (50.0, 10000.0));
+        assert_eq!(p("comp_gain").max, 30.0);
+        // The high-pass falls 18 dB per octave well below its corner (measured on the filter itself).
+        let mut s = ClassAStrip::new(48000.0);
+        s.set_param("hpf", 3.0); // 160 Hz
+        s.update_eq();
+        let level = |s: &mut ClassAStrip, f: f32| {
+            s.hpf = [Biquad::new(BiquadKind::HighPass, 160.0, 1.0, 0.0, 48000.0); 2];
+            s.hpf1 = [Hp1::new(160.0, 48000.0); 2];
+            let x = tone(f, 0.5, 96000);
+            let y: Vec<f32> = x.iter().map(|v| s.hpf1[0].process(s.hpf[0].process(*v))).collect();
+            gain_to_db(y[48000..].iter().fold(0.0f32, |m, v| m.max(v.abs())) / 0.5)
+        };
+        let slope = level(&mut s, 40.0) - level(&mut s, 20.0);
+        assert!((slope - 18.0).abs() < 1.5, "{slope} dB/oct");
+        // Fixed timing releases fast after a short peak (50 ms).
+        let mut c = OptoCell::default();
+        for _ in 0..480 {
+            c.next(10.0, 48000.0, Timing::Fixed);
+        }
+        let mut t = 0;
+        while c.next(0.0, 48000.0, Timing::Fixed) > 3.0 && t < 48000 {
+            t += 1;
+        }
+        assert!(t < 48000 / 2, "fixed release after a 10 ms peak: {} ms", t / 48);
     }
 }

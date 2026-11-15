@@ -64,6 +64,81 @@ fn with_insert(p: &mut Project, m: Id, i: Id, f: impl FnOnce(&mut Insert)) {
     }
 }
 
+/// FabFilter-style modulation: LFOs and envelope followers, each moving one parameter by a depth.
+fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDef, ins: &Insert) {
+    use dragon_engine::model::{ModSource, Modulation};
+    let header = if ins.mods.is_empty() { "Modulation".to_string() } else { format!("Modulation ({})", ins.mods.len()) };
+    egui::CollapsingHeader::new(header).id_salt(("fx.mods", i)).default_open(!ins.mods.is_empty()).show(ui, |ui| {
+        let targets: Vec<&effects::ParamInfo> = def.params.iter().filter(|p| !matches!(p.kind, effects::ParamKind::Toggle | effects::ParamKind::Choice(_))).collect();
+        let mut mods = ins.mods.clone();
+        let mut changed = false;
+        let mut remove = None;
+        for (k, md) in mods.iter_mut().enumerate() {
+            egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(4.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (name, color) = match md.source {
+                        ModSource::Lfo { .. } => ("LFO", egui::Color32::from_rgb(0x4b, 0xc0, 0xf0)),
+                        ModSource::Envelope { .. } => ("ENV", egui::Color32::from_rgb(0x5d, 0xe0, 0xa8)),
+                    };
+                    ui.label(RichText::new(format!("{name} {}", k + 1)).strong().color(color));
+                    ui.label(">");
+                    let cur = targets.iter().find(|p| p.id == md.target).map(|p| p.name).unwrap_or("?");
+                    egui::ComboBox::from_id_salt(("fx.mod.t", i, k)).selected_text(cur).width(150.0).show_ui(ui, |ui| {
+                        for p in &targets {
+                            if ui.selectable_label(p.id == md.target, p.name).clicked() {
+                                md.target = p.id.to_string();
+                                changed = true;
+                            }
+                        }
+                    });
+                    changed |= ui.add(egui::Slider::new(&mut md.depth, -1.0..=1.0).text("depth")).changed();
+                    if ui.small_button("🗙").on_hover_text("Remove").clicked() {
+                        remove = Some(k);
+                    }
+                });
+                ui.horizontal(|ui| match &mut md.source {
+                    ModSource::Lfo { rate, shape, sync } => {
+                        egui::ComboBox::from_id_salt(("fx.mod.s", i, k)).selected_text(ModSource::SHAPES[(*shape as usize).min(4)]).width(80.0).show_ui(ui, |ui| {
+                            for (n, label) in ModSource::SHAPES.iter().enumerate() {
+                                changed |= ui.selectable_value(shape, n as u8, *label).changed();
+                            }
+                        });
+                        changed |= ui.checkbox(sync, "sync").changed();
+                        let (lo, hi, unit) = if *sync { (0.0625, 4.0, " /beat") } else { (0.02, 20.0, " Hz") };
+                        changed |= ui.add(egui::Slider::new(rate, lo..=hi).logarithmic(true).suffix(unit)).changed();
+                    }
+                    ModSource::Envelope { attack, release, gain } => {
+                        changed |= ui.add(egui::Slider::new(attack, 0.1..=200.0).logarithmic(true).suffix(" ms").text("att")).changed();
+                        changed |= ui.add(egui::Slider::new(release, 5.0..=2000.0).logarithmic(true).suffix(" ms").text("rel")).changed();
+                        changed |= ui.add(egui::Slider::new(gain, -24.0..=24.0).suffix(" dB").text("gain")).changed();
+                    }
+                });
+            });
+        }
+        if let Some(k) = remove {
+            mods.remove(k);
+            changed = true;
+        }
+        ui.horizontal(|ui| {
+            let first = targets.first().map(|p| p.id.to_string()).unwrap_or_default();
+            if ui.button("+ LFO").clicked() {
+                mods.push(Modulation { source: ModSource::Lfo { rate: 1.0, shape: 0, sync: true }, target: first.clone(), depth: 0.3 });
+                changed = true;
+            }
+            if ui.button("+ Envelope follower").clicked() {
+                mods.push(Modulation { source: ModSource::Envelope { attack: 5.0, release: 150.0, gain: 0.0 }, target: first, depth: 0.5 });
+                changed = true;
+            }
+        });
+        if changed {
+            st.session.gesture("Modulation", |p| with_insert(p, m, i, |x| x.mods = mods));
+        }
+        if !ui.ctx().input(|i| i.pointer.any_down()) {
+            st.session.end_gesture();
+        }
+    });
+}
+
 fn presets_dir(st: &State, effect: &str) -> PathBuf {
     st.ctx.paths.config.join("Presets").join(effect)
 }
@@ -293,6 +368,8 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             });
         });
     }
+    ui.separator();
+    modulation(ui, st, m, i, def, &ins);
     ui.separator();
     // Presets.
     ui.horizontal(|ui| {

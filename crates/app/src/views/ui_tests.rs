@@ -353,7 +353,7 @@ fn plugin_harness(allow: bool) -> (Harness, Arc<FakeGui>, Id, Id) {
     let iid = h.st.session.edit("add", |p| {
         let iid = p.next_id();
         let plugin = PluginRef { format: PluginFormat::Vst3, path: "/plugins/Fake.vst3".into(), id: "00".into(), name: "Fake Synth FX".into(), state: Vec::new(), params: Default::default() };
-        p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(plugin), preset: String::new() });
+        p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(plugin), preset: String::new(), mods: Vec::new() });
         iid
     });
     h.st.session.compile(48000.0);

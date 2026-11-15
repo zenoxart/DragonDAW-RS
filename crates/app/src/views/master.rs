@@ -80,7 +80,7 @@ fn meters(ui: &mut Ui, st: &mut State) {
                         if id == "limiter" {
                             params.insert("ceiling".into(), -1.0);
                         }
-                        p.mixer.master.inserts.push(Insert { id: iid, effect: id.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new() });
+                        p.mixer.master.inserts.push(Insert { id: iid, effect: id.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
                     }
                     // Keep the limiter last.
                     p.mixer.master.inserts.sort_by_key(|i| i.effect == "limiter");

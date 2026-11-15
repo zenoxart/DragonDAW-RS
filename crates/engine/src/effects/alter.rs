@@ -1,7 +1,10 @@
 //! "Dragon Alter": real-time pitch and formant shifter for voices (the Little AlterBoy school). Pitch-
 //! synchronous overlap-add (TD-PSOLA): two-period Hann grains are taken at the voice's pitch marks and laid
 //! down at the new period (pitch), each grain resampled on the way (formant) – so pitch and formant move
-//! independently. Robot mode lays the grains at one fixed note whatever is sung. Drive and mix follow.
+//! independently. Controls follow Little AlterBoy's manual: Pitch ±12 semitones, Formant, Link (pitch and
+//! formant move together, like a sample sped up), three modes – Transpose, Quantize (snaps the voice to the
+//! nearest semitone as fast as possible) and Robot (one note, set by Pitch: 0 = one octave above middle C) –
+//! tube Drive, Mix and Output.
 
 use super::pitch::detect_pitch;
 use super::{Effect, EffectDef, ParamInfo};
@@ -11,13 +14,15 @@ const ANALYSIS: usize = 1024;
 const HOP: usize = 128;
 
 pub const ALTER_NOTES: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+pub const ALTER_MODES: &[&str] = &["Transpose", "Quantize", "Robot"];
+/// Robot mode's note at Pitch 0: C5, one octave above middle C (MIDI 72).
+pub const ROBOT_BASE: f32 = 72.0;
 
 const ALTER_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("pitch", "Pitch", -12.0, 12.0, 0.0, "st"),
     ParamInfo::lin("formant", "Formant", -12.0, 12.0, 0.0, "st"),
-    ParamInfo::choice("mode", "Mode", &["Transpose", "Robot"], 0.0),
-    ParamInfo::choice("robot_note", "Robot note", ALTER_NOTES, 0.0),
-    ParamInfo::lin("robot_octave", "Robot octave", 1.0, 5.0, 3.0, ""),
+    ParamInfo::choice("mode", "Mode", ALTER_MODES, 0.0),
+    ParamInfo::toggle("link", "Link", false),
     ParamInfo::lin("drive", "Drive", 0.0, 100.0, 0.0, "%"),
     ParamInfo::lin("mix", "Mix", 0.0, 100.0, 100.0, "%"),
     ParamInfo::lin("output", "Output", -18.0, 12.0, 0.0, "dB"),
@@ -27,9 +32,8 @@ pub struct Alter {
     rate: f32,
     pitch: f32,
     formant: f32,
-    robot: bool,
-    note: usize,
-    octave: f32,
+    mode: usize,
+    link: bool,
     drive: f32,
     mix: f32,
     out: f32,
@@ -57,9 +61,8 @@ impl Alter {
             rate,
             pitch: 0.0,
             formant: 0.0,
-            robot: false,
-            note: 0,
-            octave: 3.0,
+            mode: 0,
+            link: false,
             drive: 0.0,
             mix: 1.0,
             out: 1.0,
@@ -122,9 +125,8 @@ impl Effect for Alter {
         match id {
             "pitch" => self.pitch = v.clamp(-12.0, 12.0),
             "formant" => self.formant = v.clamp(-12.0, 12.0),
-            "mode" => self.robot = v >= 0.5,
-            "robot_note" => self.note = (v.round() as usize).min(11),
-            "robot_octave" => self.octave = v.round().clamp(1.0, 5.0),
+            "mode" => self.mode = (v.round().max(0.0) as usize).min(2),
+            "link" => self.link = v >= 0.5,
             "drive" => self.drive = v / 100.0,
             "mix" => self.mix = v / 100.0,
             "output" => self.out = crate::dsp::db_to_gain(v),
@@ -144,7 +146,8 @@ impl Effect for Alter {
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let ratio = 2f32.powf(self.pitch / 12.0);
-        let formant = 2f32.powf(self.formant / 12.0);
+        // Link: the formant follows the pitch (like a sample sped up), the Formant knob adds to it.
+        let formant = 2f32.powf((self.formant + if self.link { self.pitch } else { 0.0 }) / 12.0);
         let lat = self.latency as f64;
         for i in 0..l.len() {
             let w = self.t % RING;
@@ -156,11 +159,17 @@ impl Effect for Alter {
                 self.analyse();
             }
             // Output period: the input period over the ratio, or the robot note's period.
-            let out_period = if self.robot {
-                let midi = 12.0 * (self.octave + 1.0) + self.note as f32;
-                self.rate / (440.0 * 2f32.powf((midi - 69.0) / 12.0))
-            } else {
-                self.period / ratio
+            let hz_of = |midi: f32| 440.0 * 2f32.powf((midi - 69.0) / 12.0);
+            let out_period = match self.mode {
+                // Robot: one note, Pitch sets it.
+                2 => self.rate / hz_of(ROBOT_BASE + self.pitch.round()),
+                // Quantize: the sung pitch snapped to the nearest semitone (instantly), then transposed.
+                1 => {
+                    let hz = self.rate / self.period;
+                    let midi = (69.0 + 12.0 * (hz / 440.0).log2()).round();
+                    self.rate / hz_of(midi + self.pitch.round())
+                }
+                _ => self.period / ratio,
             };
             self.tele[1] = self.rate / out_period;
             // Synthesis marks run `lat` behind the input so every grain's source is already here.
@@ -208,7 +217,7 @@ pub fn alter_def() -> EffectDef {
         id: "alter",
         name: "Alter (pitch & formant)",
         category: "Pitch",
-        description: "Real-time voice pitch and formant shifter: ±12 semitones each, independently, or a robot mode that sings on one note; with drive and mix.",
+        description: "Real-time voice pitch and formant shifter after Little AlterBoy: pitch ±12 semitones, formant, link, Transpose / Quantize / Robot modes, tube drive, mix and output.",
         params: ALTER_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(Alter::new(rate)),
@@ -287,12 +296,36 @@ mod tests {
         assert!(ratio_out > ratio_in * 1.5, "formant up: {ratio_in} → {ratio_out}");
     }
 
+    /// Robot (manual): one note set by Pitch, 0 = one octave above middle C (C5, 523 Hz); −12 = C4.
     #[test]
     fn robot_sings_one_note() {
         let x = buzz(170.0, 1.0);
-        // C3 = MIDI 48 = 130.8 Hz.
-        let y = run(&[("mode", 1.0), ("robot_note", 0.0), ("robot_octave", 3.0)], &x);
+        let y = run(&[("mode", 2.0), ("pitch", -12.0)], &x);
         let (f, _) = detect_pitch(&y[30000..32048], 48000.0, 60.0, 1000.0).unwrap();
-        assert!((f / 130.81 - 1.0).abs() < 0.03, "{f}");
+        assert!((f / 261.63 - 1.0).abs() < 0.03, "{f}");
+    }
+
+    /// Quantize snaps a voice between semitones to the nearest one.
+    #[test]
+    fn quantize_snaps_to_semitones() {
+        // 158 Hz is 27 cents above D#3 (155.6 Hz): the output must land on D#3.
+        let x = buzz(158.0, 1.0);
+        let y = run(&[("mode", 1.0)], &x);
+        let (f, _) = detect_pitch(&y[30000..32048], 48000.0, 60.0, 1000.0).unwrap();
+        let cents = 1200.0 * (f / 440.0).log2();
+        let off = (cents / 100.0 - (cents / 100.0).round()).abs() * 100.0;
+        assert!(off < 15.0, "{f} Hz is {off} cents off a semitone");
+        assert!((f / 155.56 - 1.0).abs() < 0.02, "nearest semitone D#3: {f}");
+    }
+
+    /// Link moves the formant with the pitch (like a sped-up sample).
+    #[test]
+    fn link_moves_formant_with_pitch() {
+        let x = buzz(150.0, 1.0);
+        let a = run(&[("pitch", 7.0)], &x);
+        let b = run(&[("pitch", 7.0), ("link", 1.0)], &x);
+        let c = run(&[("pitch", 7.0), ("formant", 7.0)], &x);
+        let d = |p: &[f32], q: &[f32]| p[30000..34000].iter().zip(&q[30000..34000]).map(|(x, y)| (x - y).abs()).sum::<f32>();
+        assert!(d(&b, &c) < d(&a, &b) * 0.2, "link = formant following pitch");
     }
 }

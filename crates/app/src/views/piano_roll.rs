@@ -784,12 +784,19 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 }
             }
         });
-        if ui.small_button("Flam").on_hover_text("Alt+F").clicked() {
-            st.ctx.run("dragon.edit.flam", serde_json::Value::Null);
-        }
-        if ui.small_button("Tools…").on_hover_text("FL piano-roll tools: Alt+A arp, Alt+E riff, Alt+K limit, Alt+L articulate, Alt+O LFO, Alt+R randomize, Alt+U chop, Alt+W claw, Alt+X levels, Alt+Y flip").clicked() {
-            st.ui.note_tools.open = true;
-        }
+        ui.menu_button("Tools", |ui| {
+            if ui.button("Flam (Alt+F)").clicked() {
+                st.ctx.run("dragon.edit.flam", serde_json::Value::Null);
+                ui.close_menu();
+            }
+            ui.separator();
+            for (t, name, key) in crate::views::note_tools::Tool::ALL {
+                if ui.button(format!("{name}… ({key})")).clicked() {
+                    crate::views::note_tools::open(st, t);
+                    ui.close_menu();
+                }
+            }
+        });
         ui.menu_button("Progression", |ui| {
             let scale = st.ui.scale.unwrap_or(0);
             ui.label(RichText::new(format!("in {} {}", note_name(st.ui.scale_root + 48), SCALES[scale].0)).small());

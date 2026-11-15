@@ -9,7 +9,7 @@
 //! tempo changes. Pattern notes are scheduled at exact frame offsets inside the block. Automation is
 //! evaluated per sub-block of at most [`AUTOMATION_BLOCK`] frames.
 
-use crate::dsp::{balance, loudness::LoudnessMeter, DelayLine};
+use crate::dsp::{balance, db_to_gain, gain_to_db, loudness::LoudnessMeter, DelayLine};
 use crate::effects::{self, Effect};
 use crate::instruments::{self, InstrumentVoice, NoteOn};
 use crate::model::*;
@@ -160,6 +160,24 @@ struct CInsert {
     enabled: bool,
     mix: f32,
     sidechain: Option<usize>,
+    mods: Vec<CMod>,
+}
+
+/// A compiled modulation route of a built-in effect.
+struct CMod {
+    source: crate::model::ModSource,
+    info: effects::ParamInfo,
+    /// The parameter's own value, normalized.
+    base: f32,
+    depth: f32,
+}
+
+/// Running state of one modulation route (LFO phase, follower level, random step).
+#[derive(Default, Clone, Copy)]
+struct ModRun {
+    phase: f32,
+    env: f32,
+    step: u64,
 }
 
 struct CStrip {
@@ -325,7 +343,18 @@ impl Song {
                         latency += g.latency();
                     }
                 }
-                inserts.push(CInsert { id: ins.id, effect: e, enabled: ins.enabled, mix: ins.mix.clamp(0.0, 1.0), sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i) });
+                let mods = match (&ins.plugin, effects::find(&ins.effect)) {
+                    (None, Some(def)) => ins
+                        .mods
+                        .iter()
+                        .filter_map(|m| {
+                            let info = *def.params.iter().find(|p| p.id == m.target)?;
+                            Some(CMod { source: m.source, info, base: info.normalize(effects::value(def, &ins.params, info.id)), depth: m.depth.clamp(-1.0, 1.0) })
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                inserts.push(CInsert { id: ins.id, effect: e, enabled: ins.enabled, mix: ins.mix.clamp(0.0, 1.0), sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i), mods });
             }
             let audible = !c.muted && (!any_solo || solo_ok.contains(&i));
             strips.push(CStrip {
@@ -800,6 +829,8 @@ struct Preview {
 }
 
 pub struct Renderer {
+    /// Modulation state per (insert, route).
+    mod_runs: HashMap<(Id, usize), ModRun>,
     pub rate: f32,
     pub song: Arc<Song>,
     pub transport: TransportState,
@@ -865,6 +896,7 @@ impl Renderer {
     pub fn new(song: Arc<Song>) -> Self {
         let rate = song.rate;
         Renderer {
+            mod_runs: HashMap::new(),
             rate,
             transport: TransportState { bpm: song.base_bpm, ..Default::default() },
             song,
@@ -1212,6 +1244,34 @@ impl Renderer {
                     let mix = insert_mix.get(&ins.id).copied().unwrap_or(ins.mix);
                     let mix0 = self.ramps.start((Ramps::MIX, ins.id, 0), [mix, 0.0])[0];
                     let mut e = ins.effect.lock().unwrap();
+                    // Modulation: each route moves its parameter once per block.
+                    if !ins.mods.is_empty() {
+                        let dt = n as f32 / self.rate;
+                        let peak = bl.iter().chain(br.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+                        let bpm = self.transport.bpm as f32;
+                        for (k, m) in ins.mods.iter().enumerate() {
+                            let run = self.mod_runs.entry((ins.id, k)).or_default();
+                            let v = match m.source {
+                                crate::model::ModSource::Lfo { rate, shape, sync } => {
+                                    let hz = if sync { rate * bpm / 60.0 } else { rate };
+                                    run.phase += hz * dt;
+                                    if run.phase >= 1.0 {
+                                        run.phase -= run.phase.floor();
+                                        run.step = run.step.wrapping_add(1);
+                                    }
+                                    crate::model::ModSource::lfo_shape(shape, run.phase, run.step)
+                                }
+                                crate::model::ModSource::Envelope { attack, release, gain } => {
+                                    let x = peak * db_to_gain(gain);
+                                    let tau = if x > run.env { attack } else { release }.max(0.1) * 0.001;
+                                    run.env += (x - run.env) * (1.0 - (-dt / tau).exp());
+                                    ((gain_to_db(run.env.max(1e-6)) + 60.0) / 60.0).clamp(0.0, 1.0)
+                                }
+                            };
+                            let nv = (m.base + m.depth * v).clamp(0.0, 1.0);
+                            e.set_param(m.info.id, m.info.denormalize(nv));
+                        }
+                    }
                     if mix >= 0.999 && mix0 >= 0.999 {
                         e.process(bl, br, sc.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())));
                     } else {
@@ -1929,6 +1989,37 @@ mod tests {
         assert!(none < 1e-6, "{none}");
     }
 
+    /// FabFilter-style modulation: a square LFO on a utility's gain makes the level jump between two
+    /// values; an envelope follower opens a gain with the input.
+    #[test]
+    fn modulation_moves_effect_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("t.wav");
+        let s: Vec<f32> = (0..44100 * 2).map(|i| (i as f32 * 0.06).sin() * 0.25).collect();
+        write_wav(&tone, &s, &s, 44100, BitDepth::Float32, false, false).unwrap();
+        let mut p = Project::new_default();
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "t".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: tone, ..Default::default() }) });
+        let m1 = p.tracks[0].mixer;
+        let ins = p.next_id();
+        p.mixer.get_mut(m1).unwrap().inserts.push(Insert {
+            id: ins,
+            effect: "utility".into(),
+            enabled: true,
+            mix: 1.0,
+            params: Default::default(),
+            sidechain: None,
+            plugin: None,
+            preset: String::new(),
+            mods: vec![Modulation { source: ModSource::Lfo { rate: 4.0, shape: 3, sync: false }, target: "gain".into(), depth: 0.5 }],
+        });
+        let (l, _) = render_secs(&p, 1.0);
+        // RMS in 20 ms windows: two clearly different levels.
+        let win: Vec<f32> = l.chunks(882).skip(2).map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt()).collect();
+        let (lo, hi) = win.iter().fold((f32::MAX, 0.0f32), |(a, b), x| (a.min(*x), b.max(*x)));
+        assert!(hi > lo * 3.0, "{lo} {hi}");
+    }
+
     #[test]
     fn plugin_delay_compensation_aligns_parallel_paths() {
         let dir = tempfile::tempdir().unwrap();
@@ -1953,6 +2044,7 @@ mod tests {
             sidechain: None,
             plugin: None,
             preset: String::new(),
+            mods: Vec::new(),
         });
         let (l, _) = render_secs(&p, 0.1);
         let peaks: Vec<usize> = l.iter().enumerate().filter(|(_, x)| x.abs() > 0.05).map(|(i, _)| i).collect();

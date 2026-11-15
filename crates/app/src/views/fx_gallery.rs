@@ -72,7 +72,7 @@ pub fn body(ui: &mut egui::Ui, st: &mut State) {
         let iid = st.session.edit("Add effect", |p| {
             let iid = p.next_id();
             if let Some(c) = p.mixer.get_mut(target) {
-                c.inserts.push(dragon_engine::model::Insert { id: iid, effect: id.to_string(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new() });
+                c.inserts.push(dragon_engine::model::Insert { id: iid, effect: id.to_string(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
             }
             iid
         });

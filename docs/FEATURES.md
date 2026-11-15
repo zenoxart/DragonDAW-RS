@@ -92,20 +92,24 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 
 ## Comparison with FL Studio's shortcuts
 
-Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Shortcuts are rebindable in Options.
+Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Shortcuts are rebindable in Options; a test makes sure no two commands share a default key.
 
 | FL Studio | Dragon DAW |
 |---|---|
 | Space play / stop, Ctrl+Space play / pause, R record, L pattern / song, Ctrl+M metronome, Ctrl+P precount, Ctrl+H stop sound, Ctrl+T typing keyboard | ✅ same |
 | Ctrl+Z undo / redo last, Ctrl+Alt+Z undo step by step | ✅ same (plus Ctrl+Shift+Z redo) |
 | Ctrl+A / Ctrl+D select all / deselect, Shift+I invert, Ctrl+B duplicate, Ctrl+C / X / V, Del | ✅ same (playlist and piano roll) |
-| Tools P draw, B paint, D delete, T mute, C slice, E select; Alt bypasses snap; Backspace toggles snap | ✅ same |
-| Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Insert slices at the cursor | ✅ same |
-| Piano roll: Ctrl+↑/↓ octave, Ctrl+L legato, Ctrl+G glue, Ctrl+U chop, Alt+Q quantize, Alt+R randomize, Alt+S strum, Alt+F flam | ✅ same (Shift+Q quick quantize instead of Ctrl+Alt+Q) |
+| Tools P draw, B paint, D delete, T mute, C slice, E select, Y playback, Z zoom, S slip edit (playlist) / slide (piano roll); Alt bypasses snap; Backspace toggles snap | ✅ same |
+| Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Insert slices at the cursor, 7 / 8 transpose and 9 reverse clips | ✅ same |
+| PgUp / PgDn zoom, Shift+0 centre on the playhead, Shift+1…3 zoom levels, Shift+4 show all, Shift+5 and 5 zoom to selection | ✅ same |
+| Ctrl+Insert / Ctrl+Delete insert / delete space (the ruler selection) | ✅ same (markers follow) |
+| Channel rack 1…0 mute, Ctrl+1…0 solo the first ten channels | ✅ same (number keys follow the editor under the mouse) |
+| Piano roll: Ctrl+↑/↓ octave, Ctrl+L legato, Ctrl+G glue, Ctrl+U quick chop, Alt+Q quantize, Alt+F flam | ✅ same (Shift+Q quick quantize instead of Ctrl+Alt+Q) |
+| Piano-roll tools Alt+A arpeggiator, Alt+E riff machine, Alt+K limit, Alt+L articulate, Alt+O LFO, Alt+R randomize, Alt+S strum, Alt+U chop, Alt+W claw machine, Alt+X scale levels, Alt+Y score flipper | ✅ one tool window with a tab each (simpler than FL's: no per-tool presets) |
 | Playlist: Shift+Q quick-quantize clip starts, Alt+T time marker, Alt+P picker panel, Shift+drag clone, Ctrl+drag select | ✅ same |
 | F4 next empty pattern, F5 playlist, F6 channel rack, F7 piano roll, F8 plugin picker, F9 mixer, F10 settings, F11 song info, F12 close windows, Alt+F8 browser | ✅ same |
 | File: Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+N save new version, Ctrl+R export WAV, Ctrl+Shift+R MP3, Ctrl+Shift+M MIDI | ✅ same |
-| Y playback tool, Z zoom tool, S slip tool, 5/6 zoom keys, Shift+0…6 zoom levels, PgUp / PgDn zoom, 7/8 transpose and 9 reverse clips, Ctrl+Ins / Ctrl+Del insert / delete time, Alt+A arpeggiator / Alt+E riff machine / Alt+K… tool windows, channel-rack number keys (mute / solo) | ❌ not yet |
+| Channel-rack Alt keys (Alt+C clone, Alt+G group, Alt+Z / U zip, Alt+↑/↓ move, Ctrl+L route to mixer), piano roll G / K / H / J channel stepping, M keyboard view, O portamento, F / Shift+F event properties, Shift+R / Shift+C select by random / colour, Ctrl+I controller value, performance-mode keys (6, Ctrl+P in the playlist), Shift+G / Alt+G clip groups, Ctrl+Alt+C consolidate | ❌ not yet |
 
 ## Comparison with the FabFilter bundle
 
@@ -113,16 +117,27 @@ What the stock effects share with FabFilter's handling, and what is still missin
 
 | FabFilter | Dragon DAW stock effects |
 |---|---|
-| Pro-Q: live pre / post analyzer behind the curve | ✅ (`dsp/spectrum.rs`, tilted 4.5 dB/oct) |
-| Pro-Q: double-click to add a band, drag nodes, wheel = Q, right-click shape menu, hover readout, remove a band | ✅ (Alt+click removes) |
-| Pro-Q: solo a band to listen to it, auto gain | ✅ (band menu → Solo; Auto gain parameter) |
-| Pro-Q: dynamic EQ, mid / side and L / R per band, linear / natural phase, EQ match, collision detection, piano scale, 24 bands | ❌ (7 bands, stereo, minimum phase) |
-| Pro-C: transfer curve, threshold drag, scrolling input / output / gain-reduction history, sidechain HPF and external sidechain, mix, auto makeup | ✅ |
-| Pro-C: styles (Clean, Punch, Opto, Vocal…), lookahead, sidechain EQ, hold | ❌ (the limiter has lookahead) |
-| Pro-L: true-peak limiting, loudness meters | ✅ (limiter true peak; LUFS in the Mastering view) |
-| Pro-L: limiting styles, oversampling choice, scrolling waveform | ❌ |
-| Pro-R / Pro-DS / Pro-MB / Saturn / Timeless / Volcano | partial: reverb with early / late EQ, de-esser, multiband, saturator with nine tubes, delay, filter – without FabFilter's modulation matrix, per-band saturation or decay-rate EQ |
-| Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ (no undo history inside a plugin; the project undo covers parameter edits) |
+| Pro-Q: live pre / post analyzer, double-click to add a band, drag nodes, wheel = Q, right-click shape menu, hover readout, remove a band, band solo, auto gain | ✅ |
+| Pro-Q: dynamic EQ per band (range and threshold, live gain shown on the node), stereo placement per band (stereo, mid, side, left, right), zero-latency or linear-phase processing | ✅ (linear phase: bands are stereo and static, ~64 ms latency) |
+| Pro-Q: EQ match, spectrum grab, collision detection, piano scale, 24 bands, natural phase | ❌ (7 bands) |
+| Pro-C: styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain high- and low-pass, external sidechain, transfer curve with threshold drag, scrolling level / gain-reduction history, mix, auto makeup | ✅ (our styles are designed after Pro-C's names, not measured against it) |
+| Pro-L: true-peak limiting, styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe), loudness meters | ✅ (LUFS in the Mastering view) |
+| Pro-L: oversampling choice, scrolling waveform display, unity-gain listening | ❌ |
+| Modulation: LFOs (five shapes, free or tempo-synced) and envelope followers on any stock-effect parameter, with depth | ✅ (no XY pads, MIDI sources or slew) |
+| Pro-R / Pro-DS / Pro-MB / Saturn / Timeless / Volcano | partial: reverb with early / late EQ, de-esser, multiband, saturator with nine tubes, delay, filter – without decay-rate EQ or per-band saturation |
+| Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ |
+
+## The new plugins against their published references
+
+Checked against the manufacturers' manuals and spec sheets (tests in `effects/strips.rs`, `alter.rs`, `dynamics.rs`). None of them has been measured against recordings of the real units – the sound is our model.
+
+| Reference | Matches | Differs |
+|---|---|---|
+| Neve 1073 (preamp + EQ) | HPF 50 / 80 / 160 / 300 Hz at 18 dB/oct, low shelf 35 / 60 / 110 / 220 Hz ±16 dB, mid bell 360 Hz … 7.2 kHz ±18 dB, high shelf 12 kHz ±16 dB, transformer-coupled class-A drive | no mic / line impedance switch, no stepped 5 dB gain switch (continuous drive) |
+| Tube-Tech CL 1B | ratio 2–10, attack 0.5–300 ms, release 0.05–10 s, Fixed (1 ms / 50 ms), Fix/Man (fast release for short peaks, manual for long), Manual, gain up to 30 dB, opto cell | threshold −40…0 dBFS instead of +20…−40 dBm, no stereo link bus |
+| Cradle Orion | modules Input (target meter), Drive (3 colours, high-pass after), Harmonics (50 / 80 Hz focus), Compression (2 modes, mix), Lift, Harmonic EQ (5 bands, 1 dB steps), Parallels Sub / Low / Loud / Grit, Output | Orion's band frequencies and algorithms are not published; ours are our own |
+| Soundtoys Little AlterBoy | Pitch ±12 st, Formant, Link, modes Transpose / Quantize / Robot (Pitch sets the robot note, 0 = C5), tube Drive, Mix, Output | no MIDI control of Pitch |
+| Waves Smack Attack | attack and sustain level, sensitivity, duration, shape (Needle / Nail / Blunt; Linear / Non-linear / Soft linear), Mix, Output before Guard, Guard Off / Clip / Limit at −0.1 dBFS, listen modes | an extra Soft clip guard |
 
 ## P3 – advanced
 
