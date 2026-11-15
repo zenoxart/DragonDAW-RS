@@ -713,6 +713,8 @@ pub struct TransportState {
 pub struct MeterValues {
     pub strips: HashMap<Id, (f32, f32)>,
     pub gain_reduction: HashMap<Id, f32>,
+    /// Live display values of effects that report them ([`crate::effects::Effect::telemetry`]).
+    pub fx_data: HashMap<Id, Vec<f32>>,
     pub momentary: f32,
     pub short_term: f32,
     pub integrated: f32,
@@ -1192,6 +1194,7 @@ impl Renderer {
         // ---- mixer graph
         let mut meter_peaks: Vec<(Id, f32, f32)> = Vec::with_capacity(song.strips.len());
         let mut gr: Vec<(Id, f32)> = Vec::new();
+        let mut tele: Vec<(Id, Vec<f32>)> = Vec::new();
         for &si in &song.order {
             let s = &song.strips[si];
             if s.is_vca {
@@ -1223,6 +1226,10 @@ impl Renderer {
                     let g = e.gain_reduction();
                     if g > 0.01 {
                         gr.push((ins.id, g));
+                    }
+                    let t = e.telemetry();
+                    if !t.is_empty() {
+                        tele.push((ins.id, t.to_vec()));
                     }
                 }
                 self.pre_fader[si].0[..n].copy_from_slice(bl);
@@ -1339,6 +1346,9 @@ impl Renderer {
             mv.gain_reduction.clear();
             for (id, g) in gr {
                 mv.gain_reduction.insert(id, g);
+            }
+            for (id, t) in tele {
+                mv.fx_data.insert(id, t);
             }
             mv.momentary = self.loudness.momentary();
             mv.short_term = self.loudness.short_term();

@@ -82,12 +82,31 @@ pub struct PitchShifter {
     w: usize,
     phase: f32,
     window: f32,
+    /// Window the shifter glides towards (set from the detected period for pitch-synchronous, low-latency
+    /// shifting: two periods of the voice instead of a fixed 30 ms grain).
+    target_window: f32,
+    min_window: f32,
+    max_window: f32,
 }
 
 impl PitchShifter {
     pub fn new(rate: f32) -> Self {
-        let window = (rate * 0.03).max(64.0);
-        PitchShifter { buf: vec![0.0; (window as usize) * 2 + 8], w: 0, phase: 0.0, window }
+        let max_window = (rate * 0.03).max(64.0);
+        let min_window = (rate * 0.004).max(16.0);
+        PitchShifter { buf: vec![0.0; (max_window as usize) * 2 + 8], w: 0, phase: 0.0, window: max_window, target_window: max_window, min_window, max_window }
+    }
+
+    /// Sets the grain length from the period (in samples) of the input; `None` returns to the default.
+    pub fn set_period(&mut self, period: Option<f32>) {
+        self.target_window = match period {
+            Some(p) => (p * 2.0).clamp(self.min_window, self.max_window),
+            None => self.max_window * 0.6,
+        };
+    }
+
+    /// The average delay through the shifter in samples (half a grain).
+    pub fn delay(&self) -> f32 {
+        self.window * 0.5
     }
 
     pub fn reset(&mut self) {
@@ -109,6 +128,7 @@ impl PitchShifter {
     pub fn process(&mut self, x: f32, ratio: f32) -> f32 {
         let n = self.buf.len();
         self.buf[self.w] = x;
+        self.window += (self.target_window - self.window) * 0.002;
         self.phase = (self.phase + (1.0 - ratio) / self.window).rem_euclid(1.0);
         let p2 = (self.phase + 0.5).rem_euclid(1.0);
         let g1 = (std::f32::consts::PI * self.phase).sin();
@@ -153,12 +173,16 @@ const TUNE_PARAMS: &[ParamInfo] = &[
     ParamInfo::choice("key", "Key", KEYS, 0.0),
     ParamInfo::choice("scale", "Scale", SCALE_NAMES, 0.0),
     ParamInfo::log("speed", "Retune speed", 1.0, 400.0, 25.0, "ms"),
+    ParamInfo::lin("humanize", "Humanize", 0.0, 1.0, 0.0, ""),
+    ParamInfo::lin("flex", "Flex-tune", 0.0, 50.0, 0.0, "ct"),
+    ParamInfo::lin("vibrato", "Natural vibrato", 0.0, 1.0, 0.0, ""),
     ParamInfo::lin("amount", "Amount", 0.0, 1.0, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
 ];
 
-const HOP: usize = 256;
-const FRAME: usize = 2048;
+/// Analysis every 128 samples (2.7 ms at 48 kHz) over 1024 samples (enough for voices down to ~90 Hz).
+const HOP: usize = 128;
+const FRAME: usize = 1024;
 
 pub struct PitchCorrect {
     rate: f32,
@@ -176,8 +200,17 @@ pub struct PitchCorrect {
     ratio: f32,
     sl: PitchShifter,
     sr: PitchShifter,
+    humanize: f32,
+    flex: f32,
+    vibrato: f32,
+    /// Note the voice is held on and for how many analysis hops (humanize slows retuning on held notes).
+    held: (f32, u32),
+    /// Smoothed pitch (slow) to separate vibrato from the note's centre.
+    centre: f32,
     /// Last detected pitch (MIDI) for displays and tests.
     pub detected: Option<f32>,
+    /// [detected MIDI (−1 = none), target MIDI, output MIDI, clarity] for the display.
+    tele: [f32; 4],
 }
 
 impl PitchCorrect {
@@ -198,7 +231,13 @@ impl PitchCorrect {
             ratio: 1.0,
             sl: PitchShifter::new(rate),
             sr: PitchShifter::new(rate),
+            humanize: 0.0,
+            flex: 0.0,
+            vibrato: 0.0,
+            held: (0.0, 0),
+            centre: 0.0,
             detected: None,
+            tele: [-1.0, -1.0, -1.0, 0.0],
         }
     }
 
@@ -207,17 +246,39 @@ impl PitchCorrect {
         let (a, b) = self.ring.split_at(self.pos);
         self.analysis[..b.len()].copy_from_slice(b);
         self.analysis[b.len()..].copy_from_slice(a);
-        match detect_pitch(&self.analysis, self.rate, 70.0, 1100.0) {
+        match detect_pitch(&self.analysis, self.rate, 85.0, 1100.0) {
             Some((hz, clarity)) if clarity > 0.8 => {
                 let m = hz_to_midi(hz);
                 self.detected = Some(m);
-                let target = nearest_in_scale(m, self.key, TUNE_SCALES[self.scale].1);
-                let semis = (target - m) * self.amount;
+                // The slow centre follows the note; the difference is vibrato, kept when asked to.
+                if (m - self.centre).abs() > 1.0 {
+                    self.centre = m;
+                } else {
+                    self.centre += (m - self.centre) * 0.08;
+                }
+                let target = nearest_in_scale(self.centre, self.key, TUNE_SCALES[self.scale].1);
+                let wobble = (m - self.centre) * self.vibrato;
+                let off_cents = (target - m).abs() * 100.0;
+                // Flex-tune: notes already within the window are left alone.
+                let semis = if self.flex > 0.0 && off_cents <= self.flex { 0.0 } else { (target - m + wobble) * self.amount };
                 self.target_ratio = 2f32.powf(semis / 12.0);
+                if (target - self.held.0).abs() < 0.01 {
+                    self.held.1 = self.held.1.saturating_add(1);
+                } else {
+                    self.held = (target, 0);
+                }
+                let period = self.rate / hz;
+                self.sl.set_period(Some(period));
+                self.sr.set_period(Some(period));
+                self.tele = [m, target, m + semis, clarity];
             }
             _ => {
                 self.detected = None;
                 self.target_ratio = 1.0;
+                self.held = (0.0, 0);
+                self.sl.set_period(None);
+                self.sr.set_period(None);
+                self.tele = [-1.0, -1.0, -1.0, 0.0];
             }
         }
     }
@@ -231,8 +292,14 @@ impl Effect for PitchCorrect {
             "speed" => self.speed_ms = v.max(0.5),
             "amount" => self.amount = v.clamp(0.0, 1.0),
             "mix" => self.mix = v.clamp(0.0, 1.0),
+            "humanize" => self.humanize = v.clamp(0.0, 1.0),
+            "flex" => self.flex = v.clamp(0.0, 50.0),
+            "vibrato" => self.vibrato = v.clamp(0.0, 1.0),
             _ => {}
         }
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
     fn reset(&mut self) {
         self.sl.reset();
@@ -243,7 +310,10 @@ impl Effect for PitchCorrect {
         self.target_ratio = 1.0;
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
-        let coef = (-1.0 / (self.speed_ms * 0.001 * self.rate)).exp();
+        // Humanize: notes held longer than ~120 ms are retuned more slowly (up to 8× the speed setting).
+        let held_s = self.held.1 as f32 * HOP as f32 / self.rate;
+        let slow = 1.0 + self.humanize * 7.0 * ((held_s - 0.12) / 0.3).clamp(0.0, 1.0);
+        let coef = (-1.0 / (self.speed_ms * slow * 0.001 * self.rate)).exp();
         for i in 0..l.len() {
             // Analysis ring (most recent FRAME samples, oldest first).
             self.ring[self.pos] = (l[i] + r[i]) * 0.5;
@@ -269,7 +339,7 @@ pub fn pitch_correct_def() -> EffectDef {
         id: "tune",
         name: "Dragon Tune (pitch correction)",
         category: "Pitch",
-        description: "Real-time pitch correction: snaps a monophonic voice or instrument to the notes of a key.",
+        description: "Real-time, zero-latency pitch correction for tracking: snaps a monophonic voice to a key (retune speed, humanize, flex-tune, natural vibrato). Put it on the track's insert and arm the track to sing through it.",
         params: TUNE_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(PitchCorrect::new(rate)),
@@ -308,6 +378,39 @@ mod tests {
         let y: Vec<f32> = x.iter().map(|v| s.process(*v, 1.5)).collect();
         let (f, _) = detect_pitch(&y[30000..32048], 48000.0, 60.0, 1100.0).unwrap();
         assert!((f - 450.0).abs() < 6.0, "{f}");
+    }
+
+    /// Dragon Tune reports no latency and its shifter delay stays short (a few ms) on a voice, so it can be
+    /// monitored while recording.
+    #[test]
+    fn tune_is_low_latency() {
+        let mut e = PitchCorrect::new(48000.0);
+        assert_eq!(e.latency(), 0);
+        let x = sine(220.0, 0.5);
+        let (mut l, mut r) = (x.clone(), x);
+        for (a, b) in l.chunks_mut(64).zip(r.chunks_mut(64)) {
+            e.process(a, b, None);
+        }
+        let ms = e.sl.delay() / 48.0;
+        assert!(ms < 6.0, "grain delay {ms:.1} ms");
+        let t = e.telemetry();
+        assert!((t[0] - 57.0).abs() < 0.1, "detected A3: {t:?}");
+    }
+
+    /// Flex-tune leaves notes that are already close enough alone.
+    #[test]
+    fn flex_tune_leaves_close_notes() {
+        let mut e = PitchCorrect::new(48000.0);
+        e.set_param("flex", 30.0);
+        e.set_param("speed", 5.0);
+        // 446 Hz is ~23 cents sharp of A4: inside the 30-cent window, so it stays.
+        let x = sine(446.0, 1.0);
+        let (mut l, mut r) = (x.clone(), x);
+        for (a, b) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+            e.process(a, b, None);
+        }
+        let (f, _) = detect_pitch(&l[36000..38048], 48000.0, 60.0, 1100.0).unwrap();
+        assert!((f - 446.0).abs() < 2.5, "left at {f} Hz");
     }
 
     #[test]

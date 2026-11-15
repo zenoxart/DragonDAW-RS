@@ -152,7 +152,8 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         return;
     };
     let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
-    let (edits, _) = super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time });
+    let tele = st.audio.meters().snapshot().fx_data.get(&i).cloned().unwrap_or_else(|| vec![-1.0]);
+    let (edits, _) = super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) });
     if !edits.is_empty() {
         st.session.gesture(def.name, |p| {
             with_insert(p, m, i, |x| {

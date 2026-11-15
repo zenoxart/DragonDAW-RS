@@ -23,6 +23,10 @@ pub struct Hero<'a> {
     pub color: Color32,
     /// Seconds since start; `None` freezes the animation.
     pub time: Option<f32>,
+    /// Live values the effect reports (see `Effect::telemetry`); empty when there are none.
+    pub tele: &'a [f32],
+    /// Identifies the insert (keeps per-insert display history such as Dragon Tune's pitch trace).
+    pub key: egui::Id,
 }
 
 impl Hero<'_> {
@@ -106,7 +110,8 @@ fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
 /// changes the gesture made, and whether a drag is running.
 pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 170.0), egui::Sense::click_and_drag());
+    let height = if h.def.id == "tune" { 230.0 } else { 170.0 };
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(w, height), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
     let p = ui.painter_at(r);
     let col = if h.enabled { h.color } else { theme::TEXT_DIM };
@@ -632,31 +637,112 @@ fn stereo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(r.center().x, r.top() + 6.0), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(11.0), theme::TEXT);
 }
 
+/// Dragon Tune, laid out like a modern vocal tuner: the detected note large with its cents offset, a
+/// needle meter (input deviation in white, the applied correction as a coloured arc), a scrolling pitch
+/// trace over the note lanes (input white, corrected output coloured) and the key's notes underneath.
 fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
-    // One octave of keys; the notes of the chosen scale glow.
+    use dragon_engine::effects::pitch::{KEYS, TUNE_SCALES};
+    p.rect_filled(r, 8.0, Color32::from_rgb(0x10, 0x12, 0x16));
     let key = h.v("key").round() as usize % 12;
-    let scales: [&[usize]; 6] = [&[0, 2, 4, 5, 7, 9, 11], &[0, 2, 3, 5, 7, 8, 10], &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], &[0, 2, 4, 7, 9], &[0, 3, 5, 7, 10], &[0, 2, 3, 5, 7, 8, 11]];
-    let sc = scales.get(h.v("scale").round() as usize).copied().unwrap_or(scales[0]);
-    let names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-    let kw = (r.width() - 16.0) / 12.0;
-    let speed = h.v("speed");
-    for (n, note_name) in names.iter().enumerate() {
-        let in_scale = sc.contains(&((n + 12 - key) % 12));
-        let black = matches!(n, 1 | 3 | 6 | 8 | 10);
-        let kr = Rect::from_min_size(Pos2::new(r.left() + 8.0 + n as f32 * kw, r.top() + 34.0), Vec2::new(kw - 3.0, r.height() - 44.0));
-        let base = if black { Color32::from_gray(40) } else { Color32::from_gray(80) };
-        p.rect_filled(kr, 4.0, if in_scale { col.gamma_multiply(if black { 0.55 } else { 0.85 }) } else { base });
-        p.text(kr.center_bottom() - Vec2::new(0.0, 4.0), egui::Align2::CENTER_BOTTOM, *note_name, egui::FontId::proportional(10.0), if in_scale { Color32::BLACK } else { theme::TEXT_DIM });
+    let sc = TUNE_SCALES.get(h.v("scale").round() as usize).map(|s| s.1).unwrap_or(TUNE_SCALES[0].1);
+    let in_scale = |n: usize| sc.contains(&(((n + 12 - key) % 12) as u8));
+    // Live values (or a gentle demo wobble in the gallery).
+    let (det, target, out) = match h.tele {
+        [d, t, o, _, ..] if *d >= 0.0 => (Some(*d), *t, *o),
+        [_, ..] => (None, -1.0, -1.0),
+        [] => {
+            let d = 57.0 + 0.35 * (h.t() * 1.7).sin() + 0.1 * (h.t() * 6.0).sin();
+            let t = dragon_engine::effects::pitch::nearest_in_scale(d, key as u8, sc);
+            (Some(d), t, t + (d - t) * 0.15)
+        }
+    };
+    // History of (input, output) for the trace, per insert.
+    let hist_id = h.key.with("tune.hist");
+    let mut hist: std::collections::VecDeque<(f32, f32)> = p.ctx().data(|d| d.get_temp(hist_id)).unwrap_or_default();
+    if h.time.is_some() {
+        hist.push_back(det.map(|d| (d, out)).unwrap_or((-1.0, -1.0)));
+        while hist.len() > 240 {
+            hist.pop_front();
+        }
+        p.ctx().data_mut(|d| d.insert_temp(hist_id, hist.clone()));
     }
-    // A pitch "needle" sliding towards the nearest scale note at the retune speed.
-    let wander = (h.t() * 0.7).sin() * 0.45 + 4.3;
-    let target = sc.iter().map(|s| (s + key) % 12).min_by(|a, b| ((*a as f32) - wander).abs().total_cmp(&((*b as f32) - wander).abs())).unwrap_or(0) as f32;
-    let pull = (1.0 - speed / 400.0).clamp(0.0, 1.0) * h.v("amount");
-    let shown = wander + (target - wander) * pull;
-    let x = r.left() + 8.0 + (shown + 0.5) * kw;
-    p.add(Shape::convex_polygon(vec![Pos2::new(x - 7.0, r.top() + 14.0), Pos2::new(x + 7.0, r.top() + 14.0), Pos2::new(x, r.top() + 28.0)], Color32::WHITE, Stroke::NONE));
-    p.text(r.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, format!("{} · retune {:.0} ms", names[key], speed), egui::FontId::proportional(10.5), theme::TEXT);
+    // ---- left: note + needle meter
+    let left = Rect::from_min_max(r.min + Vec2::new(10.0, 10.0), Pos2::new(r.left() + r.width() * 0.36, r.bottom() - 46.0));
+    let (name, cents) = match det {
+        Some(d) => {
+            let n = d.round();
+            (format!("{}{}", KEYS[(n as i32).rem_euclid(12) as usize], (n as i32) / 12 - 1), (d - n) * 100.0)
+        }
+        None => ("–".into(), 0.0),
+    };
+    p.text(Pos2::new(left.center().x, left.top()), egui::Align2::CENTER_TOP, &name, egui::FontId::proportional(34.0), if det.is_some() { Color32::WHITE } else { theme::TEXT_DIM });
+    p.text(Pos2::new(left.center().x, left.top() + 40.0), egui::Align2::CENTER_TOP, if det.is_some() { format!("{cents:+.0} ct") } else { "no pitch".into() }, egui::FontId::monospace(12.0), theme::TEXT_DIM);
+    let c = Pos2::new(left.center().x, left.bottom() - 4.0);
+    let rad = (left.width() * 0.45).min(left.height() - 66.0).max(30.0);
+    let ang = |ct: f32| std::f32::consts::PI * (1.0 + (ct.clamp(-50.0, 50.0) + 50.0) / 100.0);
+    let arc = |a0: f32, a1: f32, rr: f32| -> Vec<Pos2> { (0..=40).map(|k| a0 + (a1 - a0) * k as f32 / 40.0).map(|a| Pos2::new(c.x + rr * a.cos(), c.y + rr * a.sin())).collect() };
+    p.add(Shape::line(arc(ang(-50.0), ang(50.0), rad), Stroke::new(6.0_f32, Color32::from_white_alpha(14))));
+    for ct in [-50.0f32, -25.0, 0.0, 25.0, 50.0] {
+        let a = ang(ct);
+        p.line_segment([Pos2::new(c.x + (rad - 9.0) * a.cos(), c.y + (rad - 9.0) * a.sin()), Pos2::new(c.x + (rad + 4.0) * a.cos(), c.y + (rad + 4.0) * a.sin())], Stroke::new(1.0_f32, Color32::from_white_alpha(70)));
+    }
+    if let Some(d) = det {
+        // Correction applied: arc from the input deviation to where the output lands.
+        let in_ct = (d - target) * 100.0;
+        let out_ct = (out - target) * 100.0;
+        p.add(Shape::line(arc(ang(in_ct.min(out_ct)), ang(in_ct.max(out_ct)), rad), Stroke::new(6.0_f32, col)));
+        let a = ang(in_ct);
+        p.line_segment([c, Pos2::new(c.x + (rad - 4.0) * a.cos(), c.y + (rad - 4.0) * a.sin())], Stroke::new(2.0_f32, Color32::WHITE));
+        p.circle_filled(c, 4.0, Color32::WHITE);
+    }
+    p.text(Pos2::new(c.x - rad, c.y + 2.0), egui::Align2::CENTER_TOP, "−50", egui::FontId::proportional(8.5), theme::TEXT_DIM);
+    p.text(Pos2::new(c.x + rad, c.y + 2.0), egui::Align2::CENTER_TOP, "+50", egui::FontId::proportional(8.5), theme::TEXT_DIM);
+    // ---- right: pitch trace over note lanes
+    let tr = Rect::from_min_max(Pos2::new(left.right() + 16.0, r.top() + 10.0), Pos2::new(r.right() - 10.0, r.bottom() - 46.0));
+    p.rect_filled(tr, 4.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+    let mid = det.or_else(|| hist.iter().rev().find(|x| x.0 >= 0.0).map(|x| x.0)).unwrap_or(60.0).round();
+    let lo = mid - 6.5;
+    let y_of = |m: f32| tr.bottom() - ((m - lo) / 13.0) * tr.height();
+    for n in (lo.ceil() as i32)..=((lo + 13.0) as i32) {
+        let y = y_of(n as f32);
+        let ok = in_scale(n.rem_euclid(12) as usize);
+        p.line_segment([Pos2::new(tr.left(), y), Pos2::new(tr.right(), y)], Stroke::new(1.0_f32, if ok { col.gamma_multiply(0.25) } else { Color32::from_white_alpha(8) }));
+        if ok {
+            p.text(Pos2::new(tr.left() + 3.0, y), egui::Align2::LEFT_CENTER, KEYS[n.rem_euclid(12) as usize], egui::FontId::proportional(8.5), col.gamma_multiply(0.7));
+        }
+    }
+    let n = hist.len().max(1);
+    let px = |i: usize| tr.right() - (n - 1 - i) as f32 * (tr.width() / 240.0);
+    let p2 = p.with_clip_rect(tr);
+    for (which, color, w) in [(0usize, Color32::from_white_alpha(150), 1.2_f32), (1, col, 2.0)] {
+        let mut seg: Vec<Pos2> = Vec::new();
+        for (i, v) in hist.iter().enumerate() {
+            let m = if which == 0 { v.0 } else { v.1 };
+            if m < 0.0 {
+                if seg.len() > 1 {
+                    p2.add(Shape::line(std::mem::take(&mut seg), Stroke::new(w, color)));
+                }
+                seg.clear();
+                continue;
+            }
+            seg.push(Pos2::new(px(i), y_of(m)));
+        }
+        if seg.len() > 1 {
+            p2.add(Shape::line(seg, Stroke::new(w, color)));
+        }
+    }
+    // ---- bottom: the key's notes, the target lit
+    let kr = Rect::from_min_max(Pos2::new(r.left() + 10.0, r.bottom() - 38.0), Pos2::new(r.right() - 10.0, r.bottom() - 8.0));
+    let kw = kr.width() / 12.0;
+    let tgt = if target >= 0.0 { Some((target.round() as i32).rem_euclid(12) as usize) } else { None };
+    for (i, nm) in KEYS.iter().enumerate() {
+        let b = Rect::from_min_size(Pos2::new(kr.left() + i as f32 * kw + 1.0, kr.top()), Vec2::new(kw - 2.0, kr.height()));
+        let on = in_scale(i);
+        let lit = tgt == Some(i);
+        p.rect_filled(b, 5.0, if lit { col } else if on { col.gamma_multiply(0.22) } else { Color32::from_white_alpha(6) });
+        p.text(b.center(), egui::Align2::CENTER_CENTER, *nm, egui::FontId::proportional(10.0), if lit { Color32::BLACK } else if on { Color32::WHITE } else { theme::TEXT_DIM });
+    }
+    p.text(r.right_top() + Vec2::new(-12.0, 8.0), egui::Align2::RIGHT_TOP, format!("{} {} · retune {:.0} ms", KEYS[key], TUNE_SCALES.get(h.v("scale").round() as usize).map(|s| s.0).unwrap_or(""), h.v("speed")), egui::FontId::proportional(10.0), theme::TEXT_DIM);
 }
 
 fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -756,7 +842,7 @@ mod tests {
                 let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 400.0))), ..Default::default() };
                 let out = ctx.run(raw, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        let (edits, dragging) = hero(ui, &Hero { def, params: &params, gr: 3.0, enabled, color: theme::ACCENT, time: Some(1.25) });
+                        let (edits, dragging) = hero(ui, &Hero { def, params: &params, gr: 3.0, enabled, color: theme::ACCENT, time: Some(1.25), tele: &[], key: egui::Id::new(def.id) });
                         assert!(edits.is_empty() && !dragging);
                     });
                 });
@@ -781,7 +867,7 @@ mod tests {
             let _ = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     *area = ui.available_rect_before_wrap();
-                    let (e, _) = hero(ui, &Hero { def, params, gr: 0.0, enabled: true, color: theme::ACCENT, time: None });
+                    let (e, _) = hero(ui, &Hero { def, params, gr: 0.0, enabled: true, color: theme::ACCENT, time: None, tele: &[], key: egui::Id::new("eq") });
                     got.extend(e);
                 });
             });

@@ -115,6 +115,11 @@ pub trait Effect: Send {
     fn gain_reduction(&self) -> f32 {
         0.0
     }
+    /// Live values for the effect's display (pitch, correlation, envelopes …), read by the UI after each
+    /// block; the meaning is effect-specific. Empty for most effects.
+    fn telemetry(&self) -> &[f32] {
+        &[]
+    }
     /// Project tempo (for synced effects).
     fn set_tempo(&mut self, _bpm: f64) {}
     /// Parameters of a hosted third-party plugin (empty for built-ins, which use [`EffectDef::params`]).
