@@ -261,7 +261,8 @@ mod folder_tests {
         assert!(dir.join(SAMPLES_DIR).join("kick.wav").is_file());
         // The project now points at the copy, stored relative to the folder.
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("Samples/kick.wav") || text.contains("Samples\\kick.wav"), "{text}");
+        // (JSON escapes Windows' backslash separator.)
+        assert!(text.contains("Samples/kick.wav") || text.contains("Samples\\\\kick.wav"), "{text}");
         assert!(!text.contains(&lib.display().to_string()));
         // Saving again: backups go to Backup/, nothing new to copy.
         assert_eq!(save_in_folder(&mut p, &path, 3).unwrap(), 0);
