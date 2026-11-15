@@ -421,6 +421,11 @@ const DP_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mid", "Mid", -6.0, 6.0, 0.0, "dB"),
     ParamInfo::lin("high", "High", -6.0, 6.0, 0.0, "dB"),
     ParamInfo::lin("ceiling", "Ceiling", -3.0, 0.0, -1.0, "dBTP"),
+    ParamInfo::choice("character", "Character", &["Clean", "Warm", "Bright", "Punchy"], 1.0),
+    ParamInfo::lin("punch", "Punch", 0.0, 1.0, 0.3, ""),
+    ParamInfo::lin("width", "Width", 0.0, 1.0, 0.35, ""),
+    ParamInfo::lin("clip", "Clipper", 0.0, 1.0, 0.25, ""),
+    ParamInfo::toggle("auto_gain", "Auto gain (A/B at equal loudness)", false),
 ];
 
 /// One knob drives a whole mastering chain: tone EQ → glue compressor → harmonic saturation → stereo widening
@@ -438,6 +443,18 @@ pub struct DragonParticle {
     sat: Box<dyn Effect>,
     width: Box<dyn Effect>,
     limiter: Box<dyn Effect>,
+    punch_fx: Box<dyn Effect>,
+    character: usize,
+    punch: f32,
+    widen: f32,
+    clip: f32,
+    auto_gain: bool,
+    /// Running input / output power for auto gain and the meters.
+    in_pow: f32,
+    out_pow: f32,
+    ag: f32,
+    /// [input RMS, output RMS, gain reduction dB, auto-gain dB]
+    tele: [f32; 4],
 }
 
 impl DragonParticle {
@@ -453,7 +470,14 @@ impl DragonParticle {
 
     fn update(&mut self) {
         let a = self.amount;
-        let shape = [(BiquadKind::LowShelf, 90.0, self.low + a * 1.5), (BiquadKind::Peak, 1200.0, self.mid - a * 0.8), (BiquadKind::HighShelf, 9000.0, self.high + a * 2.0)];
+        // Character: tilts of the tone stage and the tube used for colour.
+        let (cl, cm, ch, tube) = match self.character {
+            0 => (0.0, 0.0, 0.0, 2.0),
+            2 => (-0.5, 0.3, 1.5, 2.0),
+            3 => (1.0, 0.5, 0.5, 0.0),
+            _ => (0.8, -0.3, 0.3, 3.0),
+        };
+        let shape = [(BiquadKind::LowShelf, 90.0, self.low + a * 1.5 + cl * a), (BiquadKind::Peak, 1200.0, self.mid - a * 0.8 + cm * a), (BiquadKind::HighShelf, 9000.0, self.high + a * 2.0 + ch * a)];
         for (i, (k, f, g)) in shape.iter().enumerate() {
             for b in &mut self.eq[i] {
                 b.set(*k, *f, 0.7, *g, self.rate);
@@ -466,10 +490,15 @@ impl DragonParticle {
         self.glue.set_param("knee", 8.0);
         self.glue.set_param("makeup", a * 6.0);
         self.sat.set_param("mode", 0.0);
+        self.sat.set_param("tube", tube);
         self.sat.set_param("drive", a * 9.0);
         self.sat.set_param("output", -a * 6.0);
-        self.sat.set_param("mix", 0.25 + a * 0.35);
-        self.width.set_param("width", 1.0 + a * 0.35);
+        self.sat.set_param("mix", if self.character == 0 { 0.1 + a * 0.15 } else { 0.25 + a * 0.35 });
+        self.punch_fx.set_param("attack", self.punch * 60.0 * (0.5 + a));
+        self.punch_fx.set_param("att_dur", 18.0);
+        self.punch_fx.set_param("att_shape", 1.0);
+        self.punch_fx.set_param("guard", 0.0);
+        self.width.set_param("width", 1.0 + self.widen * 0.6 * (0.4 + a));
         self.width.set_param("mono_below", 120.0);
         self.limiter.set_param("gain", a * 8.0);
         self.limiter.set_param("ceiling", self.ceiling);
@@ -486,9 +515,17 @@ impl Effect for DragonParticle {
             "mid" => self.mid = v,
             "high" => self.high = v,
             "ceiling" => self.ceiling = v,
+            "character" => self.character = v.round() as usize,
+            "punch" => self.punch = v.clamp(0.0, 1.0),
+            "width" => self.widen = v.clamp(0.0, 1.0),
+            "clip" => self.clip = v.clamp(0.0, 1.0),
+            "auto_gain" => self.auto_gain = v > 0.5,
             _ => return,
         }
         self.update();
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
     fn reset(&mut self) {
         self.glue.reset();
@@ -500,6 +537,8 @@ impl Effect for DragonParticle {
         self.limiter.latency()
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let n = l.len().max(1);
+        let pin: f32 = l.iter().zip(r.iter()).map(|(a, b)| a * a + b * b).sum::<f32>() / (2 * n) as f32;
         for i in 0..l.len() {
             let (mut a, mut b) = (l[i] * self.input, r[i] * self.input);
             for band in &mut self.eq {
@@ -509,10 +548,39 @@ impl Effect for DragonParticle {
             l[i] = a;
             r[i] = b;
         }
+        if self.punch > 0.0 {
+            self.punch_fx.process(l, r, None);
+        }
         self.glue.process(l, r, None);
         self.sat.process(l, r, None);
         self.width.process(l, r, None);
+        // Soft clipper ahead of the limiter: shaves peaks so the limiter works less (louder, less pumping).
+        if self.clip > 0.0 {
+            let knee = db_to_gain(self.ceiling) * (1.0 - self.clip * 0.35);
+            for x in l.iter_mut().chain(r.iter_mut()) {
+                let ax = x.abs();
+                if ax > knee {
+                    let over = ax - knee;
+                    *x = x.signum() * (knee + over / (1.0 + over / (knee * 0.5 + 1e-6)));
+                }
+            }
+        }
         self.limiter.process(l, r, None);
+        // Auto gain: match the output's loudness to the input so the effect can be judged, not just heard
+        // as louder.
+        let pout: f32 = l.iter().zip(r.iter()).map(|(a, b)| a * a + b * b).sum::<f32>() / (2 * n) as f32;
+        let k = (-(n as f32) / (self.rate * 3.0)).exp();
+        self.in_pow = self.in_pow * k + pin * (1.0 - k);
+        self.out_pow = self.out_pow * k + pout * (1.0 - k);
+        let target = if self.auto_gain && self.out_pow > 1e-9 { (self.in_pow / self.out_pow).sqrt().clamp(0.1, 2.0) } else { 1.0 };
+        let from = self.ag;
+        self.ag = target;
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let g = from + (target - from) * i as f32 / n as f32;
+            *a *= g;
+            *b *= g;
+        }
+        self.tele = [self.in_pow.sqrt(), self.out_pow.sqrt() * self.ag, self.gain_reduction(), crate::dsp::gain_to_db(self.ag.max(1e-6))];
     }
     fn gain_reduction(&self) -> f32 {
         self.glue.gain_reduction() + self.limiter.gain_reduction()
@@ -524,7 +592,7 @@ pub fn dragon_particle_def() -> EffectDef {
         id: "dragon_particle",
         name: "Dragon Particle",
         category: "Mastering",
-        description: "One-knob mastering: tone EQ, glue compression, saturation, widening and a true-peak limiter.",
+        description: "One-knob mastering: tone EQ with character, transient punch, glue compression, tube colour, widening, a soft clipper and a true-peak limiter, with auto gain for honest A/B.",
         params: DP_PARAMS,
         uses_sidechain: false,
         create: |rate| {
@@ -541,6 +609,16 @@ pub fn dragon_particle_def() -> EffectDef {
                 sat: (saturator_def().create)(rate),
                 width: (imager_def().create)(rate),
                 limiter: (dynamics::limiter_def().create)(rate),
+                punch_fx: (dynamics::transient_def().create)(rate),
+                character: 1,
+                punch: 0.3,
+                widen: 0.35,
+                clip: 0.25,
+                auto_gain: false,
+                in_pow: 0.0,
+                out_pow: 0.0,
+                ag: 1.0,
+                tele: [0.0; 4],
             };
             d.update();
             Box::new(d)
@@ -551,6 +629,31 @@ pub fn dragon_particle_def() -> EffectDef {
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+
+    /// More amount = louder; auto gain brings the output back to the input loudness; the ceiling holds.
+    #[test]
+    fn dragon_particle_amount_and_auto_gain() {
+        let x: Vec<f32> = (0..96000).map(|i| ((i as f32 * 0.031).sin() * 0.3 + (i as f32 * 0.0071).sin() * 0.2) * if (i / 6000) % 2 == 0 { 1.0 } else { 0.4 }).collect();
+        let run = |params: &[(&str, f32)]| {
+            let mut e = (dragon_particle_def().create)(48000.0);
+            for (k, v) in params {
+                e.set_param(k, *v);
+            }
+            let (mut l, mut r) = (x.clone(), x.clone());
+            for (a, b) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
+                e.process(a, b, None);
+            }
+            l
+        };
+        let rms = |v: &[f32]| (v[48000..].iter().map(|s| s * s).sum::<f32>() / 48000.0).sqrt();
+        let lo = run(&[("amount", 0.1)]);
+        let hi = run(&[("amount", 0.9)]);
+        assert!(rms(&hi) > rms(&lo) * 1.3, "louder with more amount");
+        assert!(hi.iter().all(|v| v.abs() < 0.95), "under the ceiling");
+        let ag = run(&[("amount", 0.9), ("auto_gain", 1.0)]);
+        let ratio = rms(&ag) / rms(&x);
+        assert!((0.75..1.35).contains(&ratio), "auto gain matches the input loudness: {ratio}");
+    }
 
     /// Correlation: +1 for mono, −1 for polarity-inverted channels, ~0 for unrelated noise.
     #[test]

@@ -110,7 +110,11 @@ fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
 /// changes the gesture made, and whether a drag is running.
 pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
-    let height = if h.def.id == "tune" { 230.0 } else { 170.0 };
+    let height = match h.def.id {
+        "tune" => 230.0,
+        "dragon_particle" => 240.0,
+        _ => 170.0,
+    };
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, height), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
     let p = ui.painter_at(r);
@@ -174,6 +178,22 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 let s = ui.input(|i| i.smooth_scroll_delta.y);
                 if s != 0.0 {
                     out.push((format!("b{b}_q"), (h.v(&format!("b{b}_q")) * (1.0 + s / 300.0)).clamp(0.1, 18.0)));
+                }
+            }
+        }
+        "dragon_particle" => {
+            let c = r.center();
+            let rad = (r.height() * 0.5 - 22.0).max(30.0);
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            if resp.dragged() && origin.distance(c) < rad + 10.0 {
+                let d = -resp.drag_delta().y / 220.0;
+                out.push(("amount".into(), (h.v("amount") + d).clamp(0.0, 1.0)));
+            }
+            if pos.distance(c) < rad + 10.0 {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                let s = ui.input(|i| i.smooth_scroll_delta.y);
+                if s != 0.0 {
+                    out.push(("amount".into(), (h.v("amount") + s / 800.0).clamp(0.0, 1.0)));
                 }
             }
         }
@@ -963,28 +983,83 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     );
 }
 
+/// Dragon Particle: one big glowing dial (drag or scroll it) ringed by orbiting particles that grow in
+/// number and energy with the amount, the stage name inside, input / output meters at the sides and the
+/// gain reduction and auto-gain readouts.
 fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
-    // Embers rising out of a three-band "fire": band heights follow low / mid / high.
-    let amount = h.v("amount");
-    let bands = [h.v("low"), h.v("mid"), h.v("high")];
-    let bw = r.width() / 3.0;
-    for (k, g) in bands.iter().enumerate() {
-        let hgt = (0.35 + g / 12.0) * r.height() * (0.4 + 0.6 * amount);
-        let br = Rect::from_min_max(Pos2::new(r.left() + k as f32 * bw + 10.0, r.bottom() - hgt), Pos2::new(r.left() + (k + 1) as f32 * bw - 10.0, r.bottom() - 4.0));
-        p.rect_filled(br, 8.0, col.gamma_multiply(0.18 + 0.1 * k as f32));
-        p.text(Pos2::new(br.center().x, r.bottom() - 8.0), egui::Align2::CENTER_BOTTOM, ["low", "mid", "high"][k], egui::FontId::proportional(10.0), theme::TEXT);
+    use dragon_engine::effects::DragonParticle;
+    // Deep background with a faint radial glow.
+    p.rect_filled(r, 10.0, Color32::from_rgb(0x0c, 0x0d, 0x11));
+    let a = h.v("amount");
+    let c = r.center();
+    let rad = (r.height() * 0.5 - 22.0).max(30.0);
+    let ember = Color32::from_rgb(0xf0, 0x6a, 0x3c);
+    let gold = Color32::from_rgb(0xf5, 0xc8, 0x42);
+    for k in (1..=6).rev() {
+        p.circle_filled(c, rad + k as f32 * 6.0 * (0.4 + a), ember.gamma_multiply(0.025 * a));
     }
-    let n = (20.0 + amount * 70.0) as usize;
-    for k in 0..n {
-        let x0 = (k as f32 * 0.618_034).fract();
-        let life = (h.t() * (0.3 + 0.4 * (k as f32 * 0.37).fract()) + k as f32 * 0.1).fract();
-        let x = r.left() + x0 * r.width() + (life * 6.0 + k as f32).sin() * 6.0;
-        let y = r.bottom() - life * r.height();
-        let c = if life < 0.5 { Color32::from_rgb(0xf5, 0xc8, 0x42) } else { col };
-        p.circle_filled(Pos2::new(x, y), 2.5 * (1.0 - life) + 0.5, c.gamma_multiply(1.0 - life));
+    // Orbiting particles.
+    let t = h.t();
+    let count = (24.0 + a * 96.0) as usize;
+    for i in 0..count {
+        let fi = i as f32;
+        let orbit = rad + 10.0 + (fi * 0.618).fract() * (18.0 + a * 26.0);
+        let speed = 0.2 + (fi * 0.37).fract() * 0.6 + a * 0.6;
+        let ang = fi * 2.399 + t * speed * if i % 2 == 0 { 1.0 } else { -0.7 };
+        let pos = Pos2::new(c.x + ang.cos() * orbit, c.y + ang.sin() * orbit * 0.92);
+        let tw = 0.5 + 0.5 * (t * 3.0 + fi).sin();
+        let cc = if i % 3 == 0 { gold } else { ember };
+        p.circle_filled(pos, 0.8 + 1.6 * tw * (0.4 + a), cc.gamma_multiply(0.35 + 0.65 * tw * (0.3 + 0.7 * a)));
     }
-    p.text(r.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, format!("{:.0}% · ceiling {:.1} dB", amount * 100.0, h.v("ceiling")), egui::FontId::proportional(10.5), theme::TEXT);
+    // The dial: track, value arc, glossy cap.
+    let a0 = std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.5;
+    let arc = |from: f32, to: f32, rr: f32| -> Vec<Pos2> { (0..=64).map(|k| from + (to - from) * k as f32 / 64.0).map(|x| Pos2::new(c.x + rr * x.cos(), c.y + rr * x.sin())).collect() };
+    p.add(Shape::line(arc(a0, a0 + sweep, rad), Stroke::new(8.0_f32, Color32::from_white_alpha(14))));
+    p.add(Shape::line(arc(a0, a0 + sweep * a, rad), Stroke::new(14.0_f32, ember.gamma_multiply(0.25))));
+    p.add(Shape::line(arc(a0, a0 + sweep * a, rad), Stroke::new(6.0_f32, ember)));
+    p.circle_filled(c, rad - 14.0, Color32::from_rgb(0x1a, 0x1c, 0x22));
+    p.circle_stroke(c, rad - 14.0, Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
+    let ang = a0 + sweep * a;
+    p.line_segment([Pos2::new(c.x + (rad - 30.0) * ang.cos(), c.y + (rad - 30.0) * ang.sin()), Pos2::new(c.x + (rad - 18.0) * ang.cos(), c.y + (rad - 18.0) * ang.sin())], Stroke::new(3.0_f32, Color32::WHITE));
+    p.text(c - Vec2::new(0.0, 10.0), egui::Align2::CENTER_CENTER, format!("{:.0}", a * 100.0), egui::FontId::proportional(30.0), Color32::WHITE);
+    p.text(c + Vec2::new(0.0, 16.0), egui::Align2::CENTER_CENTER, DragonParticle::mode_name(a).to_uppercase(), egui::FontId::proportional(10.0), ember);
+    // Side meters: input (left) and output (right), RMS on a −48 … 0 dB scale.
+    let (vin, vout, gr, ag) = match h.tele {
+        [i, o, g, a2, ..] => (*i, *o, *g, *a2),
+        _ => {
+            let w = 0.25 + 0.05 * (t * 4.0).sin();
+            (w, w * (1.0 + a * 1.5), a * 4.0, 0.0)
+        }
+    };
+    let meter = |x: f32, v: f32, label: &str| {
+        let mr = Rect::from_min_max(Pos2::new(x - 7.0, r.top() + 26.0), Pos2::new(x + 7.0, r.bottom() - 26.0));
+        p.rect_filled(mr, 4.0, Color32::from_white_alpha(10));
+        let db = dragon_engine::dsp::gain_to_db(v.max(1e-5));
+        let f = ((db + 48.0) / 48.0).clamp(0.0, 1.0);
+        let fill = Rect::from_min_max(Pos2::new(mr.left(), mr.bottom() - mr.height() * f), mr.max);
+        p.rect_filled(fill, 4.0, if db > -6.0 { theme::WARN } else { gold.gamma_multiply(0.85) });
+        p.text(Pos2::new(x, mr.top() - 4.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), theme::TEXT_DIM);
+        p.text(Pos2::new(x, mr.bottom() + 4.0), egui::Align2::CENTER_TOP, if db < -90.0 { "-∞".to_string() } else { format!("{db:.0}") }, egui::FontId::monospace(9.0), theme::TEXT);
+    };
+    meter(r.left() + 26.0, vin, "IN");
+    meter(r.right() - 26.0, vout, "OUT");
+    let chars = ["Clean", "Warm", "Bright", "Punchy"];
+    p.text(
+        r.left_top() + Vec2::new(48.0, 8.0),
+        egui::Align2::LEFT_TOP,
+        format!("{} · punch {:.0}% · width {:.0}% · clip {:.0}%", chars.get(h.v("character").round() as usize).unwrap_or(&""), h.v("punch") * 100.0, h.v("width") * 100.0, h.v("clip") * 100.0),
+        egui::FontId::proportional(10.0),
+        theme::TEXT_DIM,
+    );
+    p.text(
+        r.right_top() + Vec2::new(-48.0, 8.0),
+        egui::Align2::RIGHT_TOP,
+        format!("GR {gr:.1} dB · ceiling {:.1} dBTP{}", h.v("ceiling"), if h.v("auto_gain") > 0.5 { format!(" · auto gain {ag:+.1} dB") } else { String::new() }),
+        egui::FontId::proportional(10.0),
+        if gr > 0.1 { theme::WARN } else { theme::TEXT_DIM },
+    );
+    let _ = col;
 }
 
 /// The synth's display: the mixed oscillators as one scrolling waveform (left) and the amp envelope
