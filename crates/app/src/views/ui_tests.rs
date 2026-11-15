@@ -211,3 +211,31 @@ fn ctrl_drag_on_empty_space_box_selects() {
     sel.sort();
     assert_eq!(sel, vec![0, 1]);
 }
+
+fn rack(ui: &mut egui::Ui, st: &mut State) {
+    super::rack::show(ui, st);
+}
+
+#[test]
+fn dropping_a_sample_on_a_rack_channel_replaces_its_sound() {
+    let mut h = Harness::new();
+    h.idle(rack, 3);
+    let rows: (u64, Vec<(Id, Rect)>) = h.ctx.data(|d| d.get_temp(egui::Id::new("rack.rows"))).unwrap();
+    let (cid, r) = rows.1[1];
+    let count = h.st.session.project.channels.len();
+    let path = std::path::PathBuf::from("/samples/new_clap.wav");
+    // A browser drag carries the path as the drag payload; release it over the second channel.
+    let at = Pos2::new(r.left() + 40.0, r.center().y);
+    h.frame(rack, vec![Event::PointerMoved(at)], Modifiers::NONE);
+    h.frame(rack, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    egui::DragAndDrop::set_payload(&h.ctx, path.clone());
+    h.frame(rack, vec![Event::PointerMoved(at + egui::vec2(5.0, 0.0))], Modifiers::NONE);
+    h.frame(rack, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    h.idle(rack, 1);
+    let c = h.st.session.project.channel(cid).unwrap();
+    match &c.instrument {
+        Instrument::Sampler(s) => assert_eq!(s.path, path),
+        other => panic!("not a sampler: {other:?}"),
+    }
+    assert_eq!(h.st.session.project.channels.len(), count, "replaced, not added");
+}

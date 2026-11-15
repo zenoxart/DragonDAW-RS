@@ -441,8 +441,63 @@ pub fn slice_to_rack(p: &mut Project, path: &std::path::Path, data: &crate::samp
     (ch, pat)
 }
 
+/// Replaces the sound of a channel-rack channel with an audio file (FL Studio: drop a sample onto a channel).
+/// A sampler keeps its settings (root note, envelope, loop, …) except the region and slices, which belong to
+/// the old file; any other instrument becomes a sampler. The channel takes the file's name when it was still
+/// named after its old sample (or the instrument type), so names given by hand are kept. Returns `false` when
+/// the channel does not exist.
+pub fn replace_channel_sample(p: &mut Project, channel: Id, path: &std::path::Path) -> bool {
+    let Some(ch) = p.channel_mut(channel) else { return false };
+    let stem = |q: &std::path::Path| q.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let auto_named = match &ch.instrument {
+        Instrument::Sampler(s) => ch.name == stem(&s.path) || ch.name.is_empty() || ch.name == "Sampler",
+        other => ch.name == other.kind_name() || ch.name.is_empty(),
+    };
+    match &mut ch.instrument {
+        Instrument::Sampler(s) => {
+            s.path = path.to_path_buf();
+            s.start = 0.0;
+            s.end = 1.0;
+            s.slices.clear();
+        }
+        other => *other = Instrument::Sampler(SamplerParams { path: path.to_path_buf(), ..Default::default() }),
+    }
+    if auto_named {
+        ch.name = stem(path);
+    }
+    true
+}
+
+/// File types the sampler can load.
+pub fn is_audio_file(path: &std::path::Path) -> bool {
+    matches!(path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("wav" | "flac" | "mp3" | "ogg" | "aif" | "aiff" | "m4a"))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dropping_a_sample_replaces_the_channel_sound() {
+        use super::*;
+        let mut p = Project::new_default();
+        let kick = p.add_channel("kick_01", Instrument::Sampler(SamplerParams { path: "kits/kick_01.wav".into(), root_note: 48, start: 0.2, slices: vec![0.5], ..Default::default() }));
+        assert!(replace_channel_sample(&mut p, kick, std::path::Path::new("kits/kick_02.wav")));
+        let c = p.channel(kick).unwrap();
+        let Instrument::Sampler(s) = &c.instrument else { panic!() };
+        assert_eq!(s.path, std::path::PathBuf::from("kits/kick_02.wav"));
+        assert_eq!(s.root_note, 48, "settings kept");
+        assert_eq!((s.start, s.end), (0.0, 1.0), "region of the old file reset");
+        assert!(s.slices.is_empty());
+        assert_eq!(c.name, "kick_02", "auto name follows the sample");
+        // A hand-given name is kept; a synth becomes a sampler.
+        let lead = p.add_channel("My lead", Instrument::Synth(Default::default()));
+        replace_channel_sample(&mut p, lead, std::path::Path::new("vox.wav"));
+        let c = p.channel(lead).unwrap();
+        assert!(matches!(c.instrument, Instrument::Sampler(_)));
+        assert_eq!(c.name, "My lead");
+        assert!(!replace_channel_sample(&mut p, 999_999, std::path::Path::new("x.wav")));
+        assert!(is_audio_file(std::path::Path::new("A.WAV")) && !is_audio_file(std::path::Path::new("song.dragon")));
+    }
+
     use super::*;
 
     fn audio_clip(p: &mut Project, start: f64, len: f64) -> (Id, Id) {

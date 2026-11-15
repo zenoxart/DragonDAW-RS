@@ -82,6 +82,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let mixers: Vec<(Id, String)> = st.session.project.mixer.channels.iter().map(|m| (m.id, m.name.clone())).collect();
     let steps = pattern.steps as usize;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        let mut rows: Vec<(Id, Rect)> = Vec::new();
         for c in &channels {
             let cid = c.id;
             let selected = st.ui.channel == Some(cid);
@@ -134,22 +135,25 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     step_row(ui, st, pat, cid, pc.map(|x| x.steps.clone()).unwrap_or_default(), steps);
                 }
             });
+            // Drop a sample on a channel to replace its sound (from the browser; files from the desktop are
+            // handled in the app's drop handler through the row rectangles below).
+            rows.push((cid, row.response.rect));
+            if row.response.dnd_hover_payload::<PathBuf>().is_some() {
+                ui.painter().rect_stroke(row.response.rect.expand(1.0), 3.0, Stroke::new(2.0_f32, theme::ACCENT_2), egui::StrokeKind::Outside);
+                ui.painter().text(row.response.rect.right_center() - Vec2::new(6.0, 0.0), egui::Align2::RIGHT_CENTER, "replace sound", egui::FontId::proportional(11.0), theme::ACCENT_2);
+            }
             if let Some(path) = row.response.dnd_release_payload::<PathBuf>() {
-                let path = (*path).clone();
-                st.session.edit("Replace sample", |p| {
-                    if let Some(ch) = p.channel_mut(cid) {
-                        match &mut ch.instrument {
-                            Instrument::Sampler(s) => s.path = path,
-                            other => *other = Instrument::Sampler(SamplerParams { path, ..Default::default() }),
-                        }
-                    }
-                });
+                st.replace_sample(cid, &path);
             }
         }
+        let frame = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("rack.rows"), (frame, rows)));
         // Drop zone for new samplers.
         let (rect, r) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::hover());
+        let frame = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("rack.dropzone"), (frame, rect)));
         ui.painter().rect_stroke(rect.shrink(2.0), 4.0, Stroke::new(1.0_f32, if r.dnd_hover_payload::<PathBuf>().is_some() { theme::ACCENT_2 } else { theme::GRID }), egui::StrokeKind::Inside);
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Drop a sample here to add a sampler channel", egui::FontId::proportional(11.0), theme::TEXT_DIM);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Drop a sample here to add a sampler channel · drop it on a channel to replace its sound", egui::FontId::proportional(11.0), theme::TEXT_DIM);
         if let Some(path) = r.dnd_release_payload::<PathBuf>() {
             st.add_sampler(&path);
         }

@@ -720,6 +720,16 @@ impl State {
         self.ui.channel = Some(id);
     }
 
+    /// Replaces a rack channel's sound with an audio file (drop on a channel).
+    pub fn replace_sample(&mut self, channel: Id, path: &Path) {
+        let path = path.to_path_buf();
+        if self.session.edit("Replace sound", |p| dragon_engine::edit::replace_channel_sample(p, channel, &path)) {
+            self.ui.channel = Some(channel);
+            let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            self.ui.status = format!("Replaced the sound with {name}");
+        }
+    }
+
     /// Starts separating the selected audio clip into drums / harmonic / centre stems (background).
     pub fn separate_selected(&mut self) {
         let clip = self.session.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| self.ui.clips.contains(&c.id) && c.audio().is_some()).cloned();

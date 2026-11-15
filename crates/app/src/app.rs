@@ -103,8 +103,29 @@ impl DragonApp {
         }
         // Dropped files.
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let at = ctx.input(|i| i.pointer.latest_pos());
+        // The rack records where its rows were drawn; only use them if it was drawn in the last couple of frames.
+        let now = ctx.cumulative_pass_nr();
+        let fresh = |f: u64| now.saturating_sub(f) <= 2;
+        let rack_rows: Vec<(dragon_engine::model::Id, egui::Rect)> =
+            ctx.data(|d| d.get_temp::<(u64, Vec<(dragon_engine::model::Id, egui::Rect)>)>(egui::Id::new("rack.rows"))).filter(|(f, _)| fresh(*f)).map(|(_, r)| r).unwrap_or_default();
+        let rack_zone: Option<egui::Rect> = ctx.data(|d| d.get_temp::<(u64, egui::Rect)>(egui::Id::new("rack.dropzone"))).filter(|(f, _)| fresh(*f)).map(|(_, r)| r);
         for f in dropped {
             let ext = f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+            // Audio dropped on a channel-rack row replaces that channel's sound; on the rack's drop zone it
+            // adds a sampler.
+            if dragon_engine::edit::is_audio_file(&f) {
+                if let Some(pos) = at {
+                    if let Some((cid, _)) = rack_rows.iter().find(|(_, r)| r.contains(pos)) {
+                        self.st.replace_sample(*cid, &f);
+                        continue;
+                    }
+                    if rack_zone.is_some_and(|r| r.contains(pos)) {
+                        self.st.add_sampler(&f);
+                        continue;
+                    }
+                }
+            }
             match ext.as_str() {
                 "dragon" => self.st.open_path(&f),
                 "mid" | "midi" => self.st.import_midi(&f),
