@@ -64,6 +64,22 @@ pub fn duplicate_clips(p: &mut Project, ids: &[Id]) -> Vec<Id> {
     out
 }
 
+/// Copies clips in place (same track and position) and returns the copies' ids in the order of `ids`
+/// (FL's Shift + drag: the copies are then dragged away, the originals stay).
+pub fn copy_clips_in_place(p: &mut Project, ids: &[Id]) -> Vec<Id> {
+    let mut out = Vec::new();
+    for want in ids {
+        let Some((tid, c)) = p.tracks.iter().find_map(|t| t.clips.iter().find(|c| c.id == *want).map(|c| (t.id, c.clone()))) else { continue };
+        let mut c = c;
+        c.id = p.next_id();
+        out.push(c.id);
+        if let Some(t) = p.track_mut(tid) {
+            t.clips.push(c);
+        }
+    }
+    out
+}
+
 /// Removes clips by id from every track.
 pub fn delete_clips(p: &mut Project, ids: &[Id]) {
     for t in &mut p.tracks {

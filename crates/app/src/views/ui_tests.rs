@@ -471,3 +471,92 @@ fn pulling_a_cable_between_mixer_strips_routes_them() {
     assert!(routed, "insert 1 now feeds insert 2: output {:?} sends {:?}", ch.output, ch.sends.len());
     assert_eq!(h.st.ui.mixer, a, "the source insert is selected");
 }
+
+fn transport(ui: &mut egui::Ui, st: &mut State) {
+    super::transport::show(ui, st);
+}
+
+/// FL-style tempo display: dragging the whole number changes whole BPM and keeps the decimals; dragging
+/// the decimals changes only the decimals. Each drag is one undo step.
+#[test]
+fn bpm_display_drags_whole_numbers_or_decimals() {
+    let mut h = Harness::new();
+    h.st.session.edit("setup", |p| p.bpm = 140.25);
+    h.idle(transport, 3);
+    let (int_r, dec_r): (Rect, Rect) = h.ctx.data(|d| d.get_temp(egui::Id::new("bpm.parts"))).expect("bpm display drawn");
+    let a = int_r.center();
+    h.drag(transport, a, a - egui::vec2(0.0, 40.0), PointerButton::Primary, Modifiers::NONE);
+    let bpm = h.st.session.project.bpm;
+    assert!((bpm - 150.25).abs() < 1e-6, "whole steps, decimals kept: {bpm}");
+    h.idle(transport, 2);
+    let (_, dec_r2): (Rect, Rect) = h.ctx.data(|d| d.get_temp(egui::Id::new("bpm.parts"))).unwrap();
+    let _ = dec_r;
+    let b = dec_r2.center();
+    h.drag(transport, b, b - egui::vec2(0.0, 20.0), PointerButton::Primary, Modifiers::NONE);
+    let bpm = h.st.session.project.bpm;
+    assert!((bpm - 150.45).abs() < 1e-6, "only the decimals moved: {bpm}");
+    // Two drags = two undo steps.
+    h.st.session.undo();
+    assert!((h.st.session.project.bpm - 150.25).abs() < 1e-6, "{}", h.st.session.project.bpm);
+}
+
+/// FL-style playlist selection: Ctrl + drag box-selects across tracks, Shift + drag on a clip clones the
+/// selection, and dragging a multi-track selection moves every clip by the same number of tracks.
+#[test]
+fn playlist_box_select_clone_and_multi_track_move() {
+    let mut h = Harness::new();
+    let pat = h.st.session.project.patterns[0].id;
+    let (t0, t1, t2) = (h.st.session.project.tracks[0].id, h.st.session.project.tracks[1].id, h.st.session.project.tracks[2].id);
+    h.st.session.edit("setup", |p| {
+        for t in &mut p.tracks {
+            t.clips.clear();
+        }
+        super::playlist::place_pattern(p, t0, pat, 0.0, 4.0);
+        super::playlist::place_pattern(p, t1, pat, 0.0, 4.0);
+    });
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let zoom = h.st.ui.playlist_zoom;
+    let sx = h.st.ui.pl_x as f32;
+    let x = |beat: f32| t.left() + (beat - sx) * zoom;
+    let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
+    // Ctrl + drag a box over both clips (it starts on a clip: still a selection, FL style).
+    h.drag(playlist, Pos2::new(x(0.5), t.top() + 8.0), Pos2::new(x(2.0), t.top() + row_h + 8.0), PointerButton::Primary, Modifiers::CTRL);
+    assert_eq!(h.st.ui.clips.len(), 2, "both clips selected");
+    let total = |h: &Harness| h.st.session.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>();
+    assert_eq!(total(&h), 2, "a selection does not move or add clips");
+    // Shift + drag clones the selection 8 beats later.
+    h.drag(playlist, Pos2::new(x(1.0), t.top() + 8.0), Pos2::new(x(9.0), t.top() + 8.0), PointerButton::Primary, Modifiers::SHIFT);
+    assert_eq!(total(&h), 4, "two copies");
+    let starts: Vec<f64> = h.st.session.project.tracks[0].clips.iter().map(|c| c.start).collect();
+    assert!(starts.contains(&0.0) && starts.contains(&8.0), "{starts:?}");
+    // Drag the copies one track down: both move (tracks 1 and 2).
+    h.drag(playlist, Pos2::new(x(9.0), t.top() + 8.0), Pos2::new(x(9.0), t.top() + row_h + 8.0), PointerButton::Primary, Modifiers::NONE);
+    let at8 = |h: &Harness, tid: Id| h.st.session.project.track(tid).unwrap().clips.iter().filter(|c| (c.start - 8.0).abs() < 1e-9).count();
+    assert_eq!((at8(&h, t0), at8(&h, t1), at8(&h, t2)), (0, 1, 1), "the selection moved down one track");
+}
+
+/// Several picker entries selected with Ctrl+click are dragged in together, one per track.
+#[test]
+fn picker_drags_several_selected_items() {
+    let mut h = Harness::new();
+    let a = h.st.session.project.patterns[0].id;
+    let b = h.st.session.edit("setup", |p| {
+        for t in &mut p.tracks {
+            t.clips.clear();
+        }
+        p.add_pattern()
+    });
+    h.idle(playlist, 3);
+    let rows: Vec<(String, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("pl.picker.rows"))).unwrap();
+    let row = |k: String| rows.iter().find(|r| r.0 == k).unwrap().1;
+    h.click(playlist, row(format!("pattern:{a}")).center(), PointerButton::Primary, Modifiers::NONE);
+    h.click(playlist, row(format!("pattern:{b}")).center(), PointerButton::Primary, Modifiers::CTRL);
+    assert_eq!(h.st.ui.picker_sel.len(), 2);
+    let t = h.rect("pl.timeline");
+    let x = t.left() + (4.1 - h.st.ui.pl_x as f32) * h.st.ui.playlist_zoom;
+    h.drag(playlist, row(format!("pattern:{a}")).center(), Pos2::new(x, t.top() + 10.0), PointerButton::Primary, Modifiers::NONE);
+    let tracks = &h.st.session.project.tracks;
+    let has = |i: usize, pat: Id| tracks[i].clips.iter().any(|c| matches!(c.kind, ClipKind::Pattern { pattern } if pattern == pat) && (c.start - 4.0).abs() < 1e-9);
+    assert!(has(0, a) && has(1, b), "one per track: {:?}", tracks.iter().map(|t| t.clips.len()).collect::<Vec<_>>());
+}

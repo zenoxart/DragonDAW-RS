@@ -99,6 +99,8 @@ pub struct UiState {
     pub pl_vzoom: f32,
     /// The picker panel (patterns, audio and automation clips) left of the playlist is shown.
     pub pl_picker: bool,
+    /// Entries selected in the picker (dragged together).
+    pub picker_sel: Vec<crate::views::picker::PickItem>,
     /// Running zoom animations: target (zoom, x, vertical zoom / key height, y).
     pub pl_anim: Option<crate::views::nav::ViewTarget>,
     pub pr_anim: Option<crate::views::nav::ViewTarget>,
@@ -158,6 +160,7 @@ impl UiState {
             pr_y: 60.0 * 14.0,
             pl_vzoom: 1.0,
             pl_picker: true,
+            picker_sel: Vec::new(),
             pl_anim: None,
             pr_anim: None,
             pl_drag: None,

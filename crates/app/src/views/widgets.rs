@@ -3,7 +3,7 @@
 use crate::state::State;
 use crate::theme;
 use dragon_engine::model::Project;
-use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, Vec2};
 
 /// Applies `f` as part of a continuous gesture when `r` changed; commits the undo step when the
 /// interaction ends (drag released, or a click / typed value).
@@ -14,6 +14,145 @@ pub fn apply(st: &mut State, r: &Response, label: &str, f: impl FnOnce(&mut Proj
     if st.session.in_gesture() && !r.dragged() && (r.drag_stopped() || r.changed() || r.lost_focus()) {
         st.session.end_gesture();
     }
+}
+
+/// Tempo examples offered on right-click of the BPM display, with the styles they are typical of.
+pub const BPM_PRESETS: &[(f64, &str)] = &[
+    (70.0, "Hip-hop / trap half-time, ballad"),
+    (75.0, "Lo-fi, boom bap"),
+    (80.0, "Reggaeton (slow), R&B"),
+    (85.0, "Boom bap, soul"),
+    (87.5, "Dubstep / drum & bass half-time"),
+    (90.0, "Hip-hop, reggaeton"),
+    (95.0, "Hip-hop, dancehall"),
+    (100.0, "Pop, moombahton"),
+    (105.0, "Pop, funk"),
+    (110.0, "Pop, disco (slow)"),
+    (115.0, "Nu-disco, pop"),
+    (120.0, "House (deep), pop"),
+    (124.0, "House, tech house"),
+    (126.0, "Tech house"),
+    (128.0, "House, EDM"),
+    (130.0, "Techno"),
+    (135.0, "Techno, hard dance"),
+    (140.0, "Trap, dubstep, grime, drill"),
+    (145.0, "Trap, jersey club"),
+    (150.0, "Hardstyle (slow), footwork"),
+    (155.0, "Hardstyle, trance"),
+    (160.0, "Footwork, juke, drum & bass half-speed"),
+];
+
+/// The FL Studio-style tempo display. Dragging up/down on the whole number changes the tempo in whole
+/// BPM (the decimals stay); dragging on the decimals changes only the decimals (0.01 per pixel, Shift
+/// 0.001). The wheel works the same on either part, double-click types a value, right-click offers
+/// tempo examples from 70 to 160 BPM. Returns the response (changed while dragging) and the value.
+pub fn bpm_display(ui: &mut Ui, bpm: &mut f64) -> Response {
+    let id = ui.id().with("bpm.display");
+    let editing: Option<String> = ui.data(|d| d.get_temp(id.with("edit")));
+    if let Some(mut text) = editing {
+        let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(78.0).font(egui::TextStyle::Monospace));
+        r.request_focus();
+        let done = ui.input(|i| i.key_pressed(egui::Key::Enter)) || r.lost_focus();
+        let mut r = r;
+        if done {
+            if let Ok(v) = text.trim().replace(',', ".").parse::<f64>() {
+                *bpm = v.clamp(10.0, 522.0);
+                r.mark_changed();
+            }
+            ui.data_mut(|d| d.remove::<String>(id.with("edit")));
+        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ui.data_mut(|d| d.remove::<String>(id.with("edit")));
+        } else {
+            ui.data_mut(|d| d.insert_temp(id.with("edit"), text));
+        }
+        return r;
+    }
+    let whole = bpm.trunc();
+    let int_txt = format!("{}", whole as i64);
+    let dec_txt = format!(".{:03}", ((*bpm - whole) * 1000.0).round().min(999.0) as i64);
+    let font = egui::FontId::monospace(17.0);
+    let gi = ui.painter().layout_no_wrap(int_txt.clone(), font.clone(), theme::ACCENT);
+    let gd = ui.painter().layout_no_wrap(dec_txt.clone(), egui::FontId::monospace(13.0), theme::ACCENT);
+    let pad = 6.0;
+    let w = gi.size().x + gd.size().x + pad * 2.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w.max(70.0), 30.0), Sense::hover());
+    let mut changed = false;
+    let int_rect = Rect::from_min_max(rect.min, Pos2::new(rect.left() + pad + gi.size().x, rect.bottom()));
+    let dec_rect = Rect::from_min_max(Pos2::new(int_rect.right(), rect.top()), rect.max);
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("bpm.parts"), (int_rect, dec_rect)));
+    let ri = ui.interact(int_rect, id.with("int"), Sense::click_and_drag());
+    let rd = ui.interact(dec_rect, id.with("dec"), Sense::click_and_drag());
+    let fine = ui.input(|i| i.modifiers.shift);
+    let start_key = id.with("start");
+    for (r, is_int) in [(&ri, true), (&rd, false)] {
+        if r.drag_started() {
+            ui.data_mut(|d| d.insert_temp(start_key, *bpm));
+        }
+        if r.dragged() {
+            let start: f64 = ui.data(|d| d.get_temp(start_key)).unwrap_or(*bpm);
+            let dy = -(r.interact_pointer_pos().unwrap_or_default().y - ui.input(|i| i.pointer.press_origin()).unwrap_or_default().y) as f64;
+            let v = if is_int {
+                // Whole BPM per 4 px; the decimals stay.
+                start + (dy / 4.0).round()
+            } else {
+                // Only the decimals change; the whole number stays.
+                let step = if fine { 0.001 } else { 0.01 };
+                let frac = ((start - start.trunc()) + (dy * step)).clamp(0.0, 0.999);
+                start.trunc() + (frac * 1000.0).round() / 1000.0
+            };
+            let v = v.clamp(10.0, 522.0);
+            if (v - *bpm).abs() > 1e-9 {
+                *bpm = v;
+                changed = true;
+            }
+        }
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            let s = ui.input(|i| i.raw_scroll_delta.y);
+            if s != 0.0 {
+                let d = if is_int { s.signum() as f64 } else if fine { 0.001 * s.signum() as f64 } else { 0.01 * s.signum() as f64 };
+                let v = if is_int { (*bpm + d).clamp(10.0, 522.0) } else { bpm.trunc() + ((*bpm - bpm.trunc()) + d).clamp(0.0, 0.999) };
+                *bpm = (v * 1000.0).round() / 1000.0;
+                changed = true;
+            }
+        }
+        if r.double_clicked() {
+            ui.data_mut(|d| d.insert_temp(id.with("edit"), format!("{:.3}", *bpm)));
+        }
+    }
+    // Drawing.
+    let active_int = ri.hovered() || ri.dragged();
+    let active_dec = rd.hovered() || rd.dragged();
+    let p = ui.painter();
+    p.rect_filled(rect, 4.0, theme::BG);
+    if active_int {
+        p.rect_filled(int_rect.shrink(2.0), 3.0, theme::ACCENT.gamma_multiply(0.15));
+    }
+    if active_dec {
+        p.rect_filled(dec_rect.shrink(2.0), 3.0, theme::ACCENT.gamma_multiply(0.15));
+    }
+    let base_y = rect.center().y + gi.size().y / 2.0 - 1.0;
+    p.galley(Pos2::new(int_rect.left() + pad, base_y - gi.size().y), gi, theme::ACCENT);
+    p.galley(Pos2::new(dec_rect.left(), base_y - gd.size().y - 1.0), gd, theme::ACCENT.gamma_multiply(0.8));
+    let tip = "Tempo – drag the whole number for whole BPM, the decimals for fine steps (Shift = finer) · wheel · double-click to type · right-click for tempo examples";
+    let mut resp = ri.union(rd);
+    resp = resp.on_hover_text(tip);
+    resp.context_menu(|ui| {
+        ui.label(RichText::new("TEMPO EXAMPLES").small().color(theme::TEXT_DIM));
+        for (v, style) in BPM_PRESETS {
+            let txt = if v.fract() == 0.0 { format!("{v:.0} BPM") } else { format!("{v} BPM") };
+            let b = ui.add(egui::Button::new(RichText::new(txt).monospace()).shortcut_text(*style).selected((*bpm - v).abs() < 1e-6));
+            if b.clicked() {
+                *bpm = *v;
+                changed = true;
+                ui.close_menu();
+            }
+        }
+    });
+    if changed {
+        resp.mark_changed();
+    }
+    resp
 }
 
 /// A rotary knob. Drag up/down (Shift = fine), double-click resets, scroll adjusts.

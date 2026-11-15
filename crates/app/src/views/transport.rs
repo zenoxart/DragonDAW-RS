@@ -52,9 +52,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         });
 
         // Tempo.
-        let mut bpm = st.session.project.bpm as f32;
-        let r = ui.add(egui::DragValue::new(&mut bpm).range(20.0..=400.0).speed(0.1).fixed_decimals(2).suffix(" BPM"));
-        widgets::apply(st, &r, "Tempo", |p| p.bpm = bpm as f64);
+        let mut bpm = st.session.project.bpm;
+        let r = widgets::bpm_display(ui, &mut bpm);
+        widgets::apply(st, &r, "Tempo", |p| p.bpm = bpm);
+        ui.label(RichText::new("BPM").small().color(theme::TEXT_DIM));
         if ui.small_button("TAP").on_hover_text("Tap tempo (T)").clicked() {
             st.ctx.run("dragon.transport.tap", serde_json::Value::Null);
         }

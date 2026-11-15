@@ -23,6 +23,8 @@ pub enum DragKind {
     Comp { take: Id, from: f64 },
     Loop { from: f64 },
     Punch { from: f64 },
+    /// Box selection (Ctrl + drag, or a drag on empty space with the Select tool), from a beat and a y.
+    Select { from: f64, y: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -329,23 +331,29 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 
     // Drop from the picker: patterns, audio files and automation clips.
     let dnd_pos = ui.ctx().pointer_latest_pos();
-    if let Some(item) = resp.dnd_hover_payload::<super::picker::PickItem>() {
+    if let Some(items) = resp.dnd_hover_payload::<Vec<super::picker::PickItem>>() {
         if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
             let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
-            let len = super::picker::length(st, &item);
-            let (y, h) = row_at(pos.y).map(|i| (rows[i].y, rows[i].h)).unwrap_or((pos.y - 12.0, 24.0));
-            let ghost = Rect::from_min_size(Pos2::new(x_of(beat, sx), y + 1.0), Vec2::new(((len * zoom) as f32).max(8.0), h - 2.0));
             let p = ui.painter_at(timeline);
-            p.rect_filled(ghost, 3.0, theme::ACCENT.gamma_multiply(0.25));
-            p.rect_stroke(ghost, 3.0, Stroke::new(1.5_f32, theme::ACCENT), egui::StrokeKind::Inside);
+            let first = row_at(pos.y);
+            for (k, item) in items.iter().enumerate() {
+                let len = super::picker::length(st, item);
+                let (y, h) = first.and_then(|i| rows.get(i + k)).map(|r| (r.y, r.h)).unwrap_or((pos.y - 12.0 + k as f32 * 26.0, 24.0));
+                let ghost = Rect::from_min_size(Pos2::new(x_of(beat, sx), y + 1.0), Vec2::new(((len * zoom) as f32).max(8.0), h - 2.0));
+                p.rect_filled(ghost, 3.0, theme::ACCENT.gamma_multiply(0.25));
+                p.rect_stroke(ghost, 3.0, Stroke::new(1.5_f32, theme::ACCENT), egui::StrokeKind::Inside);
+            }
+            if items.len() > 1 {
+                p.text(pos + Vec2::new(12.0, -14.0), egui::Align2::LEFT_BOTTOM, format!("{} items", items.len()), egui::FontId::proportional(11.0), theme::TEXT);
+            }
             ui.ctx().request_repaint();
         }
     }
-    if let Some(item) = resp.dnd_release_payload::<super::picker::PickItem>() {
+    if let Some(items) = resp.dnd_release_payload::<Vec<super::picker::PickItem>>() {
         if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
             let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
             let track = row_at(pos.y).map(|i| rows[i].track);
-            super::picker::place(st, &item, track, beat);
+            super::picker::place_many(st, &items, track, beat);
         }
     }
     // Drop from the browser.
@@ -358,7 +366,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
 
     if resp.drag_started_by(egui::PointerButton::Primary) && st.ui.pl_drag.is_none() {
-        if let Some(pos) = resp.interact_pointer_pos().filter(|p| timeline.contains(*p)) {
+        // Where the button went down (the drag only starts after a few pixels of movement).
+        if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).filter(|p| timeline.contains(*p)) {
             if let Some((track, take)) = take_at(pos.y) {
                 st.ui.pl_drag = Some(Drag { clip: 0, track, kind: DragKind::Comp { take, from: snap(beat_of(pos.x, sx), grid) } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
@@ -371,14 +380,29 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     let start = st.session.project.track(tid).and_then(|t| t.clips.iter().find(|c| c.id == cid)).map(|c| c.start).unwrap_or(0.0);
                     DragKind::Move { grab: beat_of(pos.x, sx) - start, track_offset: 0 }
                 };
-                if !st.ui.clips.contains(&cid) {
-                    st.ui.clips = vec![cid];
+                let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.shift));
+                if ctrl && !shift {
+                    // FL: Ctrl + drag always selects, even when it starts on a clip.
+                    st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Select { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y } });
+                } else {
+                    if !st.ui.clips.contains(&cid) {
+                        st.ui.clips = vec![cid];
+                    }
+                    let (mut cid, mut tid) = (cid, tid);
+                    if shift && matches!(kind, DragKind::Move { .. }) {
+                        // FL: Shift + drag a clip drags copies of the selection; the originals stay.
+                        let ids = st.ui.clips.clone();
+                        let copies = st.session.edit("Clone clips", |p| dragon_engine::edit::copy_clips_in_place(p, &ids));
+                        if let Some(k) = ids.iter().position(|x| *x == cid) {
+                            cid = copies[k];
+                            tid = st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == cid)).map(|t| t.id).unwrap_or(tid);
+                        }
+                        st.ui.clips = copies;
+                    }
+                    st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind });
                 }
-                if ui.input(|i| i.modifiers.ctrl) && matches!(kind, DragKind::Move { .. }) {
-                    let ids = st.ui.clips.clone();
-                    st.ui.clips = st.session.edit("Duplicate clips", |p| dragon_engine::edit::duplicate_clips(p, &ids));
-                }
-                st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind });
+            } else if ui.input(|i| i.modifiers.ctrl) || tool == Tool::Select {
+                st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Select { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y } });
             } else if tool == Tool::Paint {
                 st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Paint });
             }
@@ -402,20 +426,28 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                             c.start += delta;
                         }
                     }
-                    // Moving one clip to another track.
-                    if let (Some(to), 1) = (target_row, ids.len()) {
-                        if to != d.track {
-                            let clip = p.track_mut(d.track).and_then(|t| t.clips.iter().position(|c| c.id == d.clip).map(|i| t.clips.remove(i)));
-                            if let (Some(c), Some(t)) = (clip, p.track_mut(to)) {
-                                t.clips.push(c);
+                    // Moving to other tracks: every selected clip moves by the same number of tracks (when
+                    // all of them still land on a track).
+                    if let Some(to) = target_row {
+                        let idx = |p: &Project, tid: Id| p.tracks.iter().position(|t| t.id == tid);
+                        let (Some(from_i), Some(to_i)) = (idx(p, d.track), idx(p, to)) else { return };
+                        let delta = to_i as i64 - from_i as i64;
+                        if delta != 0 {
+                            let moves: Vec<(usize, Id)> = p.tracks.iter().enumerate().flat_map(|(ti, t)| t.clips.iter().filter(|c| ids.contains(&c.id)).map(move |c| (ti, c.id))).collect();
+                            let n = p.tracks.len() as i64;
+                            if moves.iter().all(|(ti, _)| (0..n).contains(&(*ti as i64 + delta))) {
+                                for (ti, cid) in moves {
+                                    let k = p.tracks[ti].clips.iter().position(|c| c.id == cid).unwrap();
+                                    let c = p.tracks[ti].clips.remove(k);
+                                    p.tracks[(ti as i64 + delta) as usize].clips.push(c);
+                                }
                             }
                         }
                     }
                 });
-                if let (Some(to), 1) = (target_row, st.ui.clips.len()) {
-                    if let Some(dr) = &mut st.ui.pl_drag {
-                        dr.track = to;
-                    }
+                let anchor_track = st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == d.clip)).map(|t| t.id);
+                if let (Some(dr), Some(t)) = (&mut st.ui.pl_drag, anchor_track) {
+                    dr.track = t;
                 }
             }
             DragKind::ResizeRight => {
@@ -471,6 +503,25 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     });
                 }
             }
+            DragKind::Select { from, y } => {
+                let y0 = y - st.ui.pl_y;
+                let sel = Rect::from_two_pos(Pos2::new(x_of(from, sx), y0), pos);
+                painter.rect_filled(sel, 2.0, theme::ACCENT.gamma_multiply(0.12));
+                painter.rect_stroke(sel, 2.0, Stroke::new(1.0_f32, theme::ACCENT), egui::StrokeKind::Inside);
+                let add = ui.input(|i| i.modifiers.shift);
+                let hits: Vec<Id> = clip_rects.iter().filter(|(_, _, r)| r.intersects(sel)).map(|(_, c, _)| *c).collect();
+                let base: Vec<Id> = if add { ui.data(|dd| dd.get_temp(egui::Id::new("pl.sel.base"))).unwrap_or_else(|| st.ui.clips.clone()) } else { Vec::new() };
+                if add {
+                    ui.data_mut(|dd| dd.insert_temp(egui::Id::new("pl.sel.base"), base.clone()));
+                }
+                let mut all = base;
+                for h in hits {
+                    if !all.contains(&h) {
+                        all.push(h);
+                    }
+                }
+                st.ui.clips = all;
+            }
             DragKind::Comp { take, from } => {
                 let b = snap(beat, grid);
                 let x0 = x_of(from.min(b), sx);
@@ -489,6 +540,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             }
             st.ui.pl_drag = None;
+            ui.data_mut(|dd| dd.remove::<Vec<Id>>(egui::Id::new("pl.sel.base")));
             st.session.end_gesture();
         }
     }
@@ -518,7 +570,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         st.session.edit("Slice clip", |p| dragon_engine::edit::split_clip(p, tid, cid, b));
                     }
                     (_, Some((_, cid, _))) => {
-                        if ui.input(|i| i.modifiers.shift) {
+                        if ui.input(|i| i.modifiers.shift || i.modifiers.ctrl) {
                             if let Some(i) = st.ui.clips.iter().position(|c| *c == cid) {
                                 st.ui.clips.remove(i);
                             } else {
@@ -825,7 +877,7 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
         ui.toggle_value(&mut st.ui.pl_picker, "Picker").on_hover_text("Show the patterns, audio and automation clips to drag into the playlist");
         ui.separator();
         ui.label(
-            RichText::new("Ctrl+right-drag zoom to area · Ctrl+right-click zoom out · Ctrl+wheel zoom · Alt+wheel track height · middle-drag pan · drag ruler = loop · right-click deletes").small().color(theme::TEXT_DIM),
+            RichText::new("Ctrl+drag select · Shift+drag clip = clone · Ctrl+B duplicate · Ctrl+right-drag zoom to area · Ctrl+wheel zoom · middle-drag pan · drag ruler = loop · right-click deletes").small().color(theme::TEXT_DIM),
         );
     });
 }

@@ -60,15 +60,45 @@ fn uses(p: &Project, item: &PickItem) -> usize {
         .count()
 }
 
+/// Click handling shared by the entries: Ctrl+click toggles, Shift+click selects a range in `order`,
+/// a plain click selects only this entry.
+fn select(ui: &Ui, st: &mut State, order: &[PickItem], item: &PickItem) {
+    let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift));
+    let sel = &mut st.ui.picker_sel;
+    if ctrl {
+        if let Some(k) = sel.iter().position(|x| x == item) {
+            sel.remove(k);
+        } else {
+            sel.push(item.clone());
+        }
+    } else if shift {
+        let anchor = sel.last().and_then(|a| order.iter().position(|x| x == a)).unwrap_or(0);
+        let at = order.iter().position(|x| x == item).unwrap_or(0);
+        let (a, b) = (anchor.min(at), anchor.max(at));
+        for x in &order[a..=b] {
+            if !sel.contains(x) {
+                sel.push(x.clone());
+            }
+        }
+    } else {
+        *sel = vec![item.clone()];
+    }
+}
+
 pub fn show(ui: &mut Ui, st: &mut State) {
     let rect = ui.max_rect();
+    // Every listed entry in display order (for Shift-range selection); forget entries that are gone.
+    let mut order: Vec<PickItem> = st.session.project.patterns.iter().map(|p| PickItem::Pattern(p.id)).collect();
+    order.extend(audio_files(&st.session.project).into_iter().map(PickItem::Audio));
+    order.extend(automation_lanes(&st.session.project).into_iter().map(|(id, _)| PickItem::Automation(id)));
+    st.ui.picker_sel.retain(|x| order.contains(x));
     ui.painter().rect_filled(rect, 0.0, theme::PANEL);
     ui.data_mut(|d| d.insert_temp(egui::Id::new("pl.picker"), rect));
     let mut rows: Vec<(String, Rect)> = Vec::new();
     egui::ScrollArea::vertical().id_salt("pl.picker.scroll").auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
         ui.add_space(4.0);
-        ui.label(RichText::new("Drag onto a track").small().color(theme::TEXT_DIM));
+        ui.label(RichText::new("Drag onto a track · Ctrl/Shift+click selects several").small().color(theme::TEXT_DIM));
         // ----- patterns
         section(ui, "Patterns", st.session.project.patterns.len());
         let pats: Vec<(Id, String, Rgb, usize)> =
@@ -76,9 +106,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         for (id, name, color, notes) in pats {
             let item = PickItem::Pattern(id);
             let n = uses(&st.session.project, &item);
-            let (resp, r) = entry(ui, &item, &name, theme::rgb(color), "♫", n, st.ui.pattern == id, if notes == 0 { "empty" } else { "" });
+            let (resp, r) = entry(ui, &st.ui.picker_sel, &item, &name, theme::rgb(color), "♫", n, st.ui.pattern == id, if notes == 0 { "empty" } else { "" });
             rows.push((format!("pattern:{id}"), r));
             if resp.clicked() {
+                select(ui, st, &order, &item);
                 st.ui.pattern = id;
             }
             if resp.double_clicked() {
@@ -101,8 +132,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             let item = PickItem::Audio(path.clone());
             let n = uses(&st.session.project, &item);
             let missing = if path.exists() { "" } else { "missing" };
-            let (resp, r) = entry(ui, &item, &name, theme::ACCENT_2, "🔊", n, false, missing);
+            let (resp, r) = entry(ui, &st.ui.picker_sel, &item, &name, theme::ACCENT_2, "🔊", n, false, missing);
             rows.push((format!("audio:{name}"), r));
+            if resp.clicked() {
+                select(ui, st, &order, &item);
+            }
             resp.on_hover_text(path.display().to_string());
         }
         // ----- automation
@@ -114,8 +148,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         for (id, name) in lanes {
             let item = PickItem::Automation(id);
             let n = uses(&st.session.project, &item);
-            let (resp, r) = entry(ui, &item, &name, theme::WARN, "↗", n, false, "");
+            let (resp, r) = entry(ui, &st.ui.picker_sel, &item, &name, theme::WARN, "↗", n, false, "");
             rows.push((format!("automation:{id}"), r));
+            if resp.clicked() {
+                select(ui, st, &order, &item);
+            }
             if resp.double_clicked() {
                 st.ctx.open("dragon.automation", None);
             }
@@ -142,11 +179,14 @@ fn section(ui: &mut Ui, title: &str, n: usize) {
 
 /// One draggable row: colour chip, icon, name, use counter.
 #[allow(clippy::too_many_arguments)]
-fn entry(ui: &mut Ui, item: &PickItem, name: &str, color: Color32, icon: &str, uses: usize, current: bool, note: &str) -> (egui::Response, Rect) {
+fn entry(ui: &mut Ui, sel: &[PickItem], item: &PickItem, name: &str, color: Color32, icon: &str, uses: usize, current: bool, note: &str) -> (egui::Response, Rect) {
     let id = egui::Id::new(("pl.picker.item", format!("{item:?}")));
     let w = ui.available_width() - 8.0;
+    // Dragging a selected entry drags the whole selection.
+    let payload: Vec<PickItem> = if sel.contains(item) && sel.len() > 1 { sel.to_vec() } else { vec![item.clone()] };
+    let current = current || sel.contains(item);
     let resp = ui
-        .dnd_drag_source(id, item.clone(), |ui| {
+        .dnd_drag_source(id, payload, |ui| {
             let (r, _) = ui.allocate_exact_size(Vec2::new(w, 22.0), Sense::hover());
             paint_entry(ui, r, name, color, icon, uses, current, note);
         })
@@ -216,6 +256,31 @@ pub fn place(st: &mut State, item: &PickItem, track: Option<Id>, beat: f64) -> O
             Some(cid)
         }
     }
+}
+
+/// Places several picked items, one per track from `track` down (new tracks when needed), all at `beat`.
+pub fn place_many(st: &mut State, items: &[PickItem], track: Option<Id>, beat: f64) -> Vec<Id> {
+    let mut out = Vec::new();
+    let start_index = track.and_then(|t| st.session.project.tracks.iter().position(|x| x.id == t));
+    for (k, item) in items.iter().enumerate() {
+        let target = match start_index {
+            Some(i) => {
+                while st.session.project.tracks.len() <= i + k {
+                    let n = st.session.project.tracks.len() + 1;
+                    st.session.edit("Add track", |p| {
+                        p.add_track(&format!("Track {n}"));
+                    });
+                }
+                Some(st.session.project.tracks[i + k].id)
+            }
+            None => None,
+        };
+        if let Some(c) = place(st, item, target, beat) {
+            out.push(c);
+        }
+    }
+    st.ui.clips = out.clone();
+    out
 }
 
 /// Length in beats the item will take in the playlist (for the drop preview).
