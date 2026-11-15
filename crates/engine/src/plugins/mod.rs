@@ -158,25 +158,74 @@ pub(crate) fn library(path: &Path) -> Result<Arc<libloading::Library>> {
     Ok(lib)
 }
 
+/// Crash breadcrumb: the file names the plugin being loaded while it loads, so if a plugin takes the whole
+/// process down (a native crash cannot be caught), the next start can say which one it was.
+static BREADCRUMB: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Sets the breadcrumb file (once, at startup).
+pub fn set_breadcrumb_file(path: std::path::PathBuf) {
+    let _ = BREADCRUMB.set(path);
+}
+
+/// The plugin that was loading when the last run ended, if it did not finish (read at startup).
+pub fn take_breadcrumb() -> Option<String> {
+    let p = BREADCRUMB.get()?;
+    let s = std::fs::read_to_string(p).ok();
+    let _ = std::fs::remove_file(p);
+    s.filter(|x| !x.trim().is_empty())
+}
+
+fn breadcrumb<T>(p: &PluginRef, what: &str, f: impl FnOnce() -> T) -> T {
+    let file = BREADCRUMB.get();
+    if let Some(file) = file {
+        let _ = std::fs::write(file, format!("{} ({}, {what})\n{}\n", p.name, if p.state.is_empty() { "no saved state" } else { "with saved state" }, p.path.display()));
+    }
+    let r = f();
+    if let Some(file) = file {
+        let _ = std::fs::remove_file(file);
+    }
+    r
+}
+
 /// Creates plugin instances for the renderer.
 #[derive(Default)]
 pub struct Host;
 
 impl PluginFactory for Host {
     fn create_effect(&mut self, p: &PluginRef, rate: f32, max_block: usize) -> Option<Box<dyn Effect>> {
-        let r: Result<Box<dyn Effect>> = match p.format {
-            PluginFormat::Clap => clap::ClapPlugin::load(p, rate, max_block, false).map(|x| Box::new(x) as Box<dyn Effect>),
-            PluginFormat::Vst3 => vst3::Vst3Plugin::load(p, rate, max_block, false).map(|x| Box::new(x) as Box<dyn Effect>),
-        };
-        r.map_err(|e| tracing::error!("plugin {}: {e}", p.name)).ok()
+        breadcrumb(p, "effect", || {
+            let r: Result<Box<dyn Effect>> = match p.format {
+                PluginFormat::Clap => clap::ClapPlugin::load(p, rate, max_block, false).map(|x| Box::new(x) as Box<dyn Effect>),
+                PluginFormat::Vst3 => vst3::Vst3Plugin::load(p, rate, max_block, false).map(|x| Box::new(x) as Box<dyn Effect>),
+            };
+            r.map_err(|e| tracing::error!("plugin {}: {e}", p.name)).ok()
+        })
     }
 
     fn create_instrument(&mut self, p: &PluginRef, rate: f32, max_block: usize) -> Option<Box<dyn InstrumentVoice>> {
-        let r: Result<Box<dyn InstrumentVoice>> = match p.format {
-            PluginFormat::Clap => clap::ClapPlugin::load(p, rate, max_block, true).map(|x| Box::new(x) as Box<dyn InstrumentVoice>),
-            PluginFormat::Vst3 => vst3::Vst3Plugin::load(p, rate, max_block, true).map(|x| Box::new(x) as Box<dyn InstrumentVoice>),
-        };
-        r.map_err(|e| tracing::error!("plugin {}: {e}", p.name)).ok()
+        breadcrumb(p, "instrument", || {
+            let r: Result<Box<dyn InstrumentVoice>> = match p.format {
+                PluginFormat::Clap => clap::ClapPlugin::load(p, rate, max_block, true).map(|x| Box::new(x) as Box<dyn InstrumentVoice>),
+                PluginFormat::Vst3 => vst3::Vst3Plugin::load(p, rate, max_block, true).map(|x| Box::new(x) as Box<dyn InstrumentVoice>),
+            };
+            r.map_err(|e| tracing::error!("plugin {}: {e}", p.name)).ok()
+        })
+    }
+}
+
+/// Safe-mode host: loads plugins but ignores their saved state (a corrupt state blob is the usual reason a
+/// plugin crashes on load); the plugins start at their defaults.
+#[derive(Default)]
+pub struct HostWithoutStates;
+
+impl PluginFactory for HostWithoutStates {
+    fn create_effect(&mut self, p: &PluginRef, rate: f32, max_block: usize) -> Option<Box<dyn Effect>> {
+        let p = PluginRef { state: Vec::new(), ..p.clone() };
+        Host.create_effect(&p, rate, max_block)
+    }
+    fn create_instrument(&mut self, p: &PluginRef, rate: f32, max_block: usize) -> Option<Box<dyn InstrumentVoice>> {
+        let p = PluginRef { state: Vec::new(), ..p.clone() };
+        Host.create_instrument(&p, rate, max_block)
     }
 }
 

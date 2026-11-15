@@ -304,6 +304,12 @@ pub struct State {
     pub reference: crate::views::reference::ReferenceState,
     /// Dragon Quests (gamification).
     pub quests: crate::views::quests::Quests,
+    /// What the last run was doing when it crashed (shown once at startup).
+    pub crash: Option<crate::crash::CrashInfo>,
+    /// The open project runs in safe mode.
+    pub safe_mode: Option<crate::crash::SafeMode>,
+    /// Frames left until a just-opened project counts as opened fine (its crash marker is cleared then).
+    pub open_guard: Option<u32>,
 }
 
 /// Mackie Control state: bank offset, the output connection and what was last sent (feedback only on change).
@@ -422,6 +428,9 @@ impl State {
             mcu: Mcu::default(),
             reference: Default::default(),
             quests,
+            crash: None,
+            safe_mode: None,
+            open_guard: None,
         };
         st.open_midi();
         st.session.force_recompile();
@@ -597,16 +606,37 @@ impl State {
     }
 
     pub fn open_path(&mut self, path: &Path) {
+        self.open_path_mode(path, None);
+    }
+
+    /// Opens a project, optionally in safe mode. While it opens (until it has run for a moment) a marker
+    /// names it, so if it crashes the app the next start offers safe mode.
+    pub fn open_path_mode(&mut self, path: &Path, safe: Option<crate::crash::SafeMode>) {
+        use crate::crash::SafeMode;
+        crate::crash::mark(&self.ctx.paths.local, "opening", path);
         match project_io::load(path) {
             Ok(p) => {
                 let missing = project_io::missing_files(&p);
-                self.replace_session(Session::new(p, Some(path.to_path_buf())));
+                let pool = match safe {
+                    None => dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::Host)),
+                    Some(SafeMode::NoPlugins) => dragon_engine::render::Pool::new(),
+                    Some(SafeMode::NoPluginStates) => dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::HostWithoutStates)),
+                };
+                self.replace_session(Session::with_pool(p, Some(path.to_path_buf()), pool));
+                self.safe_mode = safe;
+                self.open_guard = Some(90);
+                if let Some(m) = safe {
+                    self.toast(format!("Safe mode: {} – save, fix or remove the plugin that crashed, then open the project normally", m.label()), Severity::Warning);
+                }
                 self.add_recent(path);
                 if !missing.is_empty() {
                     self.toast(format!("{} audio file(s) are missing – see Project › Missing files", missing.len()), Severity::Warning);
                 }
             }
-            Err(e) => self.toast(format!("Cannot open {}: {e}", path.display()), Severity::Error),
+            Err(e) => {
+                crate::crash::clear(&self.ctx.paths.local, "opening");
+                self.toast(format!("Cannot open {}: {e}", path.display()), Severity::Error)
+            }
         }
     }
 

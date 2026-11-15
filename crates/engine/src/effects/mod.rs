@@ -404,6 +404,49 @@ pub fn value(def: &EffectDef, params: &BTreeMap<String, f32>, id: &str) -> f32 {
 mod tests {
     use super::*;
 
+    /// Crash hunt: every stock effect at every common sample rate, with each parameter at its minimum,
+    /// maximum and middle (one at a time and all together), with odd block sizes, silence and loud
+    /// noise, sidechain on and off – it must never panic or put out NaN / infinity.
+    #[test]
+    fn no_effect_panics_or_blows_up() {
+        let mut rng = crate::dsp::Rng::new(11);
+        let loud: Vec<f32> = (0..6000).map(|_| rng.bipolar() * 4.0).collect();
+        for rate in [22050.0f32, 44100.0, 48000.0, 88200.0, 96000.0, 192000.0] {
+            for def in registry() {
+                let mut sets: Vec<Vec<(&str, f32)>> = vec![vec![]];
+                for p in def.params {
+                    sets.push(vec![(p.id, p.min)]);
+                    sets.push(vec![(p.id, p.max)]);
+                }
+                sets.push(def.params.iter().map(|p| (p.id, p.min)).collect());
+                sets.push(def.params.iter().map(|p| (p.id, p.max)).collect());
+                sets.push(def.params.iter().map(|p| (p.id, (p.min + p.max) * 0.5)).collect());
+                for set in &sets {
+                    let mut e = create(def.id, rate, &def.defaults()).unwrap();
+                    for (k, v) in set {
+                        e.set_param(k, *v);
+                    }
+                    let _ = e.latency();
+                    let (mut l, mut r) = (loud.clone(), loud.clone());
+                    let sc = (loud.clone(), loud.clone());
+                    let mut pos = 0;
+                    for (k, n) in [1usize, 7, 64, 2048, 3000].iter().cycle().enumerate() {
+                        if pos >= l.len() {
+                            break;
+                        }
+                        let end = (pos + n).min(l.len());
+                        let s = if k % 2 == 0 { Some((&sc.0[pos..end], &sc.1[pos..end])) } else { None };
+                        e.process(&mut l[pos..end], &mut r[pos..end], s);
+                        pos = end;
+                    }
+                    let bad = l.iter().chain(r.iter()).any(|x| !x.is_finite());
+                    assert!(!bad, "{} at {rate} Hz with {set:?}: NaN / inf", def.id);
+                    let _ = e.telemetry();
+                }
+            }
+        }
+    }
+
     /// Every stock effect created with its default parameters behaves exactly like the bare effect with
     /// every default set explicitly (the smoothing wrapper must not skip defaults the effect's constructor
     /// does not start at – that left the EQ's default bands switched off).

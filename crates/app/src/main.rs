@@ -9,6 +9,7 @@
 mod app;
 mod audio;
 mod commands;
+mod crash;
 mod gif_anim;
 mod session;
 mod splash;
@@ -43,8 +44,13 @@ fn icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,eframe=warn".into())).init();
-    let open = std::env::args().nth(1).map(std::path::PathBuf::from);
+    // `dragon-daw [--safe] [project.dragon]` – `--safe` opens the project with third-party plugins off.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let safe_flag = args.iter().any(|a| a == "--safe");
+    let open = args.iter().find(|a| !a.starts_with("--")).map(std::path::PathBuf::from);
     let ctx = AppContext::new("en");
+    crash::install(&ctx.paths.local);
+    let crashed = crash::take(&ctx.paths.local);
     let settings: state::Settings = ctx.paths.load_json("settings.json").unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Dragon DAW").with_inner_size([1440.0, 900.0]).with_min_inner_size([720.0, 480.0]).with_icon(icon()).with_app_id("dragon-daw").with_drag_and_drop(true),
@@ -56,9 +62,13 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut st = state::State::new(ctx, settings);
-            if let Some(p) = open {
-                st.open_path(&p);
+            match (open, &crashed) {
+                // The last run died opening this very project: ask first instead of crashing again.
+                (Some(p), Some(c)) if c.project.as_deref() == Some(p.as_path()) && !safe_flag => {}
+                (Some(p), _) => st.open_path_mode(&p, safe_flag.then_some(crash::SafeMode::NoPlugins)),
+                _ => {}
             }
+            st.crash = crashed;
             // DRAGON_OPEN_FX=<effect id> adds that stock effect to the master and opens its editor
             // (used for documentation screenshots).
             if let Ok(id) = std::env::var("DRAGON_OPEN_FX") {

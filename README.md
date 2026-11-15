@@ -175,6 +175,11 @@ cargo build --release -p dragon-cli          # the `dragon` tool (put it next to
 
 Optional: install **ffmpeg** (with `ffprobe`) for the video features.
 
+**If a project crashes the app** (usually a third-party plugin): the next start says which plugin was
+loading and offers to open the project in safe mode, with plugins off or without their saved settings.
+`dragon-daw --safe song.dragon` does the same from the command line. Crash reports go to the `Crash`
+folder in Dragon DAW's local data (`%LOCALAPPDATA%\DragonDAW\Crash` on Windows).
+
 When you press **Space**, the starter project plays a beat. Some useful keys:
 
 | Key | Action | Key | Action |

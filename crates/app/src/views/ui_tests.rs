@@ -1157,3 +1157,31 @@ fn ctrl_x_deletes_the_whole_selection() {
     let left: Vec<Id> = h.st.session.project.channels.iter().map(|c| c.id).collect();
     assert!(!left.contains(&chans[0]) && !left.contains(&chans[2]) && left.contains(&chans[1]));
 }
+
+/// Safe mode after a crash: the project opens without loading its third-party plugins, keeps their slots
+/// (and saved state) untouched, and saving it keeps them for a normal open later.
+#[test]
+fn safe_mode_opens_without_plugins_and_keeps_them() {
+    let dir = std::env::temp_dir().join(format!("dragon-safe-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("song.dragon");
+    let mut h = Harness::new();
+    h.st.ctx.paths.local = dir.join("local");
+    let m = h.st.session.project.mixer.master.id;
+    let iid = h.st.session.edit("add", |p| {
+        let iid = p.next_id();
+        let plugin = PluginRef { format: PluginFormat::Vst3, path: "/plugins/Crashy.vst3".into(), id: "00".into(), name: "Crashy".into(), state: vec![1, 2, 3], params: Default::default() };
+        p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(plugin), preset: String::new(), mods: Vec::new() });
+        iid
+    });
+    dragon_engine::project_io::save(&h.st.session.project, &path, 0).unwrap();
+    h.st.open_path_mode(&path, Some(crate::crash::SafeMode::NoPlugins));
+    assert_eq!(h.st.safe_mode, Some(crate::crash::SafeMode::NoPlugins));
+    h.st.session.compile(48000.0);
+    assert!(h.st.session.pool.effect_by_id(iid).is_none(), "the plugin is not loaded");
+    let ins = h.st.session.project.mixer.get(m).unwrap().inserts.iter().find(|x| x.id == iid).unwrap().clone();
+    assert_eq!(ins.plugin.as_ref().unwrap().state, vec![1, 2, 3], "its slot and saved state stay");
+    // The open is marked until the project has run for a moment.
+    assert!(h.st.ctx.paths.local.join("Crash").join("opening.txt").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

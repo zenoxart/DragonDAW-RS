@@ -302,6 +302,17 @@ impl eframe::App for DragonApp {
         views::overlays::palette(ctx, &mut self.st);
         views::overlays::toasts(ctx, &mut self.st);
         views::overlays::recovery(ctx, &mut self.st);
+        crate::crash::window(ctx, &mut self.st);
+        // A project that has been open (compiled and running) for a moment opened fine.
+        if let Some(n) = self.st.open_guard {
+            if n == 0 {
+                crate::crash::clear(&self.st.ctx.paths.local, "opening");
+                self.st.open_guard = None;
+            } else {
+                self.st.open_guard = Some(n - 1);
+                ctx.request_repaint();
+            }
+        }
         views::overlays::about(ctx, &mut self.st);
         if let Some(mut d) = self.st.ui.export.take() {
             if d.show(ctx, &mut self.st) {

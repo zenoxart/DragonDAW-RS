@@ -70,7 +70,14 @@ impl ExportDialog {
             if let Some(rx) = &self.rx {
                 let pc = self.progress.load(Ordering::Relaxed) as f32 / 1000.0;
                 ui.add(egui::ProgressBar::new(pc).show_percentage().animate(true));
-                if let Ok(r) = rx.try_recv() {
+                let got = match rx.try_recv() {
+                    Ok(r) => Some(r),
+                    // The export thread died (a panic): report it instead of waiting forever.
+                    Err(mpsc::TryRecvError::Disconnected) => Some(Err("The export stopped unexpectedly. A crash report was written to the Crash folder in Dragon DAW's local data.".to_string())),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                };
+                if let Some(r) = got {
+                    crate::crash::clear(&st.ctx.paths.local, "exporting");
                     if r.is_ok() {
                         crate::views::quests::event(st, crate::views::quests::Event::Exported);
                     }
@@ -239,6 +246,7 @@ impl ExportDialog {
         let adm = self.adm && project.surround.is_some() && !self.opts.stems;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
+        crate::crash::mark(&st.ctx.paths.local, "exporting", &path);
         std::thread::spawn(move || {
             let r = if adm {
                 let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "mix".into());
