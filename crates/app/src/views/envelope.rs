@@ -246,6 +246,36 @@ mod tests {
         }
     }
 
+    /// FL-style envelope presets: saving one writes it to the presets folder, it comes back by name (sorted,
+    /// unsafe file-name characters replaced), saving the same name again replaces it, and the built-in
+    /// shapes are all distinct.
+    #[test]
+    fn envelope_presets_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("dragon-env-presets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut st = crate::state::State::new(redhive_client_framework::AppContext::new("en"), crate::state::Settings { show_splash: false, ..Default::default() });
+        st.ctx.paths.config = dir.clone();
+        assert!(user_presets(&st).is_empty());
+        let pluck = Envelope { enabled: true, delay: 0.0, attack: 0.002, hold: 0.0, decay: 0.15, sustain: 0.0, release: 0.05, attack_tension: 0.0, release_tension: -0.3 };
+        let pad = Envelope { attack: 0.8, sustain: 0.7, release: 1.5, ..pluck };
+        save_preset(&st, "My pluck", &pluck);
+        save_preset(&st, "a/pad?", &pad);
+        let got = user_presets(&st);
+        assert_eq!(got.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["My pluck", "a_pad_"]);
+        assert_eq!(got[0].1, pluck);
+        assert_eq!(got[1].1, pad);
+        save_preset(&st, "My pluck", &pad);
+        assert_eq!(user_presets(&st)[0].1, pad, "same name replaces");
+        let b = builtin_presets();
+        assert!(b.len() >= 5);
+        for i in 0..b.len() {
+            for j in i + 1..b.len() {
+                assert_ne!(b[i].1, b[j].1, "{} vs {}", b[i].0, b[j].0);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Dragging the decay / sustain point lowers the sustain level and lengthens the decay.
     #[test]
     fn dragging_the_sustain_point_edits_the_envelope() {
