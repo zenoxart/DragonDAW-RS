@@ -771,7 +771,8 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         "multiband" => {
             let n = h.v("bands").round() as usize + 1;
             let xs: Vec<String> = ["x1", "x2", "x3"].iter().take(n.saturating_sub(1)).map(|x| format!("{:.0} Hz", h.v(x))).collect();
-            format!("{n} bands · {} · band 2 shown", if xs.is_empty() { "full range".into() } else { xs.join(" / ") })
+            let mode = dragon_engine::effects::dynamics::MB_PHASE.get(h.v("phase").round() as usize).copied().unwrap_or("Crossover");
+            format!("{n} bands · {} · {mode} · band 2 shown", if xs.is_empty() { "full range".into() } else { xs.join(" / ") })
         }
         _ => {
             let style = dragon_engine::effects::dynamics::COMP_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Clean");

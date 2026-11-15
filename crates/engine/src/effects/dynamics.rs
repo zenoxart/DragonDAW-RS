@@ -314,20 +314,27 @@ macro_rules! mb_band {
     };
 }
 const MB_PB: usize = 11;
+/// Global parameters before the bands.
+const MB_G: usize = 7;
+/// Pro-MB's processing modes: crossover bands (linear-phase sum, all-pass compensated) or dynamic
+/// phase (each band is a dynamic shelf / bell on the full signal: no phase shift at all while a band
+/// does nothing).
+pub const MB_PHASE: &[&str] = &["Crossover", "Dynamic phase"];
 
-const fn mb_params() -> [ParamInfo; 6 + MB_BANDS * MB_PB] {
+const fn mb_params() -> [ParamInfo; MB_G + MB_BANDS * MB_PB] {
     let bands: [[ParamInfo; MB_PB]; MB_BANDS] = [mb_band!("1", -24.0), mb_band!("2", -24.0), mb_band!("3", -24.0), mb_band!("4", -24.0)];
-    let mut out = [ParamInfo::choice("bands", "Bands", &["1", "2", "3", "4"], 2.0); 6 + MB_BANDS * MB_PB];
+    let mut out = [ParamInfo::choice("bands", "Bands", &["1", "2", "3", "4"], 2.0); MB_G + MB_BANDS * MB_PB];
     out[1] = ParamInfo::log("x1", "Crossover 1", 30.0, 1000.0, 200.0, "Hz");
     out[2] = ParamInfo::log("x2", "Crossover 2", 200.0, 8000.0, 2500.0, "Hz");
     out[3] = ParamInfo::log("x3", "Crossover 3", 1000.0, 16000.0, 8000.0, "Hz");
     out[4] = ParamInfo::lin("mix", "Mix", 0.0, 100.0, 100.0, "%");
     out[5] = ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB");
+    out[6] = ParamInfo::choice("phase", "Processing", MB_PHASE, 0.0);
     let mut i = 0;
     while i < MB_BANDS {
         let mut j = 0;
         while j < MB_PB {
-            out[6 + i * MB_PB + j] = bands[i][j];
+            out[MB_G + i * MB_PB + j] = bands[i][j];
             j += 1;
         }
         i += 1;
@@ -335,7 +342,7 @@ const fn mb_params() -> [ParamInfo; 6 + MB_BANDS * MB_PB] {
     out
 }
 
-static MB_PARAMS: [ParamInfo; 6 + MB_BANDS * MB_PB] = mb_params();
+static MB_PARAMS: [ParamInfo; MB_G + MB_BANDS * MB_PB] = mb_params();
 
 #[derive(Clone, Copy, Default)]
 struct MbBand {
@@ -397,12 +404,16 @@ impl MbBand {
 
 pub struct Multiband {
     rate: f32,
-    p: [f32; 6 + MB_BANDS * MB_PB],
+    p: [f32; MB_G + MB_BANDS * MB_PB],
     x: [[Crossover; 3]; 2],
     /// All-pass compensation: band k is passed through the crossovers above it, so the bands sum flat.
     ap: [[[Crossover; 3]; MB_BANDS]; 2],
     /// The external sidechain's own band split (for per-band sidechain detection).
     xs: [[Crossover; 3]; 2],
+    /// Dynamic phase: one dynamic shelf / bell per band and channel, and the gain it is set to.
+    dynf: [[Biquad; MB_BANDS]; 2],
+    dynf_db: [f32; MB_BANDS],
+    dynf_n: usize,
     bands: [MbBand; MB_BANDS],
     /// Telemetry: per band the detector level (dB) and the gain change (dB).
     tele: [f32; MB_BANDS * 2],
@@ -423,8 +434,9 @@ impl Multiband {
                 }
             }
         }
+        self.dynf_db = [f32::NAN; MB_BANDS];
         for (b, band) in self.bands.iter_mut().enumerate() {
-            let g = |k: usize| self.p[6 + b * MB_PB + k];
+            let g = |k: usize| self.p[MB_G + b * MB_PB + k];
             band.mode = (g(0).round().max(0.0) as usize).min(MB_MODES.len() - 1);
             band.thr = g(1);
             band.range = g(2);
@@ -437,6 +449,30 @@ impl Multiband {
             band.bypass = g(9) >= 0.5;
             band.sc = g(10) >= 0.5;
         }
+    }
+}
+
+impl Multiband {
+    /// Dynamic phase: the band's filter at `db` (low shelf for the lowest band, high shelf for the
+    /// highest, a bell spanning its crossovers in between).
+    fn set_dynf(&mut self, b: usize, n: usize, db: f32) {
+        let x = [self.v("x1"), self.v("x2").max(self.v("x1") * 1.25), self.v("x3").max(self.v("x2") * 1.25)];
+        let ny = self.rate * 0.45;
+        let (kind, f, q) = if n == 1 || b >= n {
+            (BiquadKind::Peak, 1000.0, 0.01)
+        } else if b == 0 {
+            (BiquadKind::LowShelf, x[0].min(ny), 0.707)
+        } else if b == n - 1 {
+            (BiquadKind::HighShelf, x[n - 2].min(ny), 0.707)
+        } else {
+            let (lo, hi) = (x[b - 1], x[b]);
+            let fc = (lo * hi).sqrt();
+            (BiquadKind::Peak, fc.min(ny), (fc / (hi - lo)).clamp(0.3, 4.0))
+        };
+        for ch in 0..2 {
+            self.dynf[ch][b].set(kind, f, q, db, self.rate);
+        }
+        self.dynf_db[b] = db;
     }
 }
 
@@ -459,10 +495,18 @@ impl Effect for Multiband {
         let mix = self.v("mix") / 100.0;
         let out_g = db_to_gain(self.v("output"));
         let any_solo = self.bands[..n].iter().any(|b| b.solo);
+        if self.v("phase") >= 0.5 && (self.dynf_db.iter().any(|d| d.is_nan()) || n != self.dynf_n) {
+            self.dynf_n = n;
+            for b in 0..MB_BANDS {
+                self.set_dynf(b, n, 0.0);
+            }
+        }
         let coefs: Vec<(f32, f32)> = self.bands.iter().map(|b| ((-1.0 / (b.attack.max(0.05) * 0.001 * self.rate)).exp(), (-1.0 / (b.release.max(1.0) * 0.001 * self.rate)).exp())).collect();
         let mut lvl = [-120.0f32; MB_BANDS];
         let mut chg = [0.0f32; MB_BANDS];
         let use_sc = sc.is_some() && self.bands[..n].iter().any(|b| b.sc);
+        // Dynamic phase (soloing still listens through the crossovers).
+        let dynamic = self.v("phase") >= 0.5 && !any_solo;
         for i in 0..l.len() {
             let x = [l[i], r[i]];
             let mut parts = [[0.0f32; MB_BANDS]; 2];
@@ -515,6 +559,27 @@ impl Effect for Multiband {
                     y[1] += parts[1][b] * g;
                 }
             }
+            if dynamic {
+                // Re-tune each band's filter when its gain moved (every 16 samples at most).
+                if i % 16 == 0 {
+                    for b in 0..n {
+                        let band = self.bands[b];
+                        let db = if band.bypass { 0.0 } else { band.change + band.gain };
+                        if !(self.dynf_db[b] - db).abs().lt(&0.01) {
+                            self.set_dynf(b, n, db);
+                        }
+                    }
+                }
+                y = x;
+                for ch in 0..2 {
+                    for b in 0..n {
+                        // A band at 0 dB is skipped: untouched audio, no phase shift.
+                        if self.dynf_db[b].abs() > 0.001 {
+                            y[ch] = self.dynf[ch][b].process(y[ch]);
+                        }
+                    }
+                }
+            }
             l[i] = (x[0] + (y[0] - x[0]) * mix) * out_g;
             r[i] = (x[1] + (y[1] - x[1]) * mix) * out_g;
         }
@@ -547,6 +612,9 @@ pub fn multiband_def() -> EffectDef {
                 x: [[Crossover::new(1000.0, rate); 3]; 2],
                 ap: [[[Crossover::new(1000.0, rate); 3]; MB_BANDS]; 2],
                 xs: [[Crossover::new(1000.0, rate); 3]; 2],
+                dynf: [[Biquad::default(); MB_BANDS]; 2],
+                dynf_db: [f32::NAN; MB_BANDS],
+                dynf_n: 0,
                 bands: [MbBand::default(); MB_BANDS],
                 tele: [0.0; MB_BANDS * 2],
             };
@@ -1451,6 +1519,16 @@ mod tests {
         let silent = vec![0.0f32; n];
         let (y, _, _) = run_fx(multiband_def(), &set, &quiet, &quiet, Some((&silent, &silent)));
         assert!(rms_of(&y[24000..]) > rms_of(&quiet[24000..]) * 0.9, "left alone");
+        // Dynamic phase: idle bands pass the signal untouched (bit-exact, no phase shift)…
+        let idle_dp = [("phase", 1.0), ("b1_thr", 0.0), ("b2_thr", 0.0), ("b3_thr", 0.0), ("b4_thr", 0.0)];
+        let (y, _, _) = run_fx(multiband_def(), &idle_dp, &mix, &mix, None);
+        assert!(y.iter().zip(&mix).all(|(a, b)| (a - b).abs() < 1e-6), "dynamic phase idle = untouched");
+        // …and a compressing low band still pulls only the low tone down.
+        let low = [("phase", 1.0), ("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0)];
+        let (y, _, _) = run_fx(multiband_def(), &low, &lo, &lo, None);
+        assert!(rms_of(&y[24000..]) < rms_of(&lo[24000..]) * 0.5, "low band compressed");
+        let (y, _, _) = run_fx(multiband_def(), &low, &hi, &hi, None);
+        assert!(rms_of(&y[24000..]) > rms_of(&hi[24000..]) * 0.9, "high band untouched");
     }
 
     /// Pro-G: closes on quiet input down to the range, opens on loud; flip ducks instead; the external
