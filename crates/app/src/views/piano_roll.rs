@@ -40,6 +40,11 @@ pub enum Drag {
     Paint {
         last_tick: u32,
     },
+    /// FL's slice (knife) tool: a line from where the drag started to the pointer; every note it crosses
+    /// is cut where the line passes its row (snapped to the grid; Alt = no snap).
+    Knife {
+        from: Pos2,
+    },
 }
 
 pub fn show(ui: &mut Ui, st: &mut State) {
@@ -374,6 +379,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         }
                         preview(st, notes[i].pitch, notes[i].velocity);
                     }
+                    _ if tool == Tool::Slice => st.ui.pr_drag = Some(Drag::Knife { from: pos }),
                     None if tool == Tool::Select || ctrl => st.ui.pr_drag = Some(Drag::Select { from: pos }),
                     None if tool == Tool::Paint => st.ui.pr_drag = Some(Drag::Paint { last_tick: u32::MAX }),
                     None if tool == Tool::Draw => {
@@ -445,6 +451,49 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 let r = Rect::from_two_pos(from, pos);
                 p.rect(r, 0.0, theme::ACCENT_2.gamma_multiply(0.12), Stroke::new(1.0_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
                 st.ui.notes = note_rects.iter().enumerate().filter(|(_, nr)| nr.intersects(r)).map(|(i, _)| i).collect();
+            }
+            Drag::Knife { from } => {
+                let alt = ui.input(|i| i.modifiers.alt);
+                let snapx = |x: f32| if alt { x } else { x_of(snap_tick(tick_of(x))) };
+                let (a, b) = (Pos2::new(snapx(from.x), from.y), Pos2::new(snapx(pos.x), pos.y));
+                // Where the line crosses each crossed note's row.
+                let cuts: Vec<(usize, u32)> = note_rects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| {
+                        let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+                        let cy = r.center().y;
+                        if cy < y0 - r.height() / 2.0 || cy > y1 + r.height() / 2.0 {
+                            return None;
+                        }
+                        let t = if (b.y - a.y).abs() < 1e-3 { 0.0 } else { ((cy - a.y) / (b.y - a.y)).clamp(0.0, 1.0) };
+                        let x = a.x + (b.x - a.x) * t;
+                        let tick = if alt { tick_of(x).round() } else { snap_tick(tick_of(x)) } as u32;
+                        let n = notes.get(i)?;
+                        (tick > n.start && tick < n.end()).then_some((i, tick))
+                    })
+                    .collect();
+                p.line_segment([a, b], Stroke::new(2.0_f32, theme::REC));
+                for (i, tick) in &cuts {
+                    if let Some(r) = note_rects.get(*i) {
+                        let x = x_of(*tick as f64);
+                        p.line_segment([Pos2::new(x, r.top() - 2.0), Pos2::new(x, r.bottom() + 2.0)], Stroke::new(2.0_f32, Color32::WHITE));
+                    }
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if !ui.input(|i| i.pointer.any_down()) && !cuts.is_empty() {
+                    st.session.edit("Slice notes", |p| {
+                        if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                            let mut rest = Vec::new();
+                            for (i, tick) in &cuts {
+                                if let Some(r) = c.notes.get_mut(*i).and_then(|n| edit::split_note(n, *tick)) {
+                                    rest.push(r);
+                                }
+                            }
+                            c.notes.extend(rest);
+                        }
+                    });
+                }
             }
             Drag::Velocity => {
                 if vel.x_range().contains(pos.x) {

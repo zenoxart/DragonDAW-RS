@@ -16,15 +16,34 @@ const TAKE_H: f32 = 22.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DragKind {
-    Move { grab: f64, track_offset: i32 },
+    Move {
+        grab: f64,
+        track_offset: i32,
+    },
     ResizeLeft,
     ResizeRight,
     Paint,
-    Comp { take: Id, from: f64 },
-    Loop { from: f64 },
-    Punch { from: f64 },
+    Comp {
+        take: Id,
+        from: f64,
+    },
+    Loop {
+        from: f64,
+    },
+    Punch {
+        from: f64,
+    },
     /// Box selection (Ctrl + drag, or a drag on empty space with the Select tool), from a beat and a y.
-    Select { from: f64, y: f32 },
+    Select {
+        from: f64,
+        y: f32,
+    },
+    /// FL's slice tool: drag a line across clips (any direction); every clip it crosses is cut where the
+    /// line passes its track (snapped; Alt = no snap).
+    Knife {
+        from: f64,
+        y: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -373,6 +392,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).filter(|p| timeline.contains(*p)) {
             if let Some((track, take)) = take_at(pos.y) {
                 st.ui.pl_drag = Some(Drag { clip: 0, track, kind: DragKind::Comp { take, from: snap(beat_of(pos.x, sx), grid) } });
+            } else if tool == Tool::Slice {
+                st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
                 let edge = 6.0;
                 let kind = if pos.x > r.right() - edge {
@@ -524,6 +545,34 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     }
                 }
                 st.ui.clips = all;
+            }
+            DragKind::Knife { from, y } => {
+                let alt = ui.input(|i| i.modifiers.alt);
+                let sb = |b: f64| if alt { b } else { snap(b, grid) };
+                let (a, b) = ((sb(from), y - st.ui.pl_y), (sb(beat), pos.y));
+                let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
+                let mut cuts: Vec<(Id, Id, f64)> = Vec::new();
+                for row in rows.iter().filter(|r| r.y + r.h > y0 && r.y < y1.max(y0 + 1.0)) {
+                    let cy = (row.y + row.h / 2.0).clamp(y0, y1);
+                    let t = if (b.1 - a.1).abs() < 1e-3 { 0.0 } else { ((cy - a.1) / (b.1 - a.1)) as f64 };
+                    let at = sb(a.0 + (b.0 - a.0) * t.clamp(0.0, 1.0));
+                    if let Some(tr) = st.session.project.track(row.track) {
+                        for c in tr.clips.iter().filter(|c| c.start < at - 1e-9 && c.end() > at + 1e-9) {
+                            cuts.push((row.track, c.id, at));
+                        }
+                    }
+                    let x = x_of(at, sx);
+                    painter.line_segment([Pos2::new(x, row.y), Pos2::new(x, row.y + row.h)], Stroke::new(1.0_f32, Color32::WHITE.gamma_multiply(0.5)));
+                }
+                painter.line_segment([Pos2::new(x_of(a.0, sx), a.1), Pos2::new(x_of(b.0, sx), b.1)], Stroke::new(2.0_f32, theme::REC));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if !ui.input(|i| i.pointer.any_down()) && !cuts.is_empty() {
+                    st.session.edit("Slice clips", |p| {
+                        for (t, c, at) in &cuts {
+                            dragon_engine::edit::split_clip(p, *t, *c, *at);
+                        }
+                    });
+                }
             }
             DragKind::Comp { take, from } => {
                 let b = snap(beat, grid);
@@ -880,7 +929,9 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
         ui.toggle_value(&mut st.ui.pl_picker, "Picker").on_hover_text("Show the patterns, audio and automation clips to drag into the playlist");
         ui.separator();
         ui.label(
-            RichText::new("Ctrl+drag select · Shift+drag clip = clone · Ctrl+B duplicate · Ctrl+right-drag zoom to area · Ctrl+wheel zoom · middle-drag pan · drag ruler = loop · right-click deletes").small().color(theme::TEXT_DIM),
+            RichText::new("Ctrl+drag select · Shift+drag clip = clone · Ctrl+B duplicate · Ctrl+right-drag zoom to area · Ctrl+wheel zoom · middle-drag pan · drag ruler = loop · right-click deletes")
+                .small()
+                .color(theme::TEXT_DIM),
         );
     });
 }

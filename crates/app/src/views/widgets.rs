@@ -110,7 +110,13 @@ pub fn bpm_display(ui: &mut Ui, bpm: &mut f64) -> Response {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
             let s = ui.input(|i| i.raw_scroll_delta.y);
             if s != 0.0 {
-                let d = if is_int { s.signum() as f64 } else if fine { 0.001 * s.signum() as f64 } else { 0.01 * s.signum() as f64 };
+                let d = if is_int {
+                    s.signum() as f64
+                } else if fine {
+                    0.001 * s.signum() as f64
+                } else {
+                    0.01 * s.signum() as f64
+                };
                 let v = if is_int { (*bpm + d).clamp(10.0, 522.0) } else { bpm.trunc() + ((*bpm - bpm.trunc()) + d).clamp(0.0, 0.999) };
                 *bpm = (v * 1000.0).round() / 1000.0;
                 changed = true;

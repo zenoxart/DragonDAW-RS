@@ -621,3 +621,50 @@ fn undo_toggle_and_clip_clipboard() {
     assert_eq!(after, before + n);
     assert_eq!(h.st.ui.clips.len(), n, "pasted clips are selected");
 }
+
+/// FL slice tool in the piano roll: a dragged line cuts every note it crosses, where it crosses.
+#[test]
+fn piano_roll_knife_cuts_crossed_notes() {
+    let a = Note { pitch: 60, start: 0, length: PPQ * 4, velocity: 0.8, ..Default::default() };
+    let b = Note { pitch: 64, start: 0, length: PPQ * 4, velocity: 0.8, ..Default::default() };
+    let c = Note { pitch: 72, start: 0, length: PPQ * 4, velocity: 0.8, ..Default::default() };
+    let mut h = piano_with_notes(&[a, b, c]);
+    h.st.ui.tool = Tool::Slice;
+    h.st.ui.snap = 0.25;
+    let from = h.pr_pos(PPQ as f64 * 2.0, 65);
+    let to = h.pr_pos(PPQ as f64 * 2.0, 59);
+    h.drag(piano, from, to, PointerButton::Primary, Modifiers::NONE);
+    let n = h.notes();
+    assert_eq!(n.len(), 5, "the two crossed notes are cut, the one above is not: {n:?}");
+    for p in [60u8, 64] {
+        let mut parts: Vec<(u32, u32)> = n.iter().filter(|x| x.pitch == p).map(|x| (x.start, x.length)).collect();
+        parts.sort();
+        assert_eq!(parts, vec![(0, PPQ * 2), (PPQ * 2, PPQ * 2)], "pitch {p}");
+    }
+}
+
+/// FL slice tool in the playlist: a line dragged down across two tracks cuts both clips at that beat.
+#[test]
+fn playlist_knife_cuts_across_tracks() {
+    let mut h = Harness::new();
+    let pat = h.st.session.project.patterns[0].id;
+    let (t0, t1) = (h.st.session.project.tracks[0].id, h.st.session.project.tracks[1].id);
+    h.st.session.edit("setup", |p| {
+        for t in &mut p.tracks {
+            t.clips.clear();
+        }
+        super::playlist::place_pattern(p, t0, pat, 0.0, 8.0);
+        super::playlist::place_pattern(p, t1, pat, 0.0, 8.0);
+    });
+    h.st.ui.tool = Tool::Slice;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let x = t.left() + (4.0 - h.st.ui.pl_x as f32) * h.st.ui.playlist_zoom;
+    let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
+    h.drag(playlist, Pos2::new(x, t.top() + 4.0), Pos2::new(x + 2.0, t.top() + row_h + row_h / 2.0), PointerButton::Primary, Modifiers::NONE);
+    for tid in [t0, t1] {
+        let mut parts: Vec<(f64, f64)> = h.st.session.project.track(tid).unwrap().clips.iter().map(|c| (c.start, c.length)).collect();
+        parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(parts, vec![(0.0, 4.0), (4.0, 4.0)], "track {tid}");
+    }
+}
