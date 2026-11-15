@@ -34,6 +34,7 @@ pub mod instruments;
 pub mod midi;
 pub mod model;
 pub mod project_io;
+pub mod reference;
 pub mod render;
 pub mod samples;
 pub mod surround;

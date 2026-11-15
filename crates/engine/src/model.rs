@@ -890,6 +890,15 @@ pub struct Project {
     pub video: Option<VideoRef>,
     /// Surround format of the mix (`None` = stereo).
     pub surround: Option<SurroundFormat>,
+    /// Reference track for mastering comparisons.
+    pub reference: Option<ReferenceTrack>,
+}
+
+/// A commercial song to compare the master against, with the region (seconds) that is compared.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceTrack {
+    pub path: PathBuf,
+    pub region: Option<(f64, f64)>,
 }
 
 impl Default for Project {
@@ -916,6 +925,7 @@ impl Default for Project {
             next_id: 1,
             video: None,
             surround: None,
+            reference: None,
         }
     }
 }

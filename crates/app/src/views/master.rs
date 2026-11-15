@@ -1,5 +1,5 @@
 //! Mastering: loudness (momentary / short-term / integrated LUFS, true peak) against a target, a spectrum
-//! analyser and goniometer of the master, and a one-click mastering chain.
+//! analyser and goniometer of the master, a one-click mastering chain, and the reference-track comparison.
 
 use super::widgets;
 use crate::state::State;
@@ -10,6 +10,14 @@ use egui::{Pos2, RichText, Stroke, Ui, Vec2};
 const TARGETS: &[(&str, f32)] = &[("Streaming (Spotify/YouTube)", -14.0), ("Apple Music", -16.0), ("Podcast", -16.0), ("Broadcast EBU R128", -23.0), ("Club / loud master", -9.0)];
 
 pub fn show(ui: &mut Ui, st: &mut State) {
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        meters(ui, st);
+        ui.separator();
+        super::reference::show(ui, st);
+    });
+}
+
+fn meters(ui: &mut Ui, st: &mut State) {
     let m = st.audio.meters().snapshot();
     let target = st.session.project.loudness_target;
     ui.horizontal_top(|ui| {
@@ -80,7 +88,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 st.ui.mixer = st.session.project.mixer.master.id;
             }
         });
-        ui.separator();
+        ui.add_space(14.0);
         ui.vertical(|ui| {
             ui.heading("Spectrum");
             spectrum(ui, &m.scope, st.audio.rate() as f32);

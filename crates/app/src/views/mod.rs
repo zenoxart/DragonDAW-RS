@@ -15,6 +15,7 @@ pub mod playlist;
 pub mod plugins;
 pub mod project;
 pub mod rack;
+pub mod reference;
 pub mod transport;
 pub mod video;
 pub mod widgets;

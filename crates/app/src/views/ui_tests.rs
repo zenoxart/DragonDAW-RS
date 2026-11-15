@@ -239,3 +239,53 @@ fn dropping_a_sample_on_a_rack_channel_replaces_its_sound() {
     }
     assert_eq!(h.st.session.project.channels.len(), count, "replaced, not added");
 }
+
+fn mastering(ui: &mut egui::Ui, st: &mut State) {
+    super::master::show(ui, st);
+}
+
+#[test]
+fn reference_track_region_is_analysed_and_compared_with_the_mix() {
+    // A 6 s reference: quiet first half, loud second half.
+    let dir = std::env::temp_dir().join(format!("dragon-ref-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ref.wav");
+    let rate = 44100u32;
+    let mut rng = dragon_engine::dsp::Rng::new(5);
+    let l: Vec<f32> = (0..rate as usize * 6).map(|i| rng.bipolar() * if i < rate as usize * 3 { 0.05 } else { 0.5 }).collect();
+    dragon_engine::samples::write_wav(&path, &l, &l, rate, dragon_engine::samples::BitDepth::Float32, false, false).unwrap();
+
+    let mut h = Harness::new();
+    h.st.session.edit("ref", |p| p.reference = Some(ReferenceTrack { path: path.clone(), region: Some((3.0, 6.0)) }));
+    // Decode and analyse in the background; keep drawing until both results are in.
+    let wait = |h: &mut Harness, what: &dyn Fn(&ReferenceStateProbe) -> bool| {
+        for _ in 0..600 {
+            h.idle(mastering, 1);
+            if what(&probe(&h.st)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out");
+    };
+    wait(&mut h, &|p| p.reference_lufs.is_some());
+    let loud = probe(&h.st).reference_lufs.unwrap();
+    // Selecting the quiet half changes the analysis.
+    h.st.session.edit("region", |p| p.reference.as_mut().unwrap().region = Some((0.0, 3.0)));
+    wait(&mut h, &|p| p.reference_lufs.is_some_and(|v| v < loud - 10.0));
+    // Analyse the mix (the starter beat).
+    super::reference::analyse_mix_now(&mut h.st);
+    wait(&mut h, &|p| p.mix_lufs.is_some());
+    assert!(probe(&h.st).mix_lufs.unwrap() > -40.0, "the starter beat is audible");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+struct ReferenceStateProbe {
+    reference_lufs: Option<f32>,
+    mix_lufs: Option<f32>,
+}
+
+fn probe(st: &State) -> ReferenceStateProbe {
+    let (r, m) = st.reference.results();
+    ReferenceStateProbe { reference_lufs: r.map(|a| a.integrated), mix_lufs: m.map(|a| a.integrated) }
+}

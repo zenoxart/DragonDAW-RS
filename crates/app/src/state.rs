@@ -185,6 +185,8 @@ pub struct State {
     pub crashed_last_time: bool,
     pub kit: Vec<(String, u8, PathBuf)>,
     pub mcu: Mcu,
+    /// Mastering reference track: loaded audio, analyses and background jobs.
+    pub reference: crate::views::reference::ReferenceState,
 }
 
 /// Mackie Control state: bank offset, the output connection and what was last sent (feedback only on change).
@@ -286,7 +288,8 @@ impl State {
         let autosave = Autosave::new(ctx.paths.autosave.clone());
         let crashed = !autosave.begin_session();
         let ui = UiState::new(&session.project);
-        let mut st = State { ctx, session, audio, ui, settings, midi, retro: RetroBuffer::new(120.0), autosave, last_autosave: Instant::now(), crashed_last_time: crashed, kit, mcu: Mcu::default() };
+        let mut st =
+            State { ctx, session, audio, ui, settings, midi, retro: RetroBuffer::new(120.0), autosave, last_autosave: Instant::now(), crashed_last_time: crashed, kit, mcu: Mcu::default(), reference: Default::default() };
         st.open_midi();
         st.session.force_recompile();
         if st.crashed_last_time {
