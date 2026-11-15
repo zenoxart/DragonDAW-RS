@@ -891,6 +891,13 @@ impl Renderer {
 
     pub fn set_song(&mut self, song: Arc<Song>) {
         self.transport.bpm = song.base_bpm;
+        // The song is compiled for the rate the audio actually runs at (the sound card's): the clock must
+        // follow it, or playback runs at song.rate / old rate speed (a 48 kHz clock on a 44.1 kHz card
+        // plays 8 % slow, so exports sounded faster than the DAW).
+        if (song.rate - self.rate).abs() > 0.5 {
+            self.rate = song.rate;
+            self.loudness = LoudnessMeter::new(song.rate);
+        }
         self.song = song;
     }
 
@@ -1712,6 +1719,79 @@ mod tests {
         assert!(first < 3, "{first}");
         let second = l[1000..].iter().position(|x| x.abs() > 0.05).unwrap() + 1000;
         assert!((second as i64 - 22050).abs() <= 2, "{second}");
+    }
+
+    /// The tempo and the sample speed do not depend on the sample rate the song is rendered at (the
+    /// device's rate for playback, the export's render rate): beat 2 is at the same second, and a
+    /// 44.1 kHz sample lasts as long, at 44.1, 48 and 96 kHz.
+    #[test]
+    fn timing_is_the_same_at_every_render_rate() {
+        let dir = tempfile::tempdir().unwrap();
+        let click = dir.path().join("c.wav");
+        // 4410 frames at 44.1 kHz = exactly 100 ms of signal.
+        let s: Vec<f32> = (0..4410).map(|i| (i as f32 * 1000.0 * std::f32::consts::TAU / 44100.0).sin() * 0.8).collect();
+        write_wav(&click, &s, &s, 44100, BitDepth::Float32, false, false).unwrap();
+        let mut p = Project::new_default();
+        p.bpm = 140.0;
+        let ch = p.add_channel("Click", Instrument::Sampler(SamplerParams { path: click, ..Default::default() }));
+        if let Some(c) = p.channels.iter_mut().find(|c| c.id == ch) {
+            c.envelope.enabled = false;
+        }
+        let pat = p.patterns[0].id;
+        let mut steps = vec![Step::default(); 16];
+        steps[0].on = true;
+        steps[8].on = true;
+        p.patterns[0].channels.insert(ch, PatternChannel { steps, notes: vec![] });
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "p".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+        let beat2 = 2.0 * 60.0 / 140.0;
+        for rate in [44100.0f32, 48000.0, 96000.0] {
+            let cache = SampleCache::default();
+            let mut pool = Pool::new();
+            let mut r = offline_renderer(&p, &cache, rate, &mut pool);
+            r.play(PlayMode::Song);
+            let n = (rate * 1.2) as usize;
+            let (mut l, mut rr) = (vec![0.0; n], vec![0.0; n]);
+            // Odd block sizes like a sound card's callback.
+            let mut done = 0;
+            for blk in [441usize, 512, 128, 1000].iter().cycle() {
+                if done >= n {
+                    break;
+                }
+                let k = (*blk).min(n - done);
+                r.render(&mut l[done..done + k], &mut rr[done..done + k], &[]);
+                done += k;
+            }
+            let loud: Vec<usize> = l.iter().enumerate().filter(|(_, x)| x.abs() > 0.05).map(|(i, _)| i).collect();
+            let first_end = loud.iter().take_while(|i| (**i as f32) < rate * 0.5).max().copied().unwrap();
+            let second = loud.iter().find(|i| (**i as f32) > rate * 0.5).copied().unwrap();
+            let len_s = first_end as f64 / rate as f64;
+            let at_s = second as f64 / rate as f64;
+            assert!((at_s - beat2).abs() < 0.0015, "{rate}: beat 2 at {at_s:.4} s, expected {beat2:.4} s");
+            assert!((len_s - 0.1).abs() < 0.003, "{rate}: the 100 ms sample lasts {len_s:.4} s");
+        }
+    }
+
+    /// The app starts the engine with a song compiled at 48 kHz and then sends one compiled for the sound
+    /// card's rate: the engine's clock must follow (it used to keep 48 kHz, so on a 44.1 kHz card the DAW
+    /// played 8 % slow and the export sounded faster).
+    #[test]
+    fn the_clock_follows_the_rate_of_a_new_song() {
+        let mut p = Project::new_default();
+        p.bpm = 120.0;
+        let cache = SampleCache::default();
+        let mut pool = Pool::new();
+        let s48 = Song::compile(&p, &mut CompileContext { cache: &cache, stretch: &StretchCache::default(), pool: &mut pool, rate: 48000.0 });
+        let s44 = Song::compile(&p, &mut CompileContext { cache: &cache, stretch: &StretchCache::default(), pool: &mut pool, rate: 44100.0 });
+        let mut r = Renderer::new(Arc::new(s48));
+        r.set_song(Arc::new(s44));
+        r.play(PlayMode::Song);
+        let (mut l, mut rr) = (vec![0.0; 441], vec![0.0; 441]);
+        for _ in 0..100 {
+            r.render(&mut l, &mut rr, &[]);
+        }
+        // One second at 120 BPM = beat 2.
+        assert!((r.transport.beat - 2.0).abs() < 1e-3, "beat {}", r.transport.beat);
     }
 
     #[test]
