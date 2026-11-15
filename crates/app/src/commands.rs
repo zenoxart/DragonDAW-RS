@@ -274,6 +274,17 @@ pub fn view_of(id: &str) -> Option<&'static str> {
 }
 
 /// Executes one command. Returns `false` for unknown ids.
+/// The command for egui's clipboard events: Ctrl+X / Ctrl+C / Ctrl+V arrive as Cut / Copy / Paste
+/// events instead of key presses.
+pub fn clipboard_command(e: &egui::Event) -> Option<&'static str> {
+    match e {
+        egui::Event::Cut => Some("dragon.edit.cut"),
+        egui::Event::Copy => Some("dragon.edit.copy"),
+        egui::Event::Paste(_) => Some("dragon.edit.paste"),
+        _ => None,
+    }
+}
+
 pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
     if let Some(v) = view_of(id) {
         st.ctx.open(v, None);
@@ -589,11 +600,23 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 st.ui.last_undo = Some(st.session.history.revision);
             }
         }
-        "edit.cut" => {
-            copy_selection(st);
-            st.ctx.run("dragon.edit.delete", serde_json::Value::Null);
+        // Cut: copy, then delete every selected element right away (clips in the playlist, notes in the
+        // piano roll, the selected channels in the channel rack).
+        "edit.cut" if st.ui.editor == Ed::Rack => {
+            execute(st, "rack.delete", ctx);
         }
-        "edit.copy" => copy_selection(st),
+        "edit.cut" => {
+            if copy_selection(st) {
+                // Something in the system clipboard too, so the next Ctrl+V reaches the app as a paste.
+                ctx.copy_text("Dragon DAW selection".into());
+            }
+            execute(st, "edit.delete", ctx);
+        }
+        "edit.copy" => {
+            if copy_selection(st) {
+                ctx.copy_text("Dragon DAW selection".into());
+            }
+        }
         "edit.paste" => paste(st),
         "edit.deselect" => {
             st.ui.clips.clear();
@@ -720,7 +743,10 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             }
         }
         "edit.delete" => {
-            if !st.ui.clips.is_empty() {
+            // The editor under the mouse decides: the piano roll deletes its selected notes even while
+            // playlist clips are selected too.
+            let notes_first = st.ui.editor == Ed::PianoRoll && !st.ui.notes.is_empty();
+            if !st.ui.clips.is_empty() && !notes_first {
                 let ids = std::mem::take(&mut st.ui.clips);
                 st.session.edit("Delete clips", |p| dragon_engine::edit::delete_clips(p, &ids));
             } else if !st.ui.notes.is_empty() {
@@ -1177,19 +1203,25 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
 }
 
 /// Copies the selected clips (playlist) or notes (piano roll) to the clipboard.
-fn copy_selection(st: &mut State) {
-    if st.ui.editor == crate::state::Editor::Playlist && !st.ui.clips.is_empty() {
+/// Copies the selection into the app's clipboard; returns whether anything was copied.
+fn copy_selection(st: &mut State) -> bool {
+    let notes_first = st.ui.editor == crate::state::Editor::PianoRoll && !st.ui.notes.is_empty();
+    if !st.ui.clips.is_empty() && !notes_first {
         let p = &st.session.project;
         let clips: Vec<(usize, Clip)> = p.tracks.iter().enumerate().flat_map(|(ti, t)| t.clips.iter().filter(|c| st.ui.clips.contains(&c.id)).map(move |c| (ti, c.clone()))).collect();
         st.ui.status = format!("Copied {} clip(s)", clips.len());
+        let any = !clips.is_empty();
         st.ui.clipboard = Some(crate::state::Clipboard::Clips(clips));
+        return any;
     } else if let Some(ch) = st.ui.piano_channel {
         let notes: Vec<Note> = st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&ch)).map(|c| st.ui.notes.iter().filter_map(|i| c.notes.get(*i).copied()).collect()).unwrap_or_default();
         if !notes.is_empty() {
             st.ui.status = format!("Copied {} note(s)", notes.len());
             st.ui.clipboard = Some(crate::state::Clipboard::Notes(notes));
+            return true;
         }
     }
+    false
 }
 
 /// Pastes: clips at the playhead on their tracks (keeping their spacing), notes at their positions in the

@@ -1100,3 +1100,60 @@ fn every_stock_editor_fits_its_window_and_goes_full_screen() {
         assert!(screen.contains_rect(back) && (back.size() - r.size()).length() < 2.0, "{}: back to a fitted window {r:?} -> {back:?}", def.id);
     }
 }
+
+/// Ctrl+X deletes every selected element at once (and copies clips / notes for Ctrl+V). egui delivers
+/// Ctrl+X / Ctrl+C / Ctrl+V as Cut / Copy / Paste events, not key presses: they map to the commands.
+#[test]
+fn ctrl_x_deletes_the_whole_selection() {
+    use crate::commands::{clipboard_command, execute};
+    use crate::state::Editor;
+    assert_eq!(clipboard_command(&egui::Event::Cut), Some("dragon.edit.cut"));
+    assert_eq!(clipboard_command(&egui::Event::Copy), Some("dragon.edit.copy"));
+    assert_eq!(clipboard_command(&egui::Event::Paste(String::new())), Some("dragon.edit.paste"));
+    assert_eq!(clipboard_command(&egui::Event::Text("x".into())), None);
+    // Playlist: clips selected on several tracks all go, nothing else does, and Ctrl+V brings them back.
+    let mut h = Harness::new();
+    let ctx = h.ctx.clone();
+    h.st.session.edit("setup", |p| {
+        for t in 0..3 {
+            for k in 0..2 {
+                let id = p.next_id();
+                p.tracks[t].clips.push(Clip { id, name: format!("c{t}{k}"), start: k as f64 * 8.0 + 16.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip::default()) });
+            }
+        }
+    });
+    let total = |h: &Harness| h.st.session.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>();
+    let before = total(&h);
+    let picked: Vec<Id> = h.st.session.project.tracks[..3].iter().map(|t| t.clips.last().unwrap().id).collect();
+    h.st.ui.editor = Editor::Playlist;
+    h.st.ui.clips = picked.clone();
+    execute(&mut h.st, "dragon.edit.cut", &ctx);
+    assert_eq!(total(&h), before - 3, "all three selected clips deleted");
+    assert!(h.st.session.project.tracks.iter().flat_map(|t| &t.clips).all(|c| !picked.contains(&c.id)));
+    assert!(h.st.ui.clips.is_empty());
+    execute(&mut h.st, "dragon.edit.paste", &ctx);
+    assert_eq!(total(&h), before, "Ctrl+V pastes the cut clips");
+    h.st.session.undo();
+    h.st.session.undo();
+    assert_eq!(total(&h), before, "one undo step brings the cut clips back");
+    // Piano roll: every selected note goes, the others stay – even while playlist clips are selected.
+    let n = |p: u8, s: u32| Note { pitch: p, start: s * PPQ, length: PPQ, velocity: 0.8, ..Default::default() };
+    let mut h = piano_with_notes(&[n(60, 0), n(62, 1), n(64, 2), n(65, 3)]);
+    let ctx = h.ctx.clone();
+    h.st.ui.editor = Editor::PianoRoll;
+    h.st.ui.clips = vec![h.st.session.project.tracks[0].clips[0].id];
+    h.st.ui.notes = vec![0, 2, 3];
+    execute(&mut h.st, "dragon.edit.cut", &ctx);
+    assert_eq!(h.notes().iter().map(|x| x.pitch).collect::<Vec<_>>(), vec![62]);
+    assert!(!h.st.session.project.tracks[0].clips.is_empty(), "playlist clips untouched");
+    // Channel rack: the selected channels are deleted.
+    let mut h = Harness::new();
+    let ctx = h.ctx.clone();
+    let chans: Vec<Id> = h.st.session.project.channels.iter().map(|c| c.id).collect();
+    assert!(chans.len() >= 3);
+    h.st.ui.editor = Editor::Rack;
+    h.st.ui.rack_sel = vec![chans[0], chans[2]];
+    execute(&mut h.st, "dragon.edit.cut", &ctx);
+    let left: Vec<Id> = h.st.session.project.channels.iter().map(|c| c.id).collect();
+    assert!(!left.contains(&chans[0]) && !left.contains(&chans[2]) && left.contains(&chans[1]));
+}

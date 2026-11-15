@@ -98,7 +98,7 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 |---|---|
 | Space play / stop, Ctrl+Space play / pause, R record, L pattern / song, Ctrl+M metronome, Ctrl+P precount, Ctrl+H stop sound, Ctrl+T typing keyboard | ✅ same |
 | Ctrl+Z undo / redo last, Ctrl+Alt+Z undo step by step | ✅ same (plus Ctrl+Shift+Z redo) |
-| Ctrl+A / Ctrl+D select all / deselect, Shift+I invert, Ctrl+B duplicate, Ctrl+C / X / V, Del | ✅ same (playlist and piano roll) |
+| Ctrl+A / Ctrl+D select all / deselect, Shift+I invert, Ctrl+B duplicate, Ctrl+C / X / V, Del | ✅ same (playlist and piano roll; Ctrl+X deletes every selected clip, note, or – in the channel rack – channel at once) |
 | Tools P draw, B paint, D delete, T mute, C slice, E select, Y playback, Z zoom, S slip edit (playlist) / slide (piano roll); Alt bypasses snap; Backspace toggles snap | ✅ same |
 | Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Insert slices at the cursor, 7 / 8 transpose and 9 reverse clips | ✅ same |
 | PgUp / PgDn zoom, Shift+0 centre on the playhead, Shift+1…3 zoom levels, Shift+4 show all, Shift+5 and 5 zoom to selection | ✅ same |

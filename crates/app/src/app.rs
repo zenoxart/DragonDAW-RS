@@ -94,6 +94,15 @@ impl DragonApp {
         for c in cmds {
             self.st.ctx.run(&c, serde_json::Value::Null);
         }
+        // Ctrl+X / Ctrl+C / Ctrl+V reach egui as Cut / Copy / Paste events, never as key presses, so the
+        // shortcut table cannot see them: route them to the DAW's own cut, copy and paste (unless a text
+        // field has the keyboard, where they edit the text).
+        if !text_focus {
+            let clip: Vec<&str> = ctx.input(|i| i.events.iter().filter_map(crate::commands::clipboard_command).collect());
+            for c in clip {
+                self.st.ctx.run(c, serde_json::Value::Null);
+            }
+        }
         if typing {
             views::keyboard::typing_keyboard(&mut self.st, ctx);
         }
