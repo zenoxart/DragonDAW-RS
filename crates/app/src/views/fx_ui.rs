@@ -387,12 +387,13 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
         }
-        "compressor" | "gate" | "deesser" => {
+        "compressor" | "gate" | "deesser" | "multiband" => {
             let sq = square(r);
             if resp.dragged() && sq.expand(10.0).contains(resp.interact_pointer_pos().unwrap_or(pos)) {
                 let lo = if h.def.id == "gate" { -80.0 } else { -60.0 };
                 let db = (-60.0 + (pos.x - sq.left()) / sq.width() * 60.0).clamp(lo, 0.0);
-                out.push(("threshold".into(), (db * 2.0).round() / 2.0));
+                let id = if h.def.id == "multiband" { "b2_thr" } else { "threshold" };
+                out.push((id.into(), (db * 2.0).round() / 2.0));
             }
             if sq.contains(pos) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -618,27 +619,57 @@ fn multisat(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 fn filter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     grid(p, r, true);
     let pr = plot(r);
-    let kind = match h.v("type").round() as i32 {
+    let kind_of = |t: f32| match t.round() as i32 {
         0 => BiquadKind::LowPass,
         1 => BiquadKind::HighPass,
-        _ => BiquadKind::BandPass,
+        2 => BiquadKind::BandPass,
+        3 => BiquadKind::Notch,
+        4 => BiquadKind::Peak,
+        5 => BiquadKind::LowShelf,
+        _ => BiquadKind::HighShelf,
     };
+    let stages = |s: f32| [1, 2, 4][(s.round().max(0.0) as usize).min(2)];
     // The cutoff wobbles with the LFO like the sound does.
     let lfo = (h.t() * TAU * h.v("lfo_rate")).sin() * h.v("lfo_depth");
     let cutoff = (h.v("cutoff") * 2f32.powf(lfo)).clamp(20.0, 20_000.0);
-    let q = 0.707 + h.v("resonance") * 12.0;
-    let bq = Biquad::new(kind, cutoff, q, 0.0, RATE);
+    let unit = |t: f32, f: f32, res: f32, slope: f32| {
+        let q = 0.707 + res * 12.0;
+        (Biquad::new(kind_of(t), f, q, h.v("gain"), RATE), stages(slope))
+    };
+    let a = unit(h.v("type"), cutoff, h.v("resonance"), h.v("slope"));
+    let b_on = h.v("b_on") >= 0.5;
+    let b_cut = if h.v("b_follow") >= 0.5 { (h.v("b_cutoff") * cutoff / h.v("cutoff").max(1.0)).clamp(20.0, 20_000.0) } else { h.v("b_cutoff") };
+    let b = unit(h.v("b_type"), b_cut, h.v("b_resonance"), h.v("b_slope"));
+    let parallel = h.v("routing") >= 0.5;
+    let resp = |f: f32| {
+        let ra = a.0.response_db(f, RATE) * a.1 as f32;
+        if !b_on {
+            return ra;
+        }
+        let rb = b.0.response_db(f, RATE) * b.1 as f32;
+        if parallel {
+            // Sum of the two paths (in amplitude), halved.
+            20.0 * ((10f32.powf(ra / 20.0) + 10f32.powf(rb / 20.0)) * 0.5).max(1e-6).log10()
+        } else {
+            ra + rb
+        }
+    };
     let (top, bottom) = (12.0, -24.0);
     let y_of = |db: f32| pr.top() + (top - db.clamp(bottom, top)) / (top - bottom) * pr.height();
     y_axis(p, pr, &[(12.0, "+12"), (6.0, "+6"), (0.0, "0"), (-6.0, "-6"), (-12.0, "-12"), (-18.0, "-18"), (-24.0, "-24")], y_of);
     let p = p.with_clip_rect(pr.expand(10.0).intersect(r));
-    let pts: Vec<Pos2> = (0..=180).map(|i| pr.left() + pr.width() * i as f32 / 180.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
+    let pts: Vec<Pos2> = (0..=180).map(|i| pr.left() + pr.width() * i as f32 / 180.0).map(|x| Pos2::new(x, y_of(resp(freq_at(pr, x))))).collect();
     filled_curve(&p, &pts, pr.bottom(), col);
-    // The cutoff node: a ring with a glow, like the reference.
-    let c = Pos2::new(fx(pr, cutoff), y_of(bq.response_db(cutoff, RATE)));
+    // The cutoff nodes: a ring with a glow (A), and a smaller one for filter B.
+    let c = Pos2::new(fx(pr, cutoff), y_of(resp(cutoff)));
     p.circle_filled(c, 11.0, col.gamma_multiply(0.25));
     p.circle_filled(c, 6.0, theme::BG);
     p.circle_stroke(c, 6.0, Stroke::new(2.0_f32, Color32::WHITE));
+    if b_on {
+        let c = Pos2::new(fx(pr, b_cut), y_of(resp(b_cut)));
+        p.circle_filled(c, 5.0, theme::BG);
+        p.circle_stroke(c, 5.0, Stroke::new(2.0_f32, theme::WARN));
+    }
 }
 
 // --------------------------------------------------------------------------------------- dynamics
@@ -657,9 +688,9 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.extend(Shape::dashed_line(&[Pos2::new(sq.left(), sq.bottom()), Pos2::new(sq.right(), sq.top())], Stroke::new(1.0_f32, Color32::from_white_alpha(45)), 4.0, 4.0));
     let (thr, ratio, knee, makeup) = match h.def.id {
         "limiter" => (h.v("ceiling") - h.v("gain"), 100.0, 0.0, h.v("gain")),
-        "gate" => (h.v("threshold"), 1.0 / 8.0, 0.0, 0.0),
-        "multiband" => (h.v("mid_threshold"), h.v("mid_ratio"), 6.0, h.v("mid_gain")),
-        "deesser" => (h.v("threshold"), h.v("ratio"), 0.0, 0.0),
+        "gate" => (h.v("threshold"), 1.0 / h.v("ratio").clamp(1.0, 8.0), h.v("knee"), 0.0),
+        "multiband" => (h.v("b2_thr"), h.v("b2_ratio"), h.v("b2_knee"), h.v("b2_gain")),
+        "deesser" => (h.v("threshold"), 1.0 + h.v("range") / 6.0, 0.0, 0.0),
         _ => (h.v("threshold"), h.v("ratio"), h.v("knee"), h.v("makeup")),
     };
     let curve = |x: f32| -> f32 {
@@ -719,9 +750,27 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     }
     let caption = match h.def.id {
         "limiter" => format!("{} · ceiling {:.1} dB · +{:.1} dB drive", dragon_engine::effects::dynamics::LIMITER_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Allround"), h.v("ceiling"), h.v("gain")),
-        "gate" => format!("range {:.0} dB · hold {:.0} ms", h.v("range"), h.v("hold")),
-        "deesser" => format!("listening at {:.1} kHz", h.v("freq") / 1000.0),
-        "multiband" => format!("split {:.0} Hz / {:.1} kHz", h.v("low_mid"), h.v("mid_high") / 1000.0),
+        "gate" => format!(
+            "{} · range {:.0} dB · hold {:.0} ms · hyst {:.0} dB{}",
+            dragon_engine::effects::dynamics::GATE_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Classic"),
+            h.v("range"),
+            h.v("hold"),
+            h.v("hysteresis"),
+            if h.v("flip") >= 0.5 { " · flipped" } else { "" }
+        ),
+        "deesser" => format!(
+            "{} · {} · {:.1}-{:.1} kHz · range {:.0} dB",
+            dragon_engine::effects::dynamics::DS_MODES.get(h.v("mode").round() as usize).copied().unwrap_or("Single vocal"),
+            if h.v("processing") >= 0.5 { "wide band" } else { "split band" },
+            h.v("freq") / 1000.0,
+            h.v("freq_hi") / 1000.0,
+            h.v("range")
+        ),
+        "multiband" => {
+            let n = h.v("bands").round() as usize + 1;
+            let xs: Vec<String> = ["x1", "x2", "x3"].iter().take(n.saturating_sub(1)).map(|x| format!("{:.0} Hz", h.v(x))).collect();
+            format!("{n} bands · {} · band 2 shown", if xs.is_empty() { "full range".into() } else { xs.join(" / ") })
+        }
         _ => {
             let style = dragon_engine::effects::dynamics::COMP_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Clean");
             let look = if h.v("lookahead") > 0.05 { format!(" · look-ahead {:.1} ms", h.v("lookahead")) } else { String::new() };

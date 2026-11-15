@@ -51,11 +51,11 @@ pub fn area_zoom(ui: &Ui, area: Rect, key: &str) -> Option<AreaZoom> {
     }
 }
 
-/// Middle-button drag delta (for panning), or zero.
-pub fn middle_drag(ui: &Ui, area: Rect) -> Vec2 {
+/// Middle-drag, or (FL) Left-Shift + right-drag when `left_shift_right` is set, pans the view.
+pub fn pan_drag(ui: &Ui, area: Rect, left_shift_right: bool) -> Vec2 {
     ui.input(|i| {
         let inside = i.pointer.press_origin().map(|p| area.contains(p)).unwrap_or(false);
-        if i.pointer.button_down(PointerButton::Middle) && inside {
+        if (i.pointer.button_down(PointerButton::Middle) || left_shift_right && i.pointer.button_down(PointerButton::Secondary)) && inside {
             i.pointer.delta()
         } else {
             Vec2::ZERO

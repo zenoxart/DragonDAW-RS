@@ -1,4 +1,4 @@
-//! Dynamics: compressor (with sidechain), 3-band multiband compressor, gate, true-peak limiter,
+//! Dynamics: compressor (with sidechain), 4-band multiband dynamics (Pro-MB style), gate (Pro-G style), true-peak limiter,
 //! de-esser and transient shaper.
 
 use super::{Effect, EffectDef, ParamInfo};
@@ -290,122 +290,242 @@ impl Crossover {
     }
 }
 
-pub struct Multiband {
-    rate: f32,
-    x1: [Crossover; 2],
-    x2: [Crossover; 2],
-    // Keep the low band phase aligned with the others: all-pass the low band through the second crossover.
-    ap: [Crossover; 2],
-    bands: [CompCore; 3],
-    gains: [f32; 3],
-    f1: f32,
-    f2: f32,
+/// Multiband dynamics after Pro-MB: up to four bands (Linkwitz–Riley crossovers, all-pass compensated), each
+/// compressing or expanding, downward or upward, with threshold, range (the most gain change), ratio, knee,
+/// attack, release, gain, solo and bypass; global mix and output.
+pub const MB_MODES: &[&str] = &["Compress", "Expand", "Upward compress", "Upward expand"];
+pub const MB_BANDS: usize = 4;
+
+macro_rules! mb_band {
+    ($n:literal, $thr:expr) => {
+        [
+            ParamInfo::choice(concat!("b", $n, "_mode"), concat!("Band ", $n, " mode"), MB_MODES, 0.0),
+            ParamInfo::lin(concat!("b", $n, "_thr"), concat!("Band ", $n, " threshold"), -60.0, 0.0, $thr, "dB"),
+            ParamInfo::lin(concat!("b", $n, "_range"), concat!("Band ", $n, " range"), 0.0, 30.0, 12.0, "dB"),
+            ParamInfo::log(concat!("b", $n, "_ratio"), concat!("Band ", $n, " ratio"), 1.0, 20.0, 3.0, ":1"),
+            ParamInfo::lin(concat!("b", $n, "_knee"), concat!("Band ", $n, " knee"), 0.0, 24.0, 6.0, "dB"),
+            ParamInfo::log(concat!("b", $n, "_attack"), concat!("Band ", $n, " attack"), 0.1, 200.0, 15.0, "ms"),
+            ParamInfo::log(concat!("b", $n, "_release"), concat!("Band ", $n, " release"), 10.0, 2000.0, 150.0, "ms"),
+            ParamInfo::lin(concat!("b", $n, "_gain"), concat!("Band ", $n, " gain"), -18.0, 18.0, 0.0, "dB"),
+            ParamInfo::toggle(concat!("b", $n, "_solo"), concat!("Band ", $n, " solo"), false),
+            ParamInfo::toggle(concat!("b", $n, "_bypass"), concat!("Band ", $n, " bypass"), false),
+        ]
+    };
+}
+const MB_PB: usize = 10;
+
+const fn mb_params() -> [ParamInfo; 6 + MB_BANDS * MB_PB] {
+    let bands: [[ParamInfo; MB_PB]; MB_BANDS] = [mb_band!("1", -24.0), mb_band!("2", -24.0), mb_band!("3", -24.0), mb_band!("4", -24.0)];
+    let mut out = [ParamInfo::choice("bands", "Bands", &["1", "2", "3", "4"], 2.0); 6 + MB_BANDS * MB_PB];
+    out[1] = ParamInfo::log("x1", "Crossover 1", 30.0, 1000.0, 200.0, "Hz");
+    out[2] = ParamInfo::log("x2", "Crossover 2", 200.0, 8000.0, 2500.0, "Hz");
+    out[3] = ParamInfo::log("x3", "Crossover 3", 1000.0, 16000.0, 8000.0, "Hz");
+    out[4] = ParamInfo::lin("mix", "Mix", 0.0, 100.0, 100.0, "%");
+    out[5] = ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB");
+    let mut i = 0;
+    while i < MB_BANDS {
+        let mut j = 0;
+        while j < MB_PB {
+            out[6 + i * MB_PB + j] = bands[i][j];
+            j += 1;
+        }
+        i += 1;
+    }
+    out
 }
 
-const MB_PARAMS: &[ParamInfo] = &[
-    ParamInfo::log("low_mid", "Low/Mid", 60.0, 1000.0, 200.0, "Hz"),
-    ParamInfo::log("mid_high", "Mid/High", 1000.0, 12000.0, 3000.0, "Hz"),
-    ParamInfo::lin("low_threshold", "Low threshold", -60.0, 0.0, -20.0, "dB"),
-    ParamInfo::log("low_ratio", "Low ratio", 1.0, 20.0, 3.0, ":1"),
-    ParamInfo::lin("low_gain", "Low gain", -18.0, 18.0, 0.0, "dB"),
-    ParamInfo::lin("mid_threshold", "Mid threshold", -60.0, 0.0, -20.0, "dB"),
-    ParamInfo::log("mid_ratio", "Mid ratio", 1.0, 20.0, 3.0, ":1"),
-    ParamInfo::lin("mid_gain", "Mid gain", -18.0, 18.0, 0.0, "dB"),
-    ParamInfo::lin("high_threshold", "High threshold", -60.0, 0.0, -20.0, "dB"),
-    ParamInfo::log("high_ratio", "High ratio", 1.0, 20.0, 3.0, ":1"),
-    ParamInfo::lin("high_gain", "High gain", -18.0, 18.0, 0.0, "dB"),
-    ParamInfo::log("attack", "Attack", 0.1, 200.0, 15.0, "ms"),
-    ParamInfo::log("release", "Release", 10.0, 2000.0, 150.0, "ms"),
-];
+static MB_PARAMS: [ParamInfo; 6 + MB_BANDS * MB_PB] = mb_params();
+
+#[derive(Clone, Copy, Default)]
+struct MbBand {
+    mode: usize,
+    thr: f32,
+    range: f32,
+    ratio: f32,
+    knee: f32,
+    attack: f32,
+    release: f32,
+    gain: f32,
+    solo: bool,
+    bypass: bool,
+    env: f32,
+    /// Gain change now (dB; negative = cut).
+    change: f32,
+}
+
+impl MbBand {
+    /// The gain change (dB) for a detector level (dB): compress / expand, downward / upward, limited by the range.
+    fn target(&self, x: f32) -> f32 {
+        let r = self.ratio.max(1.0);
+        let over = x - self.thr;
+        // Soft knee: the effective "over" eases in over the knee width.
+        let k = self.knee.max(0.01);
+        let soft = |o: f32| {
+            if o < -k / 2.0 {
+                0.0
+            } else if o > k / 2.0 {
+                o
+            } else {
+                (o + k / 2.0).powi(2) / (2.0 * k)
+            }
+        };
+        let under = |o: f32| {
+            if o > k / 2.0 {
+                0.0
+            } else if o < -k / 2.0 {
+                o
+            } else {
+                -(k / 2.0 - o).powi(2) / (2.0 * k)
+            }
+        };
+        let c = match self.mode {
+            // Downward compression above the threshold.
+            0 => -soft(over) * (1.0 - 1.0 / r),
+            // Downward expansion below it.
+            1 => under(over) * (r - 1.0),
+            // Upward compression: quiet parts below the threshold are lifted.
+            2 => -under(over) * (1.0 - 1.0 / r),
+            // Upward expansion: parts above the threshold are lifted further.
+            _ => soft(over) * (r - 1.0) * 0.5,
+        };
+        c.clamp(-self.range, self.range)
+    }
+}
+
+pub struct Multiband {
+    rate: f32,
+    p: [f32; 6 + MB_BANDS * MB_PB],
+    x: [[Crossover; 3]; 2],
+    /// All-pass compensation: band k is passed through the crossovers above it, so the bands sum flat.
+    ap: [[[Crossover; 3]; MB_BANDS]; 2],
+    bands: [MbBand; MB_BANDS],
+    /// Telemetry: per band the detector level (dB) and the gain change (dB).
+    tele: [f32; MB_BANDS * 2],
+}
 
 impl Multiband {
+    fn v(&self, id: &str) -> f32 {
+        MB_PARAMS.iter().position(|p| p.id == id).map(|k| self.p[k]).unwrap_or(0.0)
+    }
     fn rebuild(&mut self) {
-        self.x1 = [Crossover::new(self.f1, self.rate); 2];
-        self.x2 = [Crossover::new(self.f2, self.rate); 2];
-        self.ap = [Crossover::new(self.f2, self.rate); 2];
+        let f = [self.v("x1"), self.v("x2").max(self.v("x1") * 1.25), self.v("x3").max(self.v("x2") * 1.25)];
+        for ch in 0..2 {
+            for k in 0..3 {
+                self.x[ch][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
+                for b in 0..MB_BANDS {
+                    self.ap[ch][b][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
+                }
+            }
+        }
+        for (b, band) in self.bands.iter_mut().enumerate() {
+            let g = |k: usize| self.p[6 + b * MB_PB + k];
+            band.mode = (g(0).round().max(0.0) as usize).min(MB_MODES.len() - 1);
+            band.thr = g(1);
+            band.range = g(2);
+            band.ratio = g(3);
+            band.knee = g(4);
+            band.attack = g(5);
+            band.release = g(6);
+            band.gain = g(7);
+            band.solo = g(8) >= 0.5;
+            band.bypass = g(9) >= 0.5;
+        }
     }
 }
 
 impl Effect for Multiband {
     fn set_param(&mut self, id: &str, v: f32) {
-        let band = |s: &str| match s {
-            "low" => Some(0),
-            "mid" => Some(1),
-            "high" => Some(2),
-            _ => None,
-        };
-        match id {
-            "low_mid" => {
-                self.f1 = v.min(self.f2 * 0.8);
-                self.rebuild();
-            }
-            "mid_high" => {
-                self.f2 = v.max(self.f1 * 1.25);
-                self.rebuild();
-            }
-            "attack" => self.bands.iter_mut().for_each(|b| b.attack = v),
-            "release" => self.bands.iter_mut().for_each(|b| b.release = v),
-            _ => {
-                if let Some((b, k)) = id.split_once('_') {
-                    if let Some(i) = band(b) {
-                        match k {
-                            "threshold" => self.bands[i].threshold = v,
-                            "ratio" => self.bands[i].ratio = v,
-                            "gain" => self.gains[i] = db_to_gain(v),
-                            _ => {}
-                        }
-                    }
-                }
-            }
+        if let Some(k) = MB_PARAMS.iter().position(|p| p.id == id) {
+            self.p[k] = v;
+            self.rebuild();
         }
     }
     fn reset(&mut self) {
         self.rebuild();
-        self.bands.iter_mut().for_each(|b| b.gr = 0.0);
+        for b in self.bands.iter_mut() {
+            b.env = -120.0;
+            b.change = 0.0;
+        }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let n = (self.v("bands").round() as usize + 1).clamp(1, MB_BANDS);
+        let mix = self.v("mix") / 100.0;
+        let out_g = db_to_gain(self.v("output"));
+        let any_solo = self.bands[..n].iter().any(|b| b.solo);
+        let coefs: Vec<(f32, f32)> = self.bands.iter().map(|b| ((-1.0 / (b.attack.max(0.05) * 0.001 * self.rate)).exp(), (-1.0 / (b.release.max(1.0) * 0.001 * self.rate)).exp())).collect();
+        let mut lvl = [-120.0f32; MB_BANDS];
+        let mut chg = [0.0f32; MB_BANDS];
         for i in 0..l.len() {
-            let mut out = [0.0f32; 2];
-            let mut parts = [[0.0f32; 3]; 2];
-            for (ch, x) in [l[i], r[i]].into_iter().enumerate() {
-                let (lo, rest) = self.x1[ch].split(x);
-                let (mid, hi) = self.x2[ch].split(rest);
-                let (a, b) = self.ap[ch].split(lo);
-                parts[ch] = [a + b, mid, hi];
+            let x = [l[i], r[i]];
+            let mut parts = [[0.0f32; MB_BANDS]; 2];
+            for ch in 0..2 {
+                let mut rest = x[ch];
+                for k in 0..n - 1 {
+                    let (lo, hi) = self.x[ch][k].split(rest);
+                    parts[ch][k] = lo;
+                    rest = hi;
+                }
+                parts[ch][n - 1] = rest;
+                // All-pass the lower bands through the crossovers above them.
+                for b in 0..n.saturating_sub(2) {
+                    for k in b + 1..n - 1 {
+                        let (a, c) = self.ap[ch][b][k].split(parts[ch][b]);
+                        parts[ch][b] = a + c;
+                    }
+                }
             }
-            for (bi, band) in self.bands.iter_mut().enumerate() {
-                let level = parts[0][bi].abs().max(parts[1][bi].abs());
-                let g = band.gain(level) * self.gains[bi];
-                out[0] += parts[0][bi] * g;
-                out[1] += parts[1][bi] * g;
+            let mut y = [0.0f32; 2];
+            for b in 0..n {
+                let band = &mut self.bands[b];
+                let peak = parts[0][b].abs().max(parts[1][b].abs());
+                let db = gain_to_db(peak.max(1e-6));
+                // Peak detector with the band's attack / release, then the static curve.
+                let want = band.target(db);
+                let (att, rel) = coefs[b];
+                let c = if want.abs() > band.change.abs() { att } else { rel };
+                band.change = want + (band.change - want) * c;
+                band.env = db;
+                lvl[b] = lvl[b].max(db);
+                chg[b] = if band.change.abs() > chg[b].abs() { band.change } else { chg[b] };
+                let g = if band.bypass { 1.0 } else { db_to_gain(band.change + band.gain) };
+                let audible = !any_solo || band.solo;
+                if audible {
+                    y[0] += parts[0][b] * g;
+                    y[1] += parts[1][b] * g;
+                }
             }
-            l[i] = out[0];
-            r[i] = out[1];
+            l[i] = (x[0] + (y[0] - x[0]) * mix) * out_g;
+            r[i] = (x[1] + (y[1] - x[1]) * mix) * out_g;
+        }
+        for b in 0..MB_BANDS {
+            self.tele[b] = if b < n { lvl[b] } else { -120.0 };
+            self.tele[MB_BANDS + b] = chg[b];
         }
     }
     fn gain_reduction(&self) -> f32 {
-        self.bands.iter().map(|b| b.gr).fold(0.0, f32::max)
+        self.bands.iter().map(|b| -b.change).fold(0.0, f32::max)
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
 pub fn multiband_def() -> EffectDef {
     EffectDef {
         id: "multiband",
-        name: "Multiband Compressor",
+        name: "Multiband Dynamics",
         category: "Dynamics",
-        description: "3-band compressor with Linkwitz–Riley crossovers.",
-        params: MB_PARAMS,
+        description: "Multiband dynamics after Pro-MB: up to four bands, each compressing or expanding (downward or upward) with threshold, range, ratio, knee, attack, release, gain, solo and bypass.",
+        params: &MB_PARAMS,
         uses_sidechain: false,
         create: |rate| {
             let mut m = Multiband {
                 rate,
-                x1: [Crossover::new(200.0, rate); 2],
-                x2: [Crossover::new(3000.0, rate); 2],
-                ap: [Crossover::new(3000.0, rate); 2],
-                bands: [CompCore::new(rate), CompCore::new(rate), CompCore::new(rate)],
-                gains: [1.0; 3],
-                f1: 200.0,
-                f2: 3000.0,
+                p: std::array::from_fn(|k| MB_PARAMS[k].default),
+                x: [[Crossover::new(1000.0, rate); 3]; 2],
+                ap: [[[Crossover::new(1000.0, rate); 3]; MB_BANDS]; 2],
+                bands: [MbBand::default(); MB_BANDS],
+                tele: [0.0; MB_BANDS * 2],
             };
             m.rebuild();
             Box::new(m)
@@ -415,17 +535,23 @@ pub fn multiband_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ gate
 
+/// Gate / expander after Pro-G: threshold with hysteresis, range, ratio (gate … gentle expander), knee,
+/// attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters,
+/// external sidechain, flip (ducking) and mix.
+pub const GATE_STYLES: &[&str] = &["Classic", "Clean", "Vocal", "Guitar", "Upward"];
+const GATE_MAX_LOOK_MS: f32 = 10.0;
+
 pub struct Gate {
     rate: f32,
-    threshold: f32,
-    range: f32,
-    attack: f32,
-    hold: f32,
-    release: f32,
-    follower: Follower,
-    gain: f32,
+    p: [f32; 17],
+    open: bool,
     hold_left: f32,
-    use_sidechain: bool,
+    gain_db: f32,
+    rms: f32,
+    sc: [[Biquad; 2]; 2],
+    delay: [Vec<f32>; 2],
+    pos: usize,
+    tele: [f32; 3],
 }
 
 const GATE_PARAMS: &[ParamInfo] = &[
@@ -435,52 +561,145 @@ const GATE_PARAMS: &[ParamInfo] = &[
     ParamInfo::log("hold", "Hold", 1.0, 500.0, 20.0, "ms"),
     ParamInfo::log("release", "Release", 5.0, 2000.0, 100.0, "ms"),
     ParamInfo::toggle("sidechain", "External sidechain", false),
+    ParamInfo::log("ratio", "Ratio", 1.0, 100.0, 100.0, ":1"),
+    ParamInfo::lin("knee", "Knee", 0.0, 24.0, 0.0, "dB"),
+    ParamInfo::lin("hysteresis", "Hysteresis", 0.0, 12.0, 3.0, "dB"),
+    ParamInfo::lin("lookahead", "Look-ahead", 0.0, GATE_MAX_LOOK_MS, 0.0, "ms"),
+    ParamInfo::choice("style", "Style", GATE_STYLES, 0.0),
+    ParamInfo::log("sc_hp", "Sidechain high-pass", 20.0, 2000.0, 20.0, "Hz"),
+    ParamInfo::log("sc_lp", "Sidechain low-pass", 500.0, 20000.0, 20000.0, "Hz"),
+    ParamInfo::toggle("flip", "Flip (duck)", false),
+    ParamInfo::lin("mix", "Mix", 0.0, 100.0, 100.0, "%"),
+    ParamInfo::toggle("listen", "Listen to the sidechain", false),
+    ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB"),
 ];
+
+impl Gate {
+    fn v(&self, id: &str) -> f32 {
+        GATE_PARAMS.iter().position(|p| p.id == id).map(|k| self.p[k]).unwrap_or(0.0)
+    }
+    fn update(&mut self) {
+        let (hp, lp) = (self.v("sc_hp"), self.v("sc_lp").min(self.rate * 0.45));
+        for ch in 0..2 {
+            self.sc[ch] = [Biquad::new(BiquadKind::HighPass, hp, 0.707, 0.0, self.rate), Biquad::new(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate)];
+        }
+    }
+    fn look(&self) -> usize {
+        ((self.v("lookahead") * 0.001 * self.rate) as usize).min(self.delay[0].len() - 1)
+    }
+}
 
 impl Effect for Gate {
     fn set_param(&mut self, id: &str, v: f32) {
-        match id {
-            "threshold" => self.threshold = v,
-            "range" => self.range = v,
-            "attack" => self.attack = v,
-            "hold" => self.hold = v,
-            "release" => self.release = v,
-            "sidechain" => self.use_sidechain = v >= 0.5,
-            _ => {}
+        if let Some(k) = GATE_PARAMS.iter().position(|p| p.id == id) {
+            self.p[k] = v;
+            if id.starts_with("sc_") {
+                self.update();
+            }
         }
     }
     fn reset(&mut self) {
-        self.gain = 1.0;
+        self.gain_db = 0.0;
+        self.open = false;
+        self.delay.iter_mut().for_each(|d| d.fill(0.0));
+    }
+    fn latency(&self) -> usize {
+        self.look()
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
-        let floor = db_to_gain(self.range);
-        let thr = db_to_gain(self.threshold);
-        let att = 1.0 - (-1.0 / (self.attack * 0.001 * self.rate)).exp();
-        let rel = 1.0 - (-1.0 / (self.release * 0.001 * self.rate)).exp();
-        let ext = if self.use_sidechain { sc } else { None };
+        let style = (self.v("style").round().max(0.0) as usize).min(GATE_STYLES.len() - 1);
+        let (thr, range, ratio, knee, hyst) = (self.v("threshold"), self.v("range"), self.v("ratio").max(1.0), self.v("knee"), self.v("hysteresis"));
+        // Styles: detector and timing character.
+        let (rms_ms, att_mul, rel_mul, hold_mul) = match style {
+            1 => (2.0, 1.0, 1.0, 1.0),  // Clean: RMS, smooth
+            2 => (10.0, 2.0, 1.5, 1.0), // Vocal: slower, breath-friendly
+            3 => (0.0, 0.5, 2.0, 2.0),  // Guitar: fast open, long hold and release for sustain
+            _ => (0.0, 1.0, 1.0, 1.0),  // Classic / Upward: peak
+        };
+        let att = (-1.0 / (self.v("attack") * att_mul * 0.001 * self.rate).max(1.0)).exp();
+        let rel = (-1.0 / (self.v("release") * rel_mul * 0.001 * self.rate).max(1.0)).exp();
+        let hold = self.v("hold") * hold_mul * 0.001 * self.rate;
+        let rms_a = if rms_ms > 0.0 { (-1.0 / (rms_ms * 0.001 * self.rate)).exp() } else { 0.0 };
+        let ext = if self.v("sidechain") >= 0.5 { sc } else { None };
+        let (flip, listen) = (self.v("flip") >= 0.5, self.v("listen") >= 0.5);
+        let mix = self.v("mix") / 100.0;
+        let out = db_to_gain(self.v("output"));
+        let look = self.look();
+        let n = self.delay[0].len();
+        let (mut pin, mut pout, mut gr) = (0.0f32, 0.0f32, 0.0f32);
         for i in 0..l.len() {
-            let d = match ext {
-                Some((a, b)) => a[i].abs().max(b[i].abs()),
-                None => l[i].abs().max(r[i].abs()),
+            let (dl, dr) = match ext {
+                Some((a, b)) => (a[i], b[i]),
+                None => (l[i], r[i]),
             };
-            let level = self.follower.next(d);
-            let open = if level > thr {
-                self.hold_left = self.hold * 0.001 * self.rate;
-                true
-            } else if self.hold_left > 0.0 {
-                self.hold_left -= 1.0;
-                true
+            let fl = self.sc[0][0].process(dl);
+            let fl = self.sc[0][1].process(fl);
+            let fr = self.sc[1][0].process(dr);
+            let fr = self.sc[1][1].process(fr);
+            let peak = fl.abs().max(fr.abs());
+            let det = if rms_ms > 0.0 {
+                self.rms = peak * peak + (self.rms - peak * peak) * rms_a;
+                (self.rms * 2.0).sqrt()
             } else {
-                false
+                peak
             };
-            let target = if open { 1.0 } else { floor };
-            self.gain += (target - self.gain) * if target > self.gain { att } else { rel };
-            l[i] *= self.gain;
-            r[i] *= self.gain;
+            let db = gain_to_db(det.max(1e-6));
+            // Hysteresis: opens at the threshold, closes `hyst` dB below it; hold keeps it open.
+            if db > thr {
+                self.open = true;
+                self.hold_left = hold;
+            } else if db < thr - hyst {
+                if self.hold_left > 0.0 {
+                    self.hold_left -= 1.0;
+                } else {
+                    self.open = false;
+                }
+            }
+            let target = if style == 4 {
+                // Upward: lifts what crosses the threshold (by up to |range|, at most 24 dB).
+                if self.open {
+                    ((db - thr) * (1.0 - 1.0 / ratio)).clamp(0.0, (-range).min(24.0))
+                } else {
+                    0.0
+                }
+            } else if self.open {
+                0.0
+            } else {
+                // Closed: downward expansion below the threshold, soft knee, floor at the range.
+                let under = db - thr;
+                let k = knee.max(0.01);
+                let u = if under < -k / 2.0 { under } else { -(k / 2.0 - under).max(0.0).powi(2) / (2.0 * k) };
+                (u * (ratio - 1.0)).max(range)
+            };
+            let c = if target > self.gain_db { att } else { rel };
+            self.gain_db = target + (self.gain_db - target) * c;
+            let g_db = if flip && style != 4 { range - self.gain_db } else { self.gain_db };
+            let g = db_to_gain(g_db);
+            // Look-ahead: the gain acts on audio delayed by `look`.
+            self.delay[0][self.pos] = l[i];
+            self.delay[1][self.pos] = r[i];
+            let rd = (self.pos + n - look) % n;
+            let (xl, xr) = (self.delay[0][rd], self.delay[1][rd]);
+            self.pos = (self.pos + 1) % n;
+            pin = pin.max(xl.abs()).max(xr.abs());
+            if listen {
+                l[i] = fl;
+                r[i] = fr;
+            } else {
+                l[i] = (xl + (xl * g - xl) * mix) * out;
+                r[i] = (xr + (xr * g - xr) * mix) * out;
+            }
+            pout = pout.max(l[i].abs()).max(r[i].abs());
+            gr = gr.max(-g_db);
         }
+        let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
+        self.tele = [db(pin), db(pout), gr];
     }
     fn gain_reduction(&self) -> f32 {
-        -gain_to_db(self.gain)
+        (-self.gain_db).max(0.0)
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
@@ -489,10 +708,25 @@ pub fn gate_def() -> EffectDef {
         id: "gate",
         name: "Gate",
         category: "Dynamics",
-        description: "Noise gate / expander with hold, range and external sidechain (ducking, gated effects).",
+        description: "Gate / expander after Pro-G: threshold with hysteresis, range, ratio, knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix.",
         params: GATE_PARAMS,
         uses_sidechain: true,
-        create: |rate| Box::new(Gate { rate, threshold: -40.0, range: -80.0, attack: 0.5, hold: 20.0, release: 100.0, follower: Follower::new(0.1, 30.0, rate), gain: 1.0, hold_left: 0.0, use_sidechain: false }),
+        create: |rate| {
+            let mut g = Gate {
+                rate,
+                p: std::array::from_fn(|k| GATE_PARAMS[k].default),
+                open: false,
+                hold_left: 0.0,
+                gain_db: 0.0,
+                rms: 0.0,
+                sc: [[Biquad::default(); 2]; 2],
+                delay: [vec![0.0; (GATE_MAX_LOOK_MS * 0.001 * rate) as usize + 2], vec![0.0; (GATE_MAX_LOOK_MS * 0.001 * rate) as usize + 2]],
+                pos: 0,
+                tele: [-90.0, -90.0, 0.0],
+            };
+            g.update();
+            Box::new(g)
+        },
     }
 }
 
@@ -743,55 +977,153 @@ pub fn limiter_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ de-esser
 
+/// De-esser after Pro-DS: single-vocal (relative: reacts to sibilance compared with the voice) or allround
+/// (absolute) detection, split-band or wide-band processing, detection band (high-pass … low-pass), threshold,
+/// range (the most reduction), look-ahead, stereo link and listen.
+pub const DS_MODES: &[&str] = &["Single vocal", "Allround"];
+const DS_MAX_LOOK_MS: f32 = 15.0;
+
 pub struct DeEsser {
     rate: f32,
-    freq: f32,
-    det: [Biquad; 2],
-    core: CompCore,
-    listen: bool,
+    p: [f32; 9],
+    det_hp: [Biquad; 2],
+    det_lp: [Biquad; 2],
+    split: [Biquad; 2],
+    full_env: [f32; 2],
+    sib_env: [f32; 2],
+    red: [f32; 2],
+    delay: [Vec<f32>; 2],
+    pos: usize,
+    gr: f32,
+    tele: [f32; 3],
 }
 
 const DEESS_PARAMS: &[ParamInfo] = &[
-    ParamInfo::log("freq", "Frequency", 2000.0, 12000.0, 6500.0, "Hz"),
+    ParamInfo::log("freq", "Detection high-pass", 2000.0, 12000.0, 5500.0, "Hz"),
     ParamInfo::lin("threshold", "Threshold", -60.0, 0.0, -30.0, "dB"),
-    ParamInfo::log("ratio", "Ratio", 1.0, 20.0, 6.0, ":1"),
+    ParamInfo::lin("range", "Range", 0.0, 24.0, 12.0, "dB"),
     ParamInfo::toggle("listen", "Listen", false),
+    ParamInfo::log("freq_hi", "Detection low-pass", 4000.0, 20000.0, 16000.0, "Hz"),
+    ParamInfo::choice("mode", "Mode", DS_MODES, 0.0),
+    ParamInfo::choice("processing", "Processing", &["Split band", "Wide band"], 0.0),
+    ParamInfo::lin("lookahead", "Look-ahead", 0.0, DS_MAX_LOOK_MS, 0.0, "ms"),
+    ParamInfo::lin("link", "Stereo link", 0.0, 100.0, 100.0, "%"),
 ];
+
+impl DeEsser {
+    fn v(&self, id: &str) -> f32 {
+        DEESS_PARAMS.iter().position(|p| p.id == id).map(|k| self.p[k]).unwrap_or(0.0)
+    }
+    fn update(&mut self) {
+        let (hp, lp) = (self.v("freq"), self.v("freq_hi").max(self.v("freq") * 1.2).min(self.rate * 0.45));
+        for ch in 0..2 {
+            self.det_hp[ch] = Biquad::new(BiquadKind::HighPass, hp, 0.9, 0.0, self.rate);
+            self.det_lp[ch] = Biquad::new(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate);
+            self.split[ch] = Biquad::new(BiquadKind::HighShelf, (hp * 0.8).min(self.rate * 0.4), 0.707, -self.red[ch], self.rate);
+        }
+    }
+    fn look(&self) -> usize {
+        ((self.v("lookahead") * 0.001 * self.rate) as usize).min(self.delay[0].len() - 1)
+    }
+}
 
 impl Effect for DeEsser {
     fn set_param(&mut self, id: &str, v: f32) {
-        match id {
-            "freq" => {
-                self.freq = v;
-                for b in &mut self.det {
-                    b.set(BiquadKind::HighPass, v, 0.9, 0.0, self.rate);
-                }
-            }
-            "threshold" => self.core.threshold = v,
-            "ratio" => self.core.ratio = v,
-            "listen" => self.listen = v >= 0.5,
-            _ => {}
+        if let Some(k) = DEESS_PARAMS.iter().position(|p| p.id == id) {
+            self.p[k] = v;
+            self.update();
         }
     }
     fn reset(&mut self) {
-        self.det.iter_mut().for_each(Biquad::reset);
+        self.det_hp.iter_mut().chain(self.det_lp.iter_mut()).chain(self.split.iter_mut()).for_each(Biquad::reset);
+        self.delay.iter_mut().for_each(|d| d.fill(0.0));
+        self.red = [0.0; 2];
+    }
+    fn latency(&self) -> usize {
+        self.look()
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let (thr, range) = (self.v("threshold"), self.v("range"));
+        let single = self.v("mode") < 0.5;
+        let wide = self.v("processing") >= 0.5;
+        let listen = self.v("listen") >= 0.5;
+        let link = self.v("link") / 100.0;
+        let look = self.look();
+        let n = self.delay[0].len();
+        let fast = (-1.0 / (0.0005 * self.rate)).exp();
+        let rel = (-1.0 / (0.06 * self.rate)).exp();
+        let slow = (-1.0 / (0.03 * self.rate)).exp();
+        let shelf_f = (self.v("freq") * 0.8).min(self.rate * 0.4);
+        let (mut pin, mut pout, mut gr) = (0.0f32, 0.0f32, 0.0f32);
         for i in 0..l.len() {
-            let (a, b) = (self.det[0].process(l[i]), self.det[1].process(r[i]));
-            let g = self.core.gain(a.abs().max(b.abs()));
-            if self.listen {
-                l[i] = a;
-                r[i] = b;
-            } else {
-                // Reduce only the sibilant band: x − hp + hp·g.
-                l[i] += a * (g - 1.0);
-                r[i] += b * (g - 1.0);
+            let x = [l[i], r[i]];
+            let mut want = [0.0f32; 2];
+            let mut sib = [0.0f32; 2];
+            for ch in 0..2 {
+                let h = self.det_hp[ch].process(x[ch]);
+                sib[ch] = self.det_lp[ch].process(h);
+                let s = sib[ch].abs();
+                self.sib_env[ch] = s + (self.sib_env[ch] - s) * if s > self.sib_env[ch] { fast } else { rel };
+                let f = x[ch].abs();
+                self.full_env[ch] = f + (self.full_env[ch] - f) * slow;
+                let s_db = gain_to_db(self.sib_env[ch].max(1e-6));
+                // Single vocal: sibilance counts when it stands out from the voice itself (relative),
+                // so a quiet "s" is still caught and a loud vowel is left alone.
+                let over = if single {
+                    let rel_db = s_db - gain_to_db(self.full_env[ch].max(1e-6));
+                    (s_db - thr).min(rel_db + 6.0)
+                } else {
+                    s_db - thr
+                };
+                want[ch] = (over.max(0.0) * 0.8).min(range);
+            }
+            // Stereo link: each side moves towards the louder side's reduction.
+            let mx = want[0].max(want[1]);
+            for ch in 0..2 {
+                let w = want[ch] + (mx - want[ch]) * link;
+                self.red[ch] = w + (self.red[ch] - w) * if w > self.red[ch] { fast } else { rel };
+            }
+            // Look-ahead on the audio path.
+            let d = &mut self.delay;
+            d[0][self.pos] = x[0];
+            d[1][self.pos] = x[1];
+            let rd = (self.pos + n - look) % n;
+            let y = [d[0][rd], d[1][rd]];
+            self.pos = (self.pos + 1) % n;
+            for ch in 0..2 {
+                let g = db_to_gain(-self.red[ch]);
+                // Split band: a dynamic high shelf (re-tuned every 16 samples) cuts only above the
+                // detection frequency, so the voice body below it is untouched and the phase stays clean.
+                if i % 16 == 0 {
+                    self.split[ch].set(BiquadKind::HighShelf, shelf_f, 0.707, -self.red[ch], self.rate);
+                }
+                let hf = self.split[ch].process(y[ch]);
+                let o = if listen {
+                    sib[ch]
+                } else if wide {
+                    y[ch] * g
+                } else {
+                    hf
+                };
+                if ch == 0 {
+                    l[i] = o;
+                } else {
+                    r[i] = o;
+                }
+                pin = pin.max(y[ch].abs());
+                pout = pout.max(o.abs());
+                gr = gr.max(self.red[ch]);
             }
         }
+        self.gr = gr;
+        let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
+        self.tele = [db(pin), db(pout), gr];
     }
     fn gain_reduction(&self) -> f32 {
-        self.core.gr
+        self.gr
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
@@ -800,15 +1132,27 @@ pub fn deesser_def() -> EffectDef {
         id: "deesser",
         name: "De-esser",
         category: "Dynamics",
-        description: "Split-band de-esser that compresses only the sibilant range.",
+        description: "De-esser after Pro-DS: single-vocal (relative) or allround detection, split- or wide-band processing, detection band, threshold, range, look-ahead, stereo link and listen.",
         params: DEESS_PARAMS,
         uses_sidechain: false,
         create: |rate| {
-            let mut core = CompCore::new(rate);
-            core.attack = 0.5;
-            core.release = 60.0;
-            core.knee = 3.0;
-            Box::new(DeEsser { rate, freq: 6500.0, det: [Biquad::new(BiquadKind::HighPass, 6500.0, 0.9, 0.0, rate); 2], core, listen: false })
+            let look = (DS_MAX_LOOK_MS * 0.001 * rate) as usize + 2;
+            let mut d = DeEsser {
+                rate,
+                p: std::array::from_fn(|k| DEESS_PARAMS[k].default),
+                det_hp: [Biquad::default(); 2],
+                det_lp: [Biquad::default(); 2],
+                split: [Biquad::default(); 2],
+                full_env: [0.0; 2],
+                sib_env: [0.0; 2],
+                red: [0.0; 2],
+                delay: [vec![0.0; look], vec![0.0; look]],
+                pos: 0,
+                gr: 0.0,
+                tele: [-90.0, -90.0, 0.0],
+            };
+            d.update();
+            Box::new(d)
         },
     }
 }
@@ -1030,6 +1374,99 @@ pub fn transient_def() -> EffectDef {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    fn run_fx(def: EffectDef, params: &[(&str, f32)], l: &[f32], r: &[f32], sc: Option<(&[f32], &[f32])>) -> (Vec<f32>, Vec<f32>, f32) {
+        let mut e = (def.create)(48000.0);
+        for (k, v) in params {
+            e.set_param(k, *v);
+        }
+        let (mut a, mut b) = (l.to_vec(), r.to_vec());
+        for (i, (x, y)) in a.chunks_mut(256).zip(b.chunks_mut(256)).enumerate() {
+            let s = sc.map(|(p, q)| (&p[i * 256..i * 256 + x.len()], &q[i * 256..i * 256 + x.len()]));
+            e.process(x, y, s);
+        }
+        let gr = e.gain_reduction();
+        (a, b, gr)
+    }
+    fn rms_of(v: &[f32]) -> f32 {
+        (v.iter().map(|s| s * s).sum::<f32>() / v.len().max(1) as f32).sqrt()
+    }
+    fn sine(f: f32, amp: f32, n: usize) -> Vec<f32> {
+        (0..n).map(|i| (i as f32 / 48000.0 * f * std::f32::consts::TAU).sin() * amp).collect()
+    }
+
+    /// Pro-MB: idle bands sum flat; one band compressing touches only its range; solo isolates a band;
+    /// upward compression lifts a quiet band.
+    #[test]
+    fn multiband_bands_modes_and_solo() {
+        let n = 48000;
+        let lo = sine(100.0, 0.5, n);
+        let hi = sine(6000.0, 0.5, n);
+        let mix: Vec<f32> = lo.iter().zip(&hi).map(|(a, b)| a + b).collect();
+        let idle = [("b1_thr", 0.0), ("b2_thr", 0.0), ("b3_thr", 0.0), ("b4_thr", 0.0)];
+        let (y, _, _) = run_fx(multiband_def(), &idle, &mix, &mix, None);
+        let ratio = rms_of(&y[24000..]) / rms_of(&mix[24000..]);
+        assert!((ratio - 1.0).abs() < 0.08, "idle multiband must sum ~flat, got {ratio}");
+        // Compress only the low band hard.
+        let (y, _, gr) = run_fx(multiband_def(), &[("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &lo, &lo, None);
+        assert!(gr > 6.0 && rms_of(&y[24000..]) < rms_of(&lo[24000..]) * 0.5);
+        let (y, _, _) = run_fx(multiband_def(), &[("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &hi, &hi, None);
+        assert!(rms_of(&y[24000..]) > rms_of(&hi[24000..]) * 0.85, "the high band is left alone");
+        // Solo band 1: the 6 kHz tone disappears.
+        let (y, _, _) = run_fx(multiband_def(), &[("b1_solo", 1.0), ("b1_thr", 0.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &hi, &hi, None);
+        assert!(rms_of(&y[24000..]) < rms_of(&hi[24000..]) * 0.1);
+        // Upward compression lifts a quiet signal in its band.
+        let quiet = sine(100.0, 0.01, n);
+        let (y, _, _) = run_fx(multiband_def(), &[("b1_mode", 2.0), ("b1_thr", -20.0), ("b1_ratio", 4.0), ("b1_range", 12.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &quiet, &quiet, None);
+        assert!(rms_of(&y[24000..]) > rms_of(&quiet[24000..]) * 2.0);
+    }
+
+    /// Pro-G: closes on quiet input down to the range, opens on loud; flip ducks instead; the external
+    /// sidechain keys it; look-ahead reports latency; the expander ratio cuts less than a gate.
+    #[test]
+    fn gate_range_flip_sidechain_and_lookahead() {
+        let n = 48000;
+        let quiet = sine(440.0, 0.003, n);
+        let loud = sine(440.0, 0.5, n);
+        let (y, _, _) = run_fx(gate_def(), &[("threshold", -30.0), ("range", -40.0)], &quiet, &quiet, None);
+        let cut = rms_of(&y[24000..]) / rms_of(&quiet[24000..]);
+        assert!((cut - 0.01).abs() < 0.005, "closed gate sits at the range (-40 dB), got {cut}");
+        let (y, _, _) = run_fx(gate_def(), &[("threshold", -30.0)], &loud, &loud, None);
+        assert!(rms_of(&y[24000..]) > rms_of(&loud[24000..]) * 0.95);
+        let (y, _, _) = run_fx(gate_def(), &[("threshold", -30.0), ("range", -40.0), ("flip", 1.0)], &loud, &loud, None);
+        assert!(rms_of(&y[24000..]) < rms_of(&loud[24000..]) * 0.05, "flip ducks when open");
+        let (y, _, _) = run_fx(gate_def(), &[("threshold", -30.0), ("sidechain", 1.0)], &quiet, &quiet, Some((&loud, &loud)));
+        assert!(rms_of(&y[24000..]) > rms_of(&quiet[24000..]) * 0.95, "keyed open by the sidechain");
+        let (y, _, _) = run_fx(gate_def(), &[("threshold", -30.0), ("range", -80.0), ("ratio", 2.0), ("knee", 0.0)], &quiet, &quiet, None);
+        let soft = rms_of(&y[24000..]) / rms_of(&quiet[24000..]);
+        assert!(soft > 0.02 && soft < 0.5, "2:1 expansion cuts gently, got {soft}");
+        let mut g = (gate_def().create)(48000.0);
+        g.set_param("lookahead", 5.0);
+        assert_eq!(g.latency(), 240);
+    }
+
+    /// Pro-DS: sibilance is reduced, a low vowel is left alone, the range limits the cut, split band
+    /// leaves the lows of a mixed signal untouched, and listen outputs the detection band.
+    #[test]
+    fn deesser_modes_range_and_split() {
+        let n = 48000;
+        let vowel = sine(300.0, 0.5, n);
+        let ess = sine(7000.0, 0.5, n);
+        let (y, _, gr) = run_fx(deesser_def(), &[("mode", 1.0), ("threshold", -30.0), ("range", 12.0)], &ess, &ess, None);
+        assert!(gr > 6.0 && gr <= 12.01, "range caps the reduction, got {gr}");
+        assert!(rms_of(&y[24000..]) < rms_of(&ess[24000..]) * 0.6);
+        let (y, _, _) = run_fx(deesser_def(), &[("threshold", -30.0)], &vowel, &vowel, None);
+        assert!(rms_of(&y[24000..]) > rms_of(&vowel[24000..]) * 0.97, "vowels pass");
+        let both: Vec<f32> = vowel.iter().zip(&ess).map(|(a, b)| a + b).collect();
+        let (split, _, _) = run_fx(deesser_def(), &[("mode", 1.0), ("threshold", -40.0), ("range", 24.0)], &both, &both, None);
+        let (wide, _, _) = run_fx(deesser_def(), &[("mode", 1.0), ("threshold", -40.0), ("range", 24.0), ("processing", 1.0)], &both, &both, None);
+        assert!(rms_of(&split[24000..]) > rms_of(&wide[24000..]) * 1.3, "split band keeps the vowel, wide band ducks it all");
+        let (l, _, _) = run_fx(deesser_def(), &[("listen", 1.0)], &vowel, &vowel, None);
+        assert!(rms_of(&l[24000..]) < 0.05, "listen plays only the sibilance band");
+        let mut d = (deesser_def().create)(48000.0);
+        d.set_param("lookahead", 10.0);
+        assert_eq!(d.latency(), 480);
+    }
 
     /// Attack +100 % lifts the first milliseconds of a hit, sustain −100 % ducks its tail; the guard keeps
     /// the boosted attack under full scale.

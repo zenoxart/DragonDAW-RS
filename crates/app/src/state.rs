@@ -190,6 +190,12 @@ pub struct UiState {
     pub wait_input: bool,
     /// Record was pressed with wait-for-input on and no note has come yet.
     pub waiting_record: bool,
+    /// Side-specific keys held, for tests (the real state comes from the OS).
+    pub test_keys: Vec<crate::views::keys::SideKey>,
+    /// Right-button press on empty space (time, position) – held long enough it becomes the slice tool.
+    pub hold_slice: Option<(f64, egui::Pos2)>,
+    /// The context tool menu (middle + right click), where it is open.
+    pub tool_menu: Option<egui::Pos2>,
     /// FL's piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
     pub note_tools: crate::views::note_tools::NoteTools,
     /// The stock effect editor shown full screen (mixer insert, effect).
@@ -266,6 +272,9 @@ impl UiState {
             last_target: None,
             wait_input: false,
             waiting_record: false,
+            test_keys: Vec::new(),
+            hold_slice: None,
+            tool_menu: None,
             note_tools: Default::default(),
             fx_fullscreen: None,
             midi_learn: None,

@@ -658,6 +658,8 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             _ => st.toast("Select a time range on the ruler first", Severity::Info),
         },
         x if x.starts_with("zoom.") => zoom_command(st, &x[5..], ctx),
+        // The numeric-pad 0 is FL's fast forward (handled while held), not "mute channel 10".
+        "rack.mute0" if crate::views::keys::side(st, crate::views::keys::SideKey::Numpad0) => {}
         x if x.starts_with("rack.mute") || x.starts_with("rack.solo") => {
             let digit: usize = x[9..].parse().unwrap_or(1);
             let k = if digit == 0 { 9 } else { digit - 1 };

@@ -113,7 +113,7 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Piano roll: G / K and H / J channel stepping, Shift+H / Shift+K, M note names, O portamento, F / Shift+F event lane (velocity, pan, release), Shift+D discard lengths, Shift+N chord off, Shift+R select at random, Shift+C select by colour, Alt+C colour, Shift+G / Alt+G groups, Alt+B helpers, Alt+V ghosts, Alt+arrows nudge, Ctrl+Alt+Q quick quantize, Ctrl+M import MIDI | ✅ |
 | Playlist: Shift+G / Alt+G clip groups, Shift+C select by source, Ctrl+Alt+C consolidate, Ctrl+P performance, 6 zoom, Ctrl+← / → / Enter time selection, Shift+Alt+T time signature, Ctrl+F8 project picker | ✅ (6 shows the whole song – there is no separate performance zone) |
 | Piano roll Alt+N waveform helper (the song's audio under the notes), Shift+Alt+wheel nudge (playlist and piano roll), Ctrl+Alt+Home resizing from the left | ✅ |
-| Numeric-pad 0 fast forward | ❌ egui cannot tell the numeric-pad 0 from the main 0 (which mutes channel 10 in the rack) |
+| Numeric-pad 0 fast forward | ✅ held numeric-pad 0 seeks forward at 4× (read from the OS key state – X11 and Windows; not on Wayland or macOS) |
 | Numeric-pad * and / (next / previous bar in song mode; with Alt next / previous marker) | ✅ (read as typed characters, so the main-keyboard * and / work too; Alt+/ and Alt++ also jump markers) |
 | Ctrl+I: insert controller value (piano roll – the last touched parameter goes into its automation lane at the playhead) / wait for input to start recording (elsewhere – the first played note starts the armed recording) | ✅ |
 | Shift+M in the piano roll: unmute the selection, or – when nothing selected is muted – select groups of notes at random (FL binds both) | ✅ |
@@ -127,7 +127,9 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Drag a line (any angle) – every clip / note it crosses is cut where the line passes its track / row | ✅ |
 | Alt while slicing: no snap | ✅ |
 | Right-drag with the slice tool: slice and delete the smaller piece (FL Right-Shift+right-click in the piano roll) | ✅ |
-| Right-Shift+left-click with any tool slices (the Shift key on the right only) | ❌ egui does not report which Shift key is held; the slice tool or Insert (slice at the playhead) do the same |
+| Right-Shift+left-click with any tool slices; Right-Shift+right-click slices and deletes the smaller piece (playlist) / keeps the longer one (piano roll); Right-Shift+drag cuts a line | ✅ |
+| Right-Alt+click mutes, Right-Alt+right-click quantizes; Left-Shift+right-drag pans; Left-Shift+resize ripples the following clips; holding the right button on empty space starts the slice line; middle+right click opens the tool menu | ✅ |
+| Which Shift / Alt is held (left or right) | read from the OS key state on X11 and Windows; on Wayland and macOS both sides act as left (use the slice tool there) |
 | Ctrl+U quick chop / Alt+U chop tool (piano roll) | ✅ |
 
 ## Comparison with the FabFilter bundle
@@ -144,7 +146,11 @@ What the stock effects share with FabFilter's handling, and what is still missin
 | Saturn: multiband saturation – up to four bands with draggable crossovers, eight styles, drive, dynamics, tone, level, mix and a resonant feedback loop per band | ✅ "Multiband Saturator" |
 | Pro-R: decay-rate EQ, drawn as a curve | ✅ on the reverb: five draggable points (80 Hz … 12 kHz, ×¼ … ×4) – Pro-R's curve has free nodes |
 | Modulation: LFOs (five shapes, free or tempo-synced), envelope followers and an XY pad on any stock-effect parameter, with depth; the XY pad is MIDI-learnable and automatable (MIDI as a source) | ✅ (no slew or per-source MIDI note / velocity sources) |
-| Pro-DS / Pro-MB / Timeless / Volcano / Pro-G | partial: de-esser, multiband compressor, delay, filter and gate exist with their own, simpler controls |
+| Pro-DS: single-vocal (relative) / allround detection, split band (dynamic high shelf) / wide band, detection band high- and low-pass, threshold, range, look-ahead 0–15 ms, stereo link, listen | ✅ De-esser |
+| Pro-MB: up to four bands, three crossovers, per band compress / expand / upward compress / upward expand, threshold, range, ratio, knee, attack, release, gain, solo, bypass; mix, output | ✅ Multiband Dynamics (crossover bands, not Pro-MB's dynamic phase mode; no per-band sidechain) |
+| Timeless: tempo-synced stereo delay with feedback, cross feedback, drive in the loop, filter with resonance, diffusion, ducking, freeze, width and pitch shift in the loop | ✅ Delay (no modulation matrix beyond the shared LFO / envelope / XY sources) |
+| Volcano: two filters (LP, HP, BP, notch, peak, shelves) at 12 / 24 / 48 dB/oct, styles (Clean, Smooth, Ram, Hack), drive, serial / parallel routing, B following A, stereo spread | ✅ Filter |
+| Pro-G: threshold with hysteresis, range, ratio (gate … expander), knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix, listen | ✅ Gate |
 | Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ |
 
 ## The new plugins against their published references

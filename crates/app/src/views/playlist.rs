@@ -123,7 +123,14 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         None => {}
     }
-    let pan = nav::middle_drag(ui, rect);
+    // FL's side-specific modifiers: Right-Shift slices, Right-Alt mutes / quantizes, Left-Shift + right-drag pans.
+    use super::keys::{side, SideKey};
+    let shift_held = ui.input(|i| i.modifiers.shift);
+    let alt_held = ui.input(|i| i.modifiers.alt);
+    let rsh = shift_held && side(st, SideKey::RightShift);
+    let lsh = shift_held && !rsh && side(st, SideKey::LeftShift);
+    let ralt = alt_held && side(st, SideKey::RightAlt);
+    let pan = nav::pan_drag(ui, rect, lsh);
     if pan != Vec2::ZERO {
         st.ui.pl_anim = None;
         st.ui.pl_x = (st.ui.pl_x - pan.x as f64 / zoom).max(0.0);
@@ -410,8 +417,26 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    // Slice tool, right-drag: slice and delete the smaller piece.
-    if tool == Tool::Slice && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pl_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
+    // Right-click and hold on empty space opens the slice tool (FL "click and hold" function).
+    let now_t = ui.input(|i| i.time);
+    if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary) && !i.pointer.middle_down()) && !ui.input(|i| i.modifiers.ctrl) && !lsh {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()).filter(|p| timeline.contains(*p) && clip_at(*p).is_none()) {
+            st.ui.hold_slice = Some((now_t, pos));
+        }
+    }
+    if let Some((t0, origin)) = st.ui.hold_slice {
+        let moved = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| p.distance(origin) > 6.0);
+        if !ui.input(|i| i.pointer.secondary_down()) {
+            st.ui.hold_slice = None;
+        } else if now_t - t0 > 0.4 && st.ui.pl_drag.is_none() && !moved {
+            st.ui.hold_slice = None;
+            st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(origin.x, sx), y: origin.y + st.ui.pl_y, delete_small: false } });
+        } else {
+            ui.ctx().request_repaint();
+        }
+    }
+    // Slice tool (or Right-Shift), right-drag: slice and delete the smaller piece.
+    if (tool == Tool::Slice || rsh) && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pl_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|p| timeline.contains(*p)) {
             st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y, delete_small: true } });
         }
@@ -433,7 +458,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 if let Some(offset) = off {
                     st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind: DragKind::Slip { from: beat_of(pos.x, sx), offset } });
                 }
-            } else if tool == Tool::Slice {
+            } else if tool == Tool::Slice || rsh {
                 st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y, delete_small: false } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
                 let edge = 6.0;
@@ -521,9 +546,19 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
             DragKind::ResizeRight => {
                 let b = snap(beat, grid);
+                // Left-Shift while resizing: ripple – the clips after it on the track move with its end.
+                let ripple = lsh;
                 st.session.gesture("Resize clip", |p| {
-                    if let Some(c) = p.track_mut(d.track).and_then(|t| t.clips.iter_mut().find(|c| c.id == d.clip)) {
-                        c.length = (b - c.start).max(grid.max(1.0 / 16.0));
+                    let Some(t) = p.track_mut(d.track) else { return };
+                    let Some((start, old_end)) = t.clips.iter().find(|c| c.id == d.clip).map(|c| (c.start, c.end())) else { return };
+                    let new_len = (b - start).max(grid.max(1.0 / 16.0));
+                    let delta = start + new_len - old_end;
+                    for c in t.clips.iter_mut() {
+                        if c.id == d.clip {
+                            c.length = new_len;
+                        } else if ripple && c.start >= old_end - 1e-9 {
+                            c.start = (c.start + delta).max(0.0);
+                        }
                     }
                 });
             }
@@ -701,8 +736,42 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: st.ui.pl_vzoom, y: st.ui.pl_y });
         }
     }
+    // FL: Right-Shift + click slices the clip under the pointer (Right-Shift + right-click also deletes the
+    // smaller piece); Right-Alt + click mutes, Right-Alt + right-click quantizes the selection.
+    let side_click = (rsh || ralt) && (resp.clicked() || resp.secondary_clicked());
+    if side_click {
+        if let Some(pos) = resp.interact_pointer_pos().filter(|p| timeline.contains(*p)) {
+            let hit = clip_at(pos);
+            let at = if alt_held && rsh { beat_of(pos.x, sx) } else { snap(beat_of(pos.x, sx), grid) };
+            match (rsh, resp.secondary_clicked(), hit) {
+                (true, del, Some((tid, cid, _))) => st.session.edit("Slice clip", |p| {
+                    if let (Some(right), true) = (dragon_engine::edit::split_clip(p, tid, cid, at), del) {
+                        let len = |p: &Project, id: Id| p.track(tid).and_then(|t| t.clips.iter().find(|x| x.id == id)).map(|x| x.length).unwrap_or(0.0);
+                        let small = if len(p, right) < len(p, cid) { right } else { cid };
+                        dragon_engine::edit::delete_clips(p, &[small]);
+                    }
+                }),
+                (false, false, _) => {
+                    let mut ids = st.ui.clips.clone();
+                    if let Some((_, cid, _)) = hit {
+                        if !ids.contains(&cid) {
+                            ids = vec![cid];
+                        }
+                    }
+                    st.session.edit("Mute clips", |p| p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)).for_each(|c| c.muted = !c.muted));
+                }
+                (false, true, _) => {
+                    let ids = st.ui.clips.clone();
+                    let g = if grid > 0.0 { grid } else { 1.0 };
+                    st.session.edit("Quantize clips", |p| p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)).for_each(|c| c.start = (c.start / g).round() * g));
+                }
+                _ => {}
+            }
+        }
+    }
+    super::keys::tool_menu(ui, st, &resp);
     // Clicks with tools.
-    if (resp.clicked() || resp.secondary_clicked()) && !matches!(tool, Tool::Playback | Tool::Zoom) {
+    if (resp.clicked() || resp.secondary_clicked()) && !side_click && st.ui.tool_menu.is_none() && !(lsh && resp.secondary_clicked()) && !matches!(tool, Tool::Playback | Tool::Zoom) {
         if let Some(pos) = resp.interact_pointer_pos().filter(|p| timeline.contains(*p)) {
             let beat = beat_of(pos.x, sx);
             let hit = clip_at(pos);

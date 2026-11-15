@@ -993,3 +993,70 @@ fn knife_right_drag_deletes_the_smaller_piece() {
     let parts: Vec<(f64, f64)> = h.st.session.project.track(t0).unwrap().clips.iter().map(|c| (c.start, c.length)).collect();
     assert_eq!(parts, vec![(0.0, 6.0)], "the 2-beat piece is gone");
 }
+
+/// FL's side-specific mouse shortcuts: Right-Shift+click slices (playlist and piano roll), Right-Shift +
+/// right-click slices and deletes the smaller piece, Right-Alt+click mutes, Left-Shift while resizing
+/// ripples the following clips; the numeric-pad 0 does not mute channel 10.
+#[test]
+fn fl_side_modifier_mouse_shortcuts() {
+    use super::keys::SideKey;
+    // Piano roll.
+    let a = Note { pitch: 60, start: 0, length: PPQ * 4, velocity: 0.8, ..Default::default() };
+    let mut h = piano_with_notes(&[a]);
+    h.st.ui.tool = Tool::Draw;
+    h.st.ui.test_keys = vec![SideKey::RightShift];
+    let at = h.pr_pos(PPQ as f64, 60);
+    h.click(piano, at, PointerButton::Primary, Modifiers::SHIFT);
+    let mut n: Vec<(u32, u32)> = h.notes().iter().map(|x| (x.start, x.length)).collect();
+    n.sort();
+    assert_eq!(n, vec![(0, PPQ), (PPQ, PPQ * 3)], "Right-Shift+click slices");
+    let at = h.pr_pos(PPQ as f64 * 3.0, 60);
+    h.click(piano, at, PointerButton::Secondary, Modifiers::SHIFT);
+    let mut n: Vec<(u32, u32)> = h.notes().iter().map(|x| (x.start, x.length)).collect();
+    n.sort();
+    assert_eq!(n, vec![(0, PPQ), (PPQ, PPQ * 2)], "Right-Shift+right-click slices and drops the smaller piece");
+
+    // Playlist.
+    let mut h = Harness::new();
+    let pat = h.st.session.project.patterns[0].id;
+    let t0 = h.st.session.project.tracks[0].id;
+    h.st.session.edit("setup", |p| {
+        for t in &mut p.tracks {
+            t.clips.clear();
+        }
+        super::playlist::place_pattern(p, t0, pat, 0.0, 8.0);
+        super::playlist::place_pattern(p, t0, pat, 8.0, 4.0);
+    });
+    h.st.ui.tool = Tool::Draw;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
+    let x_at = |h: &Harness, b: f32| t.left() + (b - h.st.ui.pl_x as f32) * h.st.ui.playlist_zoom;
+    let y = t.top() + row_h / 2.0;
+    h.st.ui.test_keys = vec![SideKey::RightShift];
+    h.click(playlist, Pos2::new(x_at(&h, 2.0), y), PointerButton::Primary, Modifiers::SHIFT);
+    let clips = |h: &Harness| {
+        let mut v: Vec<(f64, f64)> = h.st.session.project.track(t0).unwrap().clips.iter().map(|c| (c.start, c.length)).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v
+    };
+    assert_eq!(clips(&h), vec![(0.0, 2.0), (2.0, 6.0), (8.0, 4.0)], "Right-Shift+click slices the clip");
+    // Right-Alt+click mutes.
+    h.st.ui.test_keys = vec![SideKey::RightAlt];
+    h.st.ui.clips.clear();
+    h.click(playlist, Pos2::new(x_at(&h, 1.0), y), PointerButton::Primary, Modifiers::ALT);
+    assert!(h.st.session.project.track(t0).unwrap().clips.iter().find(|c| c.start == 0.0).unwrap().muted);
+    // Left-Shift resize: the clip at 2…8 grows to 10 and the clip at 8 moves to 10.
+    h.st.ui.test_keys = vec![SideKey::LeftShift];
+    let edge = Pos2::new(x_at(&h, 8.0) - 2.0, y);
+    h.drag(playlist, edge, Pos2::new(x_at(&h, 10.0) - 2.0, y), PointerButton::Primary, Modifiers::SHIFT);
+    let c = clips(&h);
+    assert!(c.contains(&(2.0, 8.0)) && c.contains(&(10.0, 4.0)), "ripple: {c:?}");
+    // Numeric-pad 0 is fast forward, not "mute channel 10".
+    h.st.ui.test_keys = vec![SideKey::Numpad0];
+    h.st.ui.editor = crate::state::Editor::Rack;
+    let ctx = h.ctx.clone();
+    let muted_before: Vec<bool> = h.st.session.project.channels.iter().map(|c| c.muted).collect();
+    crate::commands::execute(&mut h.st, "dragon.rack.mute0", &ctx);
+    assert_eq!(muted_before, h.st.session.project.channels.iter().map(|c| c.muted).collect::<Vec<_>>());
+}

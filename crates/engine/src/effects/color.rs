@@ -158,57 +158,165 @@ pub fn bitcrusher_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ filter
 
+/// Filter types (Volcano): the classic responses plus notch, peak and shelves.
+pub const FILTER_TYPES: &[&str] = &["Low pass", "High pass", "Band pass", "Notch", "Peak", "Low shelf", "High shelf"];
+/// Slopes: one, two or four state-variable stages (12 / 24 / 48 dB per octave for the pass types).
+pub const FILTER_SLOPES: &[&str] = &["12 dB/oct", "24 dB/oct", "48 dB/oct"];
+/// Styles: how the filter saturates around its resonance (Volcano's Clean / Smooth / Ram / Hack).
+pub const FILTER_STYLES: &[&str] = &["Clean", "Smooth", "Ram", "Hack"];
+
 const FILTER_PARAMS: &[ParamInfo] = &[
-    ParamInfo::choice("type", "Type", &["Low pass", "High pass", "Band pass"], 0.0),
+    ParamInfo::choice("type", "Type", FILTER_TYPES, 0.0),
     ParamInfo::log("cutoff", "Cutoff", 20.0, 20000.0, 2000.0, "Hz"),
     ParamInfo::lin("resonance", "Resonance", 0.0, 0.98, 0.3, ""),
     ParamInfo::log("lfo_rate", "LFO rate", 0.05, 20.0, 1.0, "Hz"),
     ParamInfo::lin("lfo_depth", "LFO depth", 0.0, 4.0, 0.0, "oct"),
     ParamInfo::lin("env_depth", "Envelope depth", -4.0, 4.0, 0.0, "oct"),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
+    ParamInfo::choice("slope", "Slope", FILTER_SLOPES, 0.0),
+    ParamInfo::choice("style", "Style", FILTER_STYLES, 0.0),
+    ParamInfo::lin("drive", "Drive", 0.0, 24.0, 0.0, "dB"),
+    ParamInfo::lin("gain", "Peak / shelf gain", -24.0, 24.0, 6.0, "dB"),
+    ParamInfo::lin("pan", "Stereo spread (cutoff L/R)", -1.0, 1.0, 0.0, "oct"),
+    ParamInfo::toggle("b_on", "Filter B on", false),
+    ParamInfo::choice("b_type", "Filter B type", FILTER_TYPES, 1.0),
+    ParamInfo::log("b_cutoff", "Filter B cutoff", 20.0, 20000.0, 200.0, "Hz"),
+    ParamInfo::lin("b_resonance", "Filter B resonance", 0.0, 0.98, 0.3, ""),
+    ParamInfo::choice("b_slope", "Filter B slope", FILTER_SLOPES, 0.0),
+    ParamInfo::choice("routing", "Routing", &["Serial", "Parallel"], 0.0),
+    ParamInfo::lin("b_follow", "Filter B follows A's modulation", 0.0, 1.0, 0.0, ""),
 ];
 
-pub struct Filter {
-    rate: f32,
+const STAGES: usize = 4;
+
+/// One filter (A or B): up to four SVF stages per channel.
+#[derive(Clone, Copy, Default)]
+struct FilterUnit {
     kind: usize,
     cutoff: f32,
     res: f32,
+    slope: usize,
+    svf: [[Svf; STAGES]; 2],
+}
+
+impl FilterUnit {
+    fn stages(&self) -> usize {
+        [1, 2, 4][self.slope.min(2)]
+    }
+    /// One sample of channel `ch` at cutoff `f`.
+    #[inline]
+    fn run(&mut self, ch: usize, x: f32, f: f32, rate: f32, gain_db: f32, style: usize) -> f32 {
+        let n = self.stages();
+        let mut y = x;
+        // Resonance on the last stage only (the others are Butterworth-ish), so a 48 dB slope does not
+        // ring four times.
+        for k in 0..n {
+            let res = if k + 1 == n { self.res } else { 0.3 };
+            let input = match style {
+                // Ram: drive into each stage; Hack: hard-limited feedback path; Smooth: gentle tanh.
+                1 => (y * 0.9).tanh() / 0.9,
+                2 => (y * 1.6).tanh() / 1.2,
+                3 => y.clamp(-0.9, 0.9),
+                _ => y,
+            };
+            let (lp, bp, hp) = self.svf[ch][k].process(input, f, res, rate);
+            let g = crate::dsp::db_to_gain(gain_db) - 1.0;
+            y = match self.kind {
+                0 => lp,
+                1 => hp,
+                2 => bp,
+                3 => lp + hp,
+                4 => input + bp * g,
+                5 => input + lp * g,
+                _ => input + hp * g,
+            };
+            // Peak and shelves are one stage whatever the slope.
+            if self.kind >= 4 {
+                break;
+            }
+        }
+        y
+    }
+}
+
+pub struct Filter {
+    rate: f32,
+    a: FilterUnit,
+    b: FilterUnit,
+    b_on: bool,
+    parallel: bool,
+    b_follow: f32,
     lfo_rate: f32,
     lfo_depth: f32,
     env_depth: f32,
     mix: f32,
-    svf: [Svf; 2],
+    style: usize,
+    drive: f32,
+    gain: f32,
+    spread: f32,
     lfo: Lfo,
     env: Follower,
+    /// Telemetry: the modulated cutoff of A (Hz) for the display.
+    tele: [f32; 1],
 }
 
 impl Effect for Filter {
     fn set_param(&mut self, id: &str, v: f32) {
+        let idx = |v: f32, n: usize| (v.round().max(0.0) as usize).min(n - 1);
         match id {
-            "type" => self.kind = v.round().clamp(0.0, 2.0) as usize,
-            "cutoff" => self.cutoff = v,
-            "resonance" => self.res = v,
+            "type" => self.a.kind = idx(v, FILTER_TYPES.len()),
+            "cutoff" => self.a.cutoff = v,
+            "resonance" => self.a.res = v,
+            "slope" => self.a.slope = idx(v, 3),
+            "b_type" => self.b.kind = idx(v, FILTER_TYPES.len()),
+            "b_cutoff" => self.b.cutoff = v,
+            "b_resonance" => self.b.res = v,
+            "b_slope" => self.b.slope = idx(v, 3),
+            "b_on" => self.b_on = v >= 0.5,
+            "routing" => self.parallel = v >= 0.5,
+            "b_follow" => self.b_follow = v,
             "lfo_rate" => self.lfo_rate = v,
             "lfo_depth" => self.lfo_depth = v,
             "env_depth" => self.env_depth = v,
             "mix" => self.mix = v,
+            "style" => self.style = idx(v, FILTER_STYLES.len()),
+            "drive" => self.drive = v,
+            "gain" => self.gain = v,
+            "pan" => self.spread = v,
             _ => {}
         }
     }
     fn reset(&mut self) {
-        self.svf = [Svf::default(); 2];
+        self.a.svf = Default::default();
+        self.b.svf = Default::default();
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let drive = crate::dsp::db_to_gain(self.drive);
         for i in 0..l.len() {
             let m = self.lfo.next(self.lfo_rate, self.rate, LfoShape::Sine) * self.lfo_depth;
             let e = self.env.next(l[i].abs().max(r[i].abs())).min(1.0) * self.env_depth;
-            let f = self.cutoff * 2f32.powf(m + e);
+            let fa = self.a.cutoff * 2f32.powf(m + e);
+            let fb = self.b.cutoff * 2f32.powf((m + e) * self.b_follow);
+            self.tele[0] = fa;
             for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
-                let (lp, bp, hp) = self.svf[ch].process(*x, f, self.res, self.rate);
-                let y = [lp, hp, bp][self.kind];
-                *x = *x * (1.0 - self.mix) + y * self.mix;
+                // Stereo spread: the left and right cutoffs move apart.
+                let sp = 2f32.powf(if ch == 0 { -self.spread } else { self.spread } * 0.5);
+                let dry = *x;
+                let inp = if self.drive > 0.01 { (dry * drive).tanh() / drive.sqrt() } else { dry };
+                let ya = self.a.run(ch, inp, (fa * sp).clamp(20.0, 20000.0), self.rate, self.gain, self.style);
+                let y = if !self.b_on {
+                    ya
+                } else if self.parallel {
+                    0.5 * (ya + self.b.run(ch, inp, (fb * sp).clamp(20.0, 20000.0), self.rate, self.gain, self.style))
+                } else {
+                    self.b.run(ch, ya, (fb * sp).clamp(20.0, 20000.0), self.rate, self.gain, self.style)
+                };
+                *x = dry * (1.0 - self.mix) + y * self.mix;
             }
         }
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
@@ -217,11 +325,31 @@ pub fn filter_def() -> EffectDef {
         id: "filter",
         name: "Filter",
         category: "Filter",
-        description: "Resonant state-variable filter with LFO and envelope follower (auto-wah, sweeps).",
+        description: "Filter after Volcano: two filters (serial or parallel), low / high / band pass, notch, peak and shelves, 12 / 24 / 48 dB slopes, styles (clean, smooth, ram, hack), drive, stereo spread, LFO and envelope follower.",
         params: FILTER_PARAMS,
         uses_sidechain: false,
         create: |rate| {
-            Box::new(Filter { rate, kind: 0, cutoff: 2000.0, res: 0.3, lfo_rate: 1.0, lfo_depth: 0.0, env_depth: 0.0, mix: 1.0, svf: [Svf::default(); 2], lfo: Lfo::default(), env: Follower::new(5.0, 200.0, rate) })
+            let a = FilterUnit { kind: 0, cutoff: 2000.0, res: 0.3, slope: 0, svf: Default::default() };
+            let b = FilterUnit { kind: 1, cutoff: 200.0, res: 0.3, slope: 0, svf: Default::default() };
+            Box::new(Filter {
+                rate,
+                a,
+                b,
+                b_on: false,
+                parallel: false,
+                b_follow: 0.0,
+                lfo_rate: 1.0,
+                lfo_depth: 0.0,
+                env_depth: 0.0,
+                mix: 1.0,
+                style: 0,
+                drive: 0.0,
+                gain: 6.0,
+                spread: 0.0,
+                lfo: Lfo::default(),
+                env: Follower::new(5.0, 200.0, rate),
+                tele: [2000.0],
+            })
         },
     }
 }
@@ -673,5 +801,29 @@ mod scope_tests {
             s.finish();
             assert!((s.data[0] - want).abs() < 0.1, "case {mk}: {}", s.data[0]);
         }
+    }
+
+    /// Volcano-style filter: steeper slopes cut more an octave above the cutoff; the notch removes its
+    /// frequency; two filters in series make a band from a low pass and a high pass.
+    #[test]
+    fn filter_slopes_types_and_routing() {
+        let level = |set: &[(&str, f32)], f: f32| {
+            let mut p = filter_def().defaults();
+            p.insert("resonance".into(), 0.0);
+            for (k, v) in set {
+                p.insert((*k).into(), *v);
+            }
+            let mut e = crate::effects::create("filter", 48000.0, &p).unwrap();
+            let mut l: Vec<f32> = (0..48000).map(|i| (std::f32::consts::TAU * f * i as f32 / 48000.0).sin() * 0.5).collect();
+            let mut r = l.clone();
+            e.process(&mut l, &mut r, None);
+            l[24000..].iter().fold(0.0f32, |m, x| m.max(x.abs())) / 0.5
+        };
+        let at = |slope: f32| level(&[("cutoff", 1000.0), ("slope", slope)], 2000.0);
+        assert!(at(2.0) < at(1.0) && at(1.0) < at(0.0), "{} {} {}", at(0.0), at(1.0), at(2.0));
+        assert!(level(&[("type", 3.0), ("cutoff", 1000.0)], 1000.0) < 0.2, "notch");
+        // Band from LP 2 kHz → HP 500 Hz in series: 1 kHz passes, 100 Hz and 8 kHz do not.
+        let band = |f: f32| level(&[("cutoff", 2000.0), ("slope", 1.0), ("b_on", 1.0), ("b_type", 1.0), ("b_cutoff", 500.0), ("b_slope", 1.0)], f);
+        assert!(band(1000.0) > 0.6 && band(100.0) < 0.1 && band(8000.0) < 0.1, "{} {} {}", band(100.0), band(1000.0), band(8000.0));
     }
 }

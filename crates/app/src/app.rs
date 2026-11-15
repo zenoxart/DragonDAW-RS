@@ -101,6 +101,14 @@ impl DragonApp {
         if typing && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.st.toggle_play();
         }
+        // FL numeric-pad 0: fast forward while held (4× speed).
+        if !text_focus && views::keys::side(&self.st, views::keys::SideKey::Numpad0) && ctx.input(|i| i.focused) {
+            let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
+            let beats = self.st.session.project.bpm / 60.0 * dt * 4.0;
+            let now = self.st.beat_now();
+            self.st.seek(now + beats);
+            ctx.request_repaint();
+        }
         // FL's numeric-pad * and / (egui sees them as typed characters): Alt jumps between markers,
         // without Alt in song mode they step a bar.
         if !text_focus && !typing {

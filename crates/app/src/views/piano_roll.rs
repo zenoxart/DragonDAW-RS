@@ -154,7 +154,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         None => {}
     }
     // Middle-drag pans.
-    let pan = nav::middle_drag(ui, rect);
+    use super::keys::{side, SideKey};
+    let shift_held = ui.input(|i| i.modifiers.shift);
+    let alt_held = ui.input(|i| i.modifiers.alt);
+    let rsh = shift_held && side(st, SideKey::RightShift);
+    let lsh = shift_held && !rsh && side(st, SideKey::LeftShift);
+    let ralt = alt_held && side(st, SideKey::RightAlt);
+    let pan = nav::pan_drag(ui, rect, lsh);
     if pan != Vec2::ZERO {
         st.ui.pr_anim = None;
         st.ui.pr_x = (st.ui.pr_x - pan.x as f64 / zoom).max(0.0);
@@ -430,8 +436,26 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    // Slice tool, right-drag: slice and delete the smaller piece (FL Right-Shift+right-click).
-    if tool == Tool::Slice && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pr_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
+    // Right-click and hold on empty space opens the slice tool (FL "click and hold" function).
+    let now_t = ui.input(|i| i.time);
+    if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary) && !i.pointer.middle_down()) && !ui.input(|i| i.modifiers.ctrl) && !lsh {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()).filter(|p| grid.contains(*p) && note_at(*p).is_none()) {
+            st.ui.hold_slice = Some((now_t, pos));
+        }
+    }
+    if let Some((t0, origin)) = st.ui.hold_slice {
+        let moved = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| p.distance(origin) > 6.0);
+        if !ui.input(|i| i.pointer.secondary_down()) {
+            st.ui.hold_slice = None;
+        } else if now_t - t0 > 0.4 && st.ui.pr_drag.is_none() && !moved {
+            st.ui.hold_slice = None;
+            st.ui.pr_drag = Some(Drag::Knife { from: origin, delete_small: false });
+        } else {
+            ui.ctx().request_repaint();
+        }
+    }
+    // Slice tool (or Right-Shift), right-drag: slice and delete the smaller piece (FL Right-Shift+right-click).
+    if (tool == Tool::Slice || rsh) && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pr_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|p| grid.contains(*p)) {
             st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: true });
         }
@@ -475,7 +499,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     }
                     _ if tool == Tool::Zoom => st.ui.pr_drag = Some(Drag::Zoom { from: pos }),
                     _ if tool == Tool::Playback => {}
-                    _ if tool == Tool::Slice => st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: false }),
+                    _ if tool == Tool::Slice || rsh => st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: false }),
                     None if tool == Tool::Select || ctrl => st.ui.pr_drag = Some(Drag::Select { from: pos }),
                     None if tool == Tool::Paint => st.ui.pr_drag = Some(Drag::Paint { last_tick: u32::MAX }),
                     None if tool == Tool::Draw => {
@@ -687,7 +711,34 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.ui.pr_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - grid.left()) as f64 / nz).max(0.0), vscale: kh, y: st.ui.pr_y });
         }
     }
-    if (resp.clicked() || resp.secondary_clicked()) && st.ui.pr_drag.is_none() && !matches!(tool, Tool::Playback | Tool::Zoom) {
+    super::keys::tool_menu(ui, st, &resp);
+    // FL: Right-Shift + click slices the note under the pointer (+ right-click: and deletes the smaller piece);
+    // Right-Alt + right-click quantizes the selection.
+    let side_click = (rsh || ralt) && (resp.clicked() || resp.secondary_clicked()) && st.ui.pr_drag.is_none();
+    if side_click {
+        if let Some(pos) = resp.interact_pointer_pos().filter(|p| grid.contains(*p)) {
+            if rsh {
+                if let Some((i, _)) = note_at(pos) {
+                    let at = if alt_held { tick_of(pos.x).round() } else { snap_tick(tick_of(pos.x)) } as u32;
+                    let del = resp.secondary_clicked();
+                    st.session.edit("Slice note", |p| {
+                        if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                            if let Some(r) = c.notes.get_mut(i).and_then(|n| edit::split_note(n, at)) {
+                                if !del {
+                                    c.notes.push(r);
+                                } else if r.length > c.notes[i].length {
+                                    c.notes[i] = r;
+                                }
+                            }
+                        }
+                    });
+                }
+            } else if resp.secondary_clicked() {
+                st.ctx.run("dragon.edit.quantize", serde_json::Value::Null);
+            }
+        }
+    }
+    if (resp.clicked() || resp.secondary_clicked()) && !side_click && st.ui.tool_menu.is_none() && !(lsh && resp.secondary_clicked()) && st.ui.pr_drag.is_none() && !matches!(tool, Tool::Playback | Tool::Zoom) {
         if let Some(pos) = resp.interact_pointer_pos().filter(|p| grid.contains(*p)) {
             let hit = note_at(pos);
             let tick = tick_of(pos.x);

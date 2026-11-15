@@ -44,6 +44,8 @@ pub mod video;
 #[cfg(feature = "device")]
 pub mod device;
 #[cfg(feature = "plugins")]
+pub mod keystate;
+#[cfg(feature = "plugins")]
 pub mod plugins;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
