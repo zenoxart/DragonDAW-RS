@@ -182,7 +182,9 @@ impl ShortcutManager {
                 }
                 // Chord recording: a second stroke within 1.5 s extends the gesture.
                 let text = match self.recorded.take() {
-                    Some(prev) if KeyGesture::parse(&prev).is_some_and(|g| !g.is_chord()) && self.pending_chord.as_ref().is_some_and(|(_, at)| at.elapsed() < Duration::from_millis(1500)) => format!("{prev}, {}", s.display(false)),
+                    Some(prev) if KeyGesture::parse(&prev).is_some_and(|g| !g.is_chord()) && self.pending_chord.as_ref().is_some_and(|(_, at)| at.elapsed() < Duration::from_millis(1500)) => {
+                        format!("{prev}, {}", s.display(false))
+                    }
                     _ => s.display(false),
                 };
                 self.pending_chord = Some((s.clone(), Instant::now()));

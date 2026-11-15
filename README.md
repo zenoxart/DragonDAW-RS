@@ -7,7 +7,8 @@
 **An offline digital audio workstation written in Rust: record, make beats, mix and master.
 It's built on the Red Hive desktop framework and hosts CLAP and VST3 plugins.**
 
-[![Rust](https://img.shields.io/badge/Rust-1.85%2B-B7410E?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![CI](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/ci.yml/badge.svg)](https://github.com/zenoxart/DragonDAW-RS/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/Rust-1.89%2B-B7410E?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![egui](https://img.shields.io/badge/egui-0.31-C62828)](https://github.com/emilk/egui)
 [![CLAP](https://img.shields.io/badge/plugins-CLAP%20%7C%20VST3-E84A2C)](#-plugins)
 [![Offline](https://img.shields.io/badge/offline-no%20server%2C%20no%20account-2E7D32)](#-features)
@@ -202,13 +203,32 @@ docs/                   feature coverage, images
 
 ```bash
 cargo test --workspace                 # engine, host-with-real-plugins, framework and app tests
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all                        # rustfmt.toml: 220 columns
 ```
 
 The engine tests render audio and assert on the result: sample-accurate clip and step timing, swing, routing and
 solo, plugin delay compensation alignment, automation, loop wrap, effect stability at extreme settings, limiter
 ceiling, LUFS, time-stretch, WAV / FLAC / stem export, MIDI round trips, BPM and key detection, comping and
 autosave crash detection. The plugin tests load the in-repo CLAP and VST3 plugins through the real host.
+
+### CI/CD
+
+GitHub Actions runs on every push to `main` and every pull request:
+
+| Workflow | Jobs |
+|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | rustfmt check and Clippy (`-D warnings`), the full test suite on Linux under Xvfb (including the CLAP/VST3 host tests), tests on Windows and macOS, and a build check on the minimum Rust version (1.89) |
+| [`release.yml`](.github/workflows/release.yml) | on a `v*` tag: release builds of `dragon-daw` and the `dragon` CLI for Windows x64, Linux x64, macOS Apple Silicon and macOS Intel, packaged as zip / tar.gz with `SHA256SUMS.txt` and published as a GitHub release (tags with a `-`, such as `v2.1.0-beta.1`, become pre-releases) |
+
+Dependabot opens weekly grouped updates for Cargo crates and the actions themselves.
+
+To publish a release:
+
+```bash
+git tag v2.1.0
+git push origin v2.1.0
+```
 
 ## 🤝 Contributing
 

@@ -104,7 +104,15 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     // ----- grid
     let end_beat = beat_of(timeline.right(), sx);
     let bpb = p.beats_per_bar(0.0);
-    let step = if zoom < 6.0 { bpb * 4.0 } else if zoom < 14.0 { bpb } else if zoom < 60.0 { 1.0 } else { 0.25 };
+    let step = if zoom < 6.0 {
+        bpb * 4.0
+    } else if zoom < 14.0 {
+        bpb
+    } else if zoom < 60.0 {
+        1.0
+    } else {
+        0.25
+    };
     let mut b = snap_floor(sx, step);
     let tgrid = painter.with_clip_rect(timeline);
     while b <= end_beat {
@@ -251,7 +259,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 st.ui.pl_drag = Some(Drag { clip: 0, track, kind: DragKind::Comp { take, from: snap(beat_of(pos.x, sx), grid) } });
             } else if let Some((tid, cid, r)) = clip_at(pos) {
                 let edge = 6.0;
-                let kind = if pos.x > r.right() - edge { DragKind::ResizeRight } else if pos.x < r.left() + edge { DragKind::ResizeLeft } else {
+                let kind = if pos.x > r.right() - edge {
+                    DragKind::ResizeRight
+                } else if pos.x < r.left() + edge {
+                    DragKind::ResizeLeft
+                } else {
                     let start = st.session.project.track(tid).and_then(|t| t.clips.iter().find(|c| c.id == cid)).map(|c| c.start).unwrap_or(0.0);
                     DragKind::Move { grab: beat_of(pos.x, sx) - start, track_offset: 0 }
                 };
@@ -594,7 +606,9 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
                 st.ui.mixer = t.mixer;
                 st.ctx.open("dragon.mixer", None);
             }
-            if !t.takes.is_empty() && widgets::toggle(ui, t.show_takes, &format!("{} takes", t.takes.len()), theme::ACCENT_2).on_hover_text("Show take lanes – drag a range in a take to comp it onto the main lane").clicked() {
+            if !t.takes.is_empty()
+                && widgets::toggle(ui, t.show_takes, &format!("{} takes", t.takes.len()), theme::ACCENT_2).on_hover_text("Show take lanes – drag a range in a take to comp it onto the main lane").clicked()
+            {
                 st.session.edit("Show takes", |p| p.track_mut(tid).iter_mut().for_each(|t| t.show_takes = !t.show_takes));
             }
             ui.menu_button("…", |ui| {

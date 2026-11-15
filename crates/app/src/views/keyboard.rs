@@ -5,7 +5,8 @@ use crate::state::State;
 use egui::Key;
 
 const LOWER: &[(Key, u8)] = &[(Key::Z, 0), (Key::S, 1), (Key::X, 2), (Key::D, 3), (Key::C, 4), (Key::V, 5), (Key::G, 6), (Key::B, 7), (Key::H, 8), (Key::N, 9), (Key::J, 10), (Key::M, 11)];
-const UPPER: &[(Key, u8)] = &[(Key::Q, 12), (Key::Num2, 13), (Key::W, 14), (Key::Num3, 15), (Key::E, 16), (Key::R, 17), (Key::Num5, 18), (Key::T, 19), (Key::Num6, 20), (Key::Y, 21), (Key::Num7, 22), (Key::U, 23), (Key::I, 24)];
+const UPPER: &[(Key, u8)] =
+    &[(Key::Q, 12), (Key::Num2, 13), (Key::W, 14), (Key::Num3, 15), (Key::E, 16), (Key::R, 17), (Key::Num5, 18), (Key::T, 19), (Key::Num6, 20), (Key::Y, 21), (Key::Num7, 22), (Key::U, 23), (Key::I, 24)];
 
 pub fn typing_keyboard(st: &mut State, ctx: &egui::Context) {
     let (pressed, released, oct_down, oct_up) = ctx.input(|i| {

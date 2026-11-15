@@ -1,7 +1,6 @@
 //! The UI kit used by the host and by rendered view packs (Golden Hive's `UiKit`, `DataList`, `InputForm`,
 //! `SimpleChart`).
 
-
 use crate::context::AppContext;
 use redhive_contracts::ui::Severity;
 
@@ -84,11 +83,15 @@ pub fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -
 
 /// An error box with the translated text.
 pub fn error_box(ui: &mut egui::Ui, ctx: &AppContext, e: &redhive_monads::Error) {
-    egui::Frame::new().fill(egui::Color32::from_rgba_unmultiplied(198, 40, 40, 40)).corner_radius(4.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.label(egui::RichText::new(format!("⛔ {}", ctx.lang.error(e))).color(severity_color(Severity::Error)));
-    })
-    .response
-    .on_hover_text(format!("{} ({:?})", e.code, e.kind));
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgba_unmultiplied(198, 40, 40, 40))
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::same(8))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(format!("⛔ {}", ctx.lang.error(e))).color(severity_color(Severity::Error)));
+        })
+        .response
+        .on_hover_text(format!("{} ({:?})", e.code, e.kind));
 }
 
 /// A busy ring with a text.
@@ -104,10 +107,12 @@ pub fn hexagon(ui: &mut egui::Ui, size: f32, color: egui::Color32) -> egui::Resp
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let c = rect.center();
     let r = size * 0.5;
-    let points: Vec<egui::Pos2> = (0..6).map(|i| {
-        let a = std::f32::consts::FRAC_PI_3 * i as f32 + std::f32::consts::FRAC_PI_6;
-        egui::pos2(c.x + r * a.cos(), c.y + r * a.sin())
-    }).collect();
+    let points: Vec<egui::Pos2> = (0..6)
+        .map(|i| {
+            let a = std::f32::consts::FRAC_PI_3 * i as f32 + std::f32::consts::FRAC_PI_6;
+            egui::pos2(c.x + r * a.cos(), c.y + r * a.sin())
+        })
+        .collect();
     ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
     response
 }

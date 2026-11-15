@@ -117,7 +117,16 @@ pub fn scan(path: &Path) -> Result<Vec<PluginInfo>> {
                     }
                 }
             }
-            out.push(PluginInfo { format: PluginFormat::Vst3, path: path.to_path_buf(), id: hex(&ci.cid), name: chars(&ci.name), vendor: v, version, instrument: sub.split('|').any(|s| s == "Instrument"), category: sub });
+            out.push(PluginInfo {
+                format: PluginFormat::Vst3,
+                path: path.to_path_buf(),
+                id: hex(&ci.cid),
+                name: chars(&ci.name),
+                vendor: v,
+                version,
+                instrument: sub.split('|').any(|s| s == "Instrument"),
+                category: sub,
+            });
         }
     }
     Ok(out)
@@ -410,7 +419,13 @@ impl Vst3Plugin {
                 for i in 0..c.getParameterCount() {
                     let mut pi: ParameterInfo = std::mem::zeroed();
                     if c.getParameterInfo(i, &mut pi) == kResultOk && pi.flags & ParameterInfo_::ParameterFlags_::kIsHidden == 0 {
-                        params.push(ParamMeta { id: pi.id, name: wide(&pi.title), default: pi.defaultNormalizedValue, steps: pi.stepCount.max(0) as u32, automatable: pi.flags & ParameterInfo_::ParameterFlags_::kCanAutomate != 0 });
+                        params.push(ParamMeta {
+                            id: pi.id,
+                            name: wide(&pi.title),
+                            default: pi.defaultNormalizedValue,
+                            steps: pi.stepCount.max(0) as u32,
+                            automatable: pi.flags & ParameterInfo_::ParameterFlags_::kCanAutomate != 0,
+                        });
                     }
                 }
             }

@@ -131,7 +131,15 @@ impl Effect for BitCrusher {
 }
 
 pub fn bitcrusher_def() -> EffectDef {
-    EffectDef { id: "bitcrusher", name: "Bit Crusher", category: "Distortion", description: "Bit depth and sample-rate reduction.", params: CRUSH_PARAMS, uses_sidechain: false, create: |_| Box::new(BitCrusher { bits: 8.0, down: 4.0, mix: 1.0, phase: 0.0, held: [0.0; 2] }) }
+    EffectDef {
+        id: "bitcrusher",
+        name: "Bit Crusher",
+        category: "Distortion",
+        description: "Bit depth and sample-rate reduction.",
+        params: CRUSH_PARAMS,
+        uses_sidechain: false,
+        create: |_| Box::new(BitCrusher { bits: 8.0, down: 4.0, mix: 1.0, phase: 0.0, held: [0.0; 2] }),
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ filter
@@ -198,7 +206,9 @@ pub fn filter_def() -> EffectDef {
         description: "Resonant state-variable filter with LFO and envelope follower (auto-wah, sweeps).",
         params: FILTER_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Filter { rate, kind: 0, cutoff: 2000.0, res: 0.3, lfo_rate: 1.0, lfo_depth: 0.0, env_depth: 0.0, mix: 1.0, svf: [Svf::default(); 2], lfo: Lfo::default(), env: Follower::new(5.0, 200.0, rate) }),
+        create: |rate| {
+            Box::new(Filter { rate, kind: 0, cutoff: 2000.0, res: 0.3, lfo_rate: 1.0, lfo_depth: 0.0, env_depth: 0.0, mix: 1.0, svf: [Svf::default(); 2], lfo: Lfo::default(), env: Follower::new(5.0, 200.0, rate) })
+        },
     }
 }
 
@@ -283,7 +293,8 @@ pub fn utility_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ imager
 
-const IMAGER_PARAMS: &[ParamInfo] = &[ParamInfo::lin("width", "Width", 0.0, 2.0, 1.3, ""), ParamInfo::log("mono_below", "Mono below", 20.0, 500.0, 120.0, "Hz"), ParamInfo::lin("output", "Output", -12.0, 12.0, 0.0, "dB")];
+const IMAGER_PARAMS: &[ParamInfo] =
+    &[ParamInfo::lin("width", "Width", 0.0, 2.0, 1.3, ""), ParamInfo::log("mono_below", "Mono below", 20.0, 500.0, 120.0, "Hz"), ParamInfo::lin("output", "Output", -12.0, 12.0, 0.0, "dB")];
 
 pub struct Imager {
     rate: f32,
@@ -318,7 +329,15 @@ impl Effect for Imager {
 }
 
 pub fn imager_def() -> EffectDef {
-    EffectDef { id: "imager", name: "Stereo Imager", category: "Utility", description: "Widens the stereo image and keeps the bass mono.", params: IMAGER_PARAMS, uses_sidechain: false, create: |rate| Box::new(Imager { rate, width: 1.3, out: 1.0, lp: [Biquad::new(BiquadKind::LowPass, 120.0, 0.707, 0.0, rate); 2] }) }
+    EffectDef {
+        id: "imager",
+        name: "Stereo Imager",
+        category: "Utility",
+        description: "Widens the stereo image and keeps the bass mono.",
+        params: IMAGER_PARAMS,
+        uses_sidechain: false,
+        create: |rate| Box::new(Imager { rate, width: 1.3, out: 1.0, lp: [Biquad::new(BiquadKind::LowPass, 120.0, 0.707, 0.0, rate); 2] }),
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ Dragon Particle

@@ -79,7 +79,17 @@ pub fn extract_audio(path: &Path, out: &Path) -> Result<bool> {
 pub fn frame_at(path: &Path, seconds: f64, width: u32, src_w: u32, src_h: u32) -> Result<(u32, u32, Vec<u8>)> {
     let width = width.max(16) & !1;
     let height = (((src_h as f64 / src_w.max(1) as f64) * width as f64).round() as u32).max(2) & !1;
-    let rgba = run(Command::new(ffmpeg()).args(["-v", "error", "-ss", &format!("{:.3}", seconds.max(0.0)), "-i"]).arg(path).args(["-frames:v", "1", "-vf", &format!("scale={width}:{height}"), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]))?;
+    let rgba = run(Command::new(ffmpeg()).args(["-v", "error", "-ss", &format!("{:.3}", seconds.max(0.0)), "-i"]).arg(path).args([
+        "-frames:v",
+        "1",
+        "-vf",
+        &format!("scale={width}:{height}"),
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
+        "-",
+    ]))?;
     if rgba.len() != (width * height * 4) as usize {
         return Err(EngineError::Io("no frame at this position".into()));
     }
@@ -120,7 +130,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("clip.mp4");
         // 2 s test pattern at 25 fps with a 440 Hz tone.
-        run(Command::new(ffmpeg()).args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "mpeg4", "-c:a", "aac", "-shortest"]).arg(&src)).unwrap();
+        run(Command::new(ffmpeg())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "mpeg4", "-c:a", "aac", "-shortest"])
+            .arg(&src))
+        .unwrap();
         let v = probe(&src).unwrap();
         assert_eq!((v.width, v.height), (160, 120));
         assert!((v.fps - 25.0).abs() < 0.01 && (v.duration - 2.0).abs() < 0.1, "{v:?}");

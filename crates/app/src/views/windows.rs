@@ -121,58 +121,64 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         }
     }
     for (group, params) in groups {
-      ui.horizontal_wrapped(|ui| {
-        if !group.is_empty() {
-            ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().color(theme::ACCENT_2)));
-        }
-        for prm in params {
-            let short = prm.name.strip_prefix(group.as_str()).map(str::trim).filter(|x| !x.is_empty()).unwrap_or(prm.name);
-            let mut v = effects::value(def, &ins.params, prm.id);
-            let key = prm.id.to_string();
-            match prm.kind {
-                ParamKind::Choice(names) => {
-                    let mut idx = v.round() as usize;
-                    egui::ComboBox::from_id_salt(("fxc", i, prm.id)).selected_text(format!("{}: {}", short, names.get(idx).copied().unwrap_or("?"))).show_ui(ui, |ui| {
-                        for (k, n) in names.iter().enumerate() {
-                            ui.selectable_value(&mut idx, k, *n);
+        ui.horizontal_wrapped(|ui| {
+            if !group.is_empty() {
+                ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().color(theme::ACCENT_2)));
+            }
+            for prm in params {
+                let short = prm.name.strip_prefix(group.as_str()).map(str::trim).filter(|x| !x.is_empty()).unwrap_or(prm.name);
+                let mut v = effects::value(def, &ins.params, prm.id);
+                let key = prm.id.to_string();
+                match prm.kind {
+                    ParamKind::Choice(names) => {
+                        let mut idx = v.round() as usize;
+                        egui::ComboBox::from_id_salt(("fxc", i, prm.id)).selected_text(format!("{}: {}", short, names.get(idx).copied().unwrap_or("?"))).show_ui(ui, |ui| {
+                            for (k, n) in names.iter().enumerate() {
+                                ui.selectable_value(&mut idx, k, *n);
+                            }
+                        });
+                        if idx != v.round() as usize {
+                            st.session.edit(prm.name, |p| {
+                                with_insert(p, m, i, |x| {
+                                    x.params.insert(key, idx as f32);
+                                })
+                            });
                         }
-                    });
-                    if idx != v.round() as usize {
-                        st.session.edit(prm.name, |p| with_insert(p, m, i, |x| {
-                            x.params.insert(key, idx as f32);
-                        }));
                     }
-                }
-                ParamKind::Toggle => {
-                    let mut b = v > 0.5;
-                    if ui.checkbox(&mut b, short).changed() {
-                        st.session.edit(prm.name, |p| with_insert(p, m, i, |x| {
-                            x.params.insert(key, if b { 1.0 } else { 0.0 });
-                        }));
+                    ParamKind::Toggle => {
+                        let mut b = v > 0.5;
+                        if ui.checkbox(&mut b, short).changed() {
+                            st.session.edit(prm.name, |p| {
+                                with_insert(p, m, i, |x| {
+                                    x.params.insert(key, if b { 1.0 } else { 0.0 });
+                                })
+                            });
+                        }
                     }
-                }
-                _ => {
-                    let mut n = prm.normalize(v);
-                    let r = knob(ui, &mut n, 0.0, 1.0, prm.normalize(prm.default), short, |x| prm.format(prm.denormalize(x)));
-                    v = prm.denormalize(n);
-                    widgets::apply(st, &r, prm.name, |p| with_insert(p, m, i, |x| {
-                        x.params.insert(key.clone(), v);
-                    }));
-                    let target = Target::InsertParam { channel: m, insert: i, param: key };
-                    r.context_menu(|ui| {
-                        if ui.button("MIDI learn").clicked() {
-                            st.ui.midi_learn = Some(target.clone());
-                            ui.close_menu();
-                        }
-                        if ui.button("Create automation lane").clicked() {
-                            crate::views::automation::add_lane(st, target.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    _ => {
+                        let mut n = prm.normalize(v);
+                        let r = knob(ui, &mut n, 0.0, 1.0, prm.normalize(prm.default), short, |x| prm.format(prm.denormalize(x)));
+                        v = prm.denormalize(n);
+                        widgets::apply(st, &r, prm.name, |p| {
+                            with_insert(p, m, i, |x| {
+                                x.params.insert(key.clone(), v);
+                            })
+                        });
+                        let target = Target::InsertParam { channel: m, insert: i, param: key };
+                        r.context_menu(|ui| {
+                            if ui.button("MIDI learn").clicked() {
+                                st.ui.midi_learn = Some(target.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button("Create automation lane").clicked() {
+                                crate::views::automation::add_lane(st, target.clone());
+                                ui.close_menu();
+                            }
+                        });
+                    }
                 }
             }
-        }
-    });
+        });
     }
     ui.separator();
     // Presets.
@@ -183,19 +189,23 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         egui::ComboBox::from_id_salt(("preset", i)).selected_text(if ins.preset.is_empty() { "(default)".to_string() } else { ins.preset.clone() }).show_ui(ui, |ui| {
             if ui.selectable_label(false, "(default)").clicked() {
                 let d = def.defaults();
-                st.session.edit("Load preset", |p| with_insert(p, m, i, |x| {
-                    x.params = d;
-                    x.preset.clear();
-                }));
+                st.session.edit("Load preset", |p| {
+                    with_insert(p, m, i, |x| {
+                        x.params = d;
+                        x.preset.clear();
+                    })
+                });
             }
             for f in &list {
                 let name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 if ui.selectable_label(ins.preset == name, &name).clicked() {
                     if let Some(params) = st.ctx.paths.load_from::<BTreeMap<String, f32>>(f) {
-                        st.session.edit("Load preset", |p| with_insert(p, m, i, |x| {
-                            x.params = params;
-                            x.preset = name;
-                        }));
+                        st.session.edit("Load preset", |p| {
+                            with_insert(p, m, i, |x| {
+                                x.params = params;
+                                x.preset = name;
+                            })
+                        });
                     }
                 }
             }
@@ -322,7 +332,17 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
                 }
             });
             if prm.automatable {
-                let target = Target::PluginParam { channel: match slot { PluginSlot::Insert(m, _) => m, PluginSlot::Channel(c) => c }, insert: match slot { PluginSlot::Insert(_, i) => Some(i), _ => None }, param: pid };
+                let target = Target::PluginParam {
+                    channel: match slot {
+                        PluginSlot::Insert(m, _) => m,
+                        PluginSlot::Channel(c) => c,
+                    },
+                    insert: match slot {
+                        PluginSlot::Insert(_, i) => Some(i),
+                        _ => None,
+                    },
+                    param: pid,
+                };
                 r.context_menu(|ui| {
                     if ui.button("MIDI learn").clicked() {
                         st.ui.midi_learn = Some(target.clone());
@@ -354,7 +374,8 @@ fn env_editor(ui: &mut Ui, st: &mut State, label: &str, env: Envelope, set: impl
     });
     ui.horizontal_wrapped(|ui| {
         let secs = |v: f32| if v < 1.0 { format!("{:.0} ms", v * 1000.0) } else { format!("{v:.2} s") };
-        let fields: [(&str, f32, f32, f32); 6] = [("delay", env.delay, 0.0, 2.0), ("attack", env.attack, 0.0, 4.0), ("hold", env.hold, 0.0, 2.0), ("decay", env.decay, 0.0, 4.0), ("sustain", env.sustain, 0.0, 1.0), ("release", env.release, 0.0, 8.0)];
+        let fields: [(&str, f32, f32, f32); 6] =
+            [("delay", env.delay, 0.0, 2.0), ("attack", env.attack, 0.0, 4.0), ("hold", env.hold, 0.0, 2.0), ("decay", env.decay, 0.0, 4.0), ("sustain", env.sustain, 0.0, 1.0), ("release", env.release, 0.0, 8.0)];
         for (k, (name, v, min, max)) in fields.into_iter().enumerate() {
             let mut x = v;
             let r = if name == "sustain" { knob(ui, &mut x, min, max, 1.0, name, widgets::pct) } else { knob(ui, &mut x, min, max, 0.0, name, secs) };
@@ -403,11 +424,13 @@ fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
         let b = ui.add(egui::DragValue::new(&mut cb).range(0..=16).prefix("cut by "));
         let c = ui.checkbox(&mut cs, "cut itself");
         if a.changed() || b.changed() || c.changed() {
-            st.session.edit("Cut groups", |p| with_channel(p, cid, |x| {
-                x.cut_group = cg;
-                x.cut_by = cb;
-                x.cut_self = cs;
-            }));
+            st.session.edit("Cut groups", |p| {
+                with_channel(p, cid, |x| {
+                    x.cut_group = cg;
+                    x.cut_by = cb;
+                    x.cut_self = cs;
+                })
+            });
         }
     });
     ui.separator();
@@ -552,21 +575,33 @@ fn synth_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SynthParams) {
                 ui.close_menu();
             }
         });
-        let fields: [(&str, f32, f32, f32, &str); 9] = [("reso", s.resonance, 0.0, 1.0, "resonance"), ("env amt", s.filter_env, -1.0, 1.0, "filter_env"), ("unison", s.unison as f32, 1.0, 8.0, "unison"), ("detune", s.detune, 0.0, 1.0, "detune"), ("lfo rate", s.lfo_rate, 0.0, 20.0, "lfo_rate"), ("lfo➡pitch", s.lfo_pitch, 0.0, 1.0, "lfo_pitch"), ("lfo➡filter", s.lfo_filter, 0.0, 1.0, "lfo_filter"), ("glide", s.glide, 0.0, 1.0, "glide"), ("gain", s.gain, 0.0, 2.0, "gain")];
+        let fields: [(&str, f32, f32, f32, &str); 9] = [
+            ("reso", s.resonance, 0.0, 1.0, "resonance"),
+            ("env amt", s.filter_env, -1.0, 1.0, "filter_env"),
+            ("unison", s.unison as f32, 1.0, 8.0, "unison"),
+            ("detune", s.detune, 0.0, 1.0, "detune"),
+            ("lfo rate", s.lfo_rate, 0.0, 20.0, "lfo_rate"),
+            ("lfo➡pitch", s.lfo_pitch, 0.0, 1.0, "lfo_pitch"),
+            ("lfo➡filter", s.lfo_filter, 0.0, 1.0, "lfo_filter"),
+            ("glide", s.glide, 0.0, 1.0, "glide"),
+            ("gain", s.gain, 0.0, 2.0, "gain"),
+        ];
         for (label, v, min, max, key) in fields {
             let mut x = v;
             let r = knob(ui, &mut x, min, max, v, label, |v| format!("{v:.2}"));
-            widgets::apply(st, &r, label, |p| set_synth(p, cid, |s| match key {
-                "resonance" => s.resonance = x,
-                "filter_env" => s.filter_env = x,
-                "unison" => s.unison = x.round().max(1.0) as u32,
-                "detune" => s.detune = x,
-                "lfo_rate" => s.lfo_rate = x,
-                "lfo_pitch" => s.lfo_pitch = x,
-                "lfo_filter" => s.lfo_filter = x,
-                "glide" => s.glide = x,
-                _ => s.gain = x,
-            }));
+            widgets::apply(st, &r, label, |p| {
+                set_synth(p, cid, |s| match key {
+                    "resonance" => s.resonance = x,
+                    "filter_env" => s.filter_env = x,
+                    "unison" => s.unison = x.round().max(1.0) as u32,
+                    "detune" => s.detune = x,
+                    "lfo_rate" => s.lfo_rate = x,
+                    "lfo_pitch" => s.lfo_pitch = x,
+                    "lfo_filter" => s.lfo_filter = x,
+                    "glide" => s.glide = x,
+                    _ => s.gain = x,
+                })
+            });
         }
         let mut poly = s.polyphony;
         if ui.add(egui::DragValue::new(&mut poly).range(1..=32).prefix("voices ")).changed() {
@@ -582,7 +617,9 @@ fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
     egui::Grid::new(("pads", cid)).spacing([6.0, 6.0]).show(ui, |ui| {
         for (k, pad) in pads.iter().enumerate() {
             let has = !pad.layers.is_empty();
-            let b = egui::Button::new(RichText::new(format!("{}\n{}", pad.name, dragon_engine::instruments::note_name(pad.note))).small()).fill(if has { theme::ACCENT.gamma_multiply(0.5) } else { theme::PANEL_2 }).min_size(egui::vec2(96.0, 46.0));
+            let b = egui::Button::new(RichText::new(format!("{}\n{}", pad.name, dragon_engine::instruments::note_name(pad.note))).small())
+                .fill(if has { theme::ACCENT.gamma_multiply(0.5) } else { theme::PANEL_2 })
+                .min_size(egui::vec2(96.0, 46.0));
             let r = ui.add(b);
             if r.clicked() {
                 st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOn { channel: cid, note: pad.note, velocity: 0.9 }));
@@ -666,22 +703,46 @@ fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
         let mut g = a.gain_db;
         ui.label("Gain");
         let r = ui.add(egui::Slider::new(&mut g, -48.0..=24.0).suffix(" dB"));
-        widgets::apply(st, &r, "Clip gain", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.gain_db = g }));
+        widgets::apply(st, &r, "Clip gain", |p| {
+            set(p, &|c| {
+                if let Some(x) = c.audio_mut() {
+                    x.gain_db = g
+                }
+            })
+        });
         ui.end_row();
         let mut pan = a.pan;
         ui.label("Pan");
         let r = ui.add(egui::Slider::new(&mut pan, -1.0..=1.0));
-        widgets::apply(st, &r, "Clip pan", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.pan = pan }));
+        widgets::apply(st, &r, "Clip pan", |p| {
+            set(p, &|c| {
+                if let Some(x) = c.audio_mut() {
+                    x.pan = pan
+                }
+            })
+        });
         ui.end_row();
         let mut fi = a.fade_in as f32;
         ui.label("Fade in");
         let r = ui.add(egui::Slider::new(&mut fi, 0.0..=10.0).suffix(" s").logarithmic(true));
-        widgets::apply(st, &r, "Fade in", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.fade_in = fi as f64 }));
+        widgets::apply(st, &r, "Fade in", |p| {
+            set(p, &|c| {
+                if let Some(x) = c.audio_mut() {
+                    x.fade_in = fi as f64
+                }
+            })
+        });
         ui.end_row();
         let mut fo = a.fade_out as f32;
         ui.label("Fade out");
         let r = ui.add(egui::Slider::new(&mut fo, 0.0..=10.0).suffix(" s").logarithmic(true));
-        widgets::apply(st, &r, "Fade out", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.fade_out = fo as f64 }));
+        widgets::apply(st, &r, "Fade out", |p| {
+            set(p, &|c| {
+                if let Some(x) = c.audio_mut() {
+                    x.fade_out = fo as f64
+                }
+            })
+        });
         ui.end_row();
         ui.label("Fade curve");
         let mut fc = a.fade_curve;
@@ -691,13 +752,25 @@ fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
             }
         });
         if fc != a.fade_curve {
-            st.session.edit("Fade curve", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.fade_curve = fc }));
+            st.session.edit("Fade curve", |p| {
+                set(p, &|c| {
+                    if let Some(x) = c.audio_mut() {
+                        x.fade_curve = fc
+                    }
+                })
+            });
         }
         ui.end_row();
         let mut pitch = a.pitch;
         ui.label("Pitch");
         let r = ui.add(egui::Slider::new(&mut pitch, -24.0..=24.0).suffix(" st"));
-        widgets::apply(st, &r, "Clip pitch", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.pitch = pitch }));
+        widgets::apply(st, &r, "Clip pitch", |p| {
+            set(p, &|c| {
+                if let Some(x) = c.audio_mut() {
+                    x.pitch = pitch
+                }
+            })
+        });
         ui.end_row();
         ui.label("Time");
         let mut mode = a.stretch;
@@ -706,19 +779,37 @@ fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
             ui.selectable_value(&mut mode, StretchMode::Stretch, "stretch (keep pitch)");
         });
         if mode != a.stretch {
-            st.session.edit("Stretch mode", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.stretch = mode }));
+            st.session.edit("Stretch mode", |p| {
+                set(p, &|c| {
+                    if let Some(x) = c.audio_mut() {
+                        x.stretch = mode
+                    }
+                })
+            });
         }
         ui.end_row();
         let mut speed = a.speed as f32;
         ui.label("Speed");
         let r = ui.add(egui::Slider::new(&mut speed, 0.25..=4.0).logarithmic(true));
-        widgets::apply(st, &r, "Clip speed", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.speed = speed as f64 }));
+        widgets::apply(st, &r, "Clip speed", |p| {
+            set(p, &|c| {
+                if let Some(x) = c.audio_mut() {
+                    x.speed = speed as f64
+                }
+            })
+        });
         ui.end_row();
     });
     ui.horizontal(|ui| {
         let mut rev = a.reverse;
         if ui.checkbox(&mut rev, "Reverse").changed() {
-            st.session.edit("Reverse clip", |p| set(p, &|c| if let Some(x) = c.audio_mut() { x.reverse = rev }));
+            st.session.edit("Reverse clip", |p| {
+                set(p, &|c| {
+                    if let Some(x) = c.audio_mut() {
+                        x.reverse = rev
+                    }
+                })
+            });
         }
         let mut muted = clip.muted;
         if ui.checkbox(&mut muted, "Muted").changed() {
@@ -730,11 +821,15 @@ fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
                 match bpm {
                     Some(b) => {
                         let target = st.session.project.bpm;
-                        st.session.edit("Fit to tempo", |p| set(p, &|c| if let Some(x) = c.audio_mut() {
-                            x.source_bpm = Some(b);
-                            x.stretch = StretchMode::Stretch;
-                            x.speed = target / b;
-                        }));
+                        st.session.edit("Fit to tempo", |p| {
+                            set(p, &|c| {
+                                if let Some(x) = c.audio_mut() {
+                                    x.source_bpm = Some(b);
+                                    x.stretch = StretchMode::Stretch;
+                                    x.speed = target / b;
+                                }
+                            })
+                        });
                         st.ui.status = format!("Detected {b:.1} BPM");
                     }
                     None => st.toast("No clear tempo found in this clip", redhive_contracts::ui::Severity::Info),

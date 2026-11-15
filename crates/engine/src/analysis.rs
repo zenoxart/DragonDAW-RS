@@ -42,12 +42,14 @@ fn onset_envelope(d: &AudioData) -> (Vec<f32>, f64) {
     }
     // Remove the local mean so steady sections do not count as onsets.
     let w = 8;
-    let smoothed: Vec<f32> = (0..env.len()).map(|k| {
-        let a = k.saturating_sub(w);
-        let b = (k + w).min(env.len());
-        let mean = env[a..b].iter().sum::<f32>() / (b - a) as f32;
-        (env[k] - mean).max(0.0)
-    }).collect();
+    let smoothed: Vec<f32> = (0..env.len())
+        .map(|k| {
+            let a = k.saturating_sub(w);
+            let b = (k + w).min(env.len());
+            let mean = env[a..b].iter().sum::<f32>() / (b - a) as f32;
+            (env[k] - mean).max(0.0)
+        })
+        .collect();
     (smoothed, d.rate as f64 / hop as f64)
 }
 
@@ -174,7 +176,6 @@ pub fn analyze(d: &AudioData) -> Analysis {
     Analysis { bpm, bpm_confidence: bc, key, key_confidence: kc, peak_db: st.sample_peak_db, lufs: st.integrated }
 }
 
-
 // ---------------------------------------------------------------------------------------------------- audio → MIDI
 
 /// How to transcribe audio into notes.
@@ -255,7 +256,13 @@ pub fn audio_to_notes(d: &AudioData, bpm: f64, mode: TranscribeMode) -> Vec<crat
                     let seg = &mono[start..(start + 1024).min(mono.len())];
                     let zc = seg.windows(2).filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0)).count() as f32 / seg.len().max(1) as f32;
                     let hz = zc * rate / 2.0;
-                    let pitch = if hz < 250.0 { 36 } else if hz < 2500.0 { 38 } else { 42 };
+                    let pitch = if hz < 250.0 {
+                        36
+                    } else if hz < 2500.0 {
+                        38
+                    } else {
+                        42
+                    };
                     let peak = seg.iter().fold(0.0f32, |m, x| m.max(x.abs()));
                     notes.push(Note { pitch, start: ticks(start as f64 / rate as f64), length: PPQ / 4, velocity: (peak / peak_rms.max(1e-6) * 0.5).clamp(0.2, 1.0), ..Note::default() });
                 }
@@ -264,7 +271,6 @@ pub fn audio_to_notes(d: &AudioData, bpm: f64, mode: TranscribeMode) -> Vec<crat
     }
     notes
 }
-
 
 // ---------------------------------------------------------------------------------------------------- stems
 
@@ -427,10 +433,12 @@ mod tests {
         let rate = 44100;
         let n = rate * 4;
         let f = |m: f32| 440.0 * 2f32.powf((m - 69.0) / 12.0);
-        let s: Vec<f32> = (0..n).map(|i| {
-            let t = i as f32 / rate as f32;
-            [57.0, 60.0, 64.0, 45.0].iter().map(|&m| (t * f(m) * std::f32::consts::TAU).sin()).sum::<f32>() * 0.2
-        }).collect();
+        let s: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                [57.0, 60.0, 64.0, 45.0].iter().map(|&m| (t * f(m) * std::f32::consts::TAU).sin()).sum::<f32>() * 0.2
+            })
+            .collect();
         let d = AudioData::from_planar(rate as u32, s.clone(), s);
         let (k, _) = detect_key(&d);
         assert!(k.as_deref() == Some("A minor") || k.as_deref() == Some("C major"), "{k:?}");

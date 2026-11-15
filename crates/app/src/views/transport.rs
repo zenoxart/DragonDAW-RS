@@ -24,13 +24,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         ui.separator();
         let big = |s: &str| RichText::new(s).size(18.0);
-        if ui.add(egui::Button::new(big(if ts.playing { "⏸" } else { "▶" }).color(if ts.playing { theme::OK } else { Color32::WHITE })).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Play / pause (Space)").clicked() {
+        if ui.add(egui::Button::new(big(if ts.playing { "⏸" } else { "▶" }).color(if ts.playing { theme::OK } else { Color32::WHITE })).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Play / pause (Space)").clicked()
+        {
             st.toggle_play();
         }
         if ui.add(egui::Button::new(big("⏹")).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Stop (Ctrl+Space)").clicked() {
             st.stop();
         }
-        if ui.add(egui::Button::new(big("⏺").color(if rec { theme::REC } else { theme::TEXT_DIM })).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Record (R): armed tracks record audio, otherwise notes are recorded into the pattern").clicked() {
+        if ui
+            .add(egui::Button::new(big("⏺").color(if rec { theme::REC } else { theme::TEXT_DIM })).min_size(Vec2::new(36.0, 30.0)))
+            .on_hover_text("Record (R): armed tracks record audio, otherwise notes are recorded into the pattern")
+            .clicked()
+        {
             st.ctx.run("dragon.transport.record", serde_json::Value::Null);
         }
         ui.separator();

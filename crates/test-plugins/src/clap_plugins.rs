@@ -229,7 +229,6 @@ struct Ports(clap_plugin_audio_ports);
 unsafe impl Sync for Ports {}
 static PORTS: Ports = Ports(clap_plugin_audio_ports { count: Some(ap_count), get: Some(ap_get) });
 
-
 // ---- GUI (test editor): embeds a child X11 window, requests a resize from the host and uses a host
 // timer. The timer sets the gain to 1.5 once the host applied the resize (0.5 before).
 use clap_sys::ext::gui::*;
@@ -296,7 +295,9 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, w: *const clap_window) 
     let parent = (*w).specific.x11;
     // `c_ulong` is 64-bit on Linux but 32-bit on Windows.
     #[allow(clippy::unnecessary_cast)]
-    let Some(child) = crate::x11child::Child::new(parent as u64, 320, 200) else { return false };
+    let Some(child) = crate::x11child::Child::new(parent as u64, 320, 200) else {
+        return false;
+    };
     state(p).child = Some(child);
     let g = host_ext::<clap_host_gui>(p, CLAP_EXT_GUI);
     if !g.is_null() {
@@ -315,7 +316,23 @@ unsafe extern "C" fn g_true(_p: *const clap_plugin) -> bool {
 }
 struct Gui(clap_plugin_gui);
 unsafe impl Sync for Gui {}
-static GUI: Gui = Gui(clap_plugin_gui { is_api_supported: Some(g_supported), get_preferred_api: Some(g_preferred), create: Some(g_create), destroy: Some(g_destroy), set_scale: Some(g_scale), get_size: Some(g_get_size), can_resize: Some(g_false), get_resize_hints: Some(g_hints), adjust_size: Some(g_adjust), set_size: Some(g_set_size), set_parent: Some(g_set_parent), set_transient: Some(g_transient), suggest_title: Some(g_title), show: Some(g_true), hide: Some(g_true) });
+static GUI: Gui = Gui(clap_plugin_gui {
+    is_api_supported: Some(g_supported),
+    get_preferred_api: Some(g_preferred),
+    create: Some(g_create),
+    destroy: Some(g_destroy),
+    set_scale: Some(g_scale),
+    get_size: Some(g_get_size),
+    can_resize: Some(g_false),
+    get_resize_hints: Some(g_hints),
+    adjust_size: Some(g_adjust),
+    set_size: Some(g_set_size),
+    set_parent: Some(g_set_parent),
+    set_transient: Some(g_transient),
+    suggest_title: Some(g_title),
+    show: Some(g_true),
+    hide: Some(g_true),
+});
 
 unsafe extern "C" fn on_timer(p: *const clap_plugin, _id: clap_id) {
     let s = state(p);

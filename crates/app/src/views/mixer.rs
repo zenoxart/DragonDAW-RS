@@ -290,10 +290,12 @@ fn surround_pad(ui: &mut Ui, st: &mut State, id: Id, sp: SurroundPan, width: f32
     if let Some(pos) = r.interact_pointer_pos().filter(|_| r.dragged() || r.clicked()) {
         let d = (pos - rect.center()) / (size * 0.42);
         let (x, y) = (d.x.clamp(-1.0, 1.0), (-d.y).clamp(-1.0, 1.0));
-        st.session.gesture("Surround pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| {
-            c.surround.x = x;
-            c.surround.y = y;
-        }));
+        st.session.gesture("Surround pan", |p| {
+            p.mixer.get_mut(id).iter_mut().for_each(|c| {
+                c.surround.x = x;
+                c.surround.y = y;
+            })
+        });
     }
     if r.double_clicked() {
         st.session.edit("Surround pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.surround = SurroundPan::default()));

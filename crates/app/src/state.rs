@@ -66,7 +66,8 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [(Tool, &'static str, &'static str); 6] = [(Tool::Draw, "✏", "Draw"), (Tool::Paint, "🎨", "Paint"), (Tool::Select, "⬛", "Select"), (Tool::Slice, "✂", "Slice"), (Tool::Erase, "🗙", "Erase"), (Tool::Mute, "🔇", "Mute")];
+    pub const ALL: [(Tool, &'static str, &'static str); 6] =
+        [(Tool::Draw, "✏", "Draw"), (Tool::Paint, "🎨", "Paint"), (Tool::Select, "⬛", "Select"), (Tool::Slice, "✂", "Slice"), (Tool::Erase, "🗙", "Erase"), (Tool::Mute, "🔇", "Mute")];
 }
 
 pub struct UiState {
@@ -221,7 +222,12 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
             pt.channels.insert(ch, PatternChannel { steps: st, notes: Vec::new() });
         }
     }
-    let bass = SynthParams { osc: [Oscillator { wave: Waveform::Saw, level: 0.8, ..Default::default() }, Oscillator { wave: Waveform::Square, level: 0.4, coarse: -12, ..Default::default() }, Oscillator { level: 0.0, ..Default::default() }], cutoff: 900.0, polyphony: 1, ..Default::default() };
+    let bass = SynthParams {
+        osc: [Oscillator { wave: Waveform::Saw, level: 0.8, ..Default::default() }, Oscillator { wave: Waveform::Square, level: 0.4, coarse: -12, ..Default::default() }, Oscillator { level: 0.0, ..Default::default() }],
+        cutoff: 900.0,
+        polyphony: 1,
+        ..Default::default()
+    };
     p.add_channel("Bass", Instrument::Synth(bass));
     p.add_channel("Lead", Instrument::Synth(SynthParams { unison: 3, detune: 0.15, ..Default::default() }));
     let bus = p.add_mixer_channel("Reverb");
@@ -231,7 +237,16 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
         m.inserts.push(Insert { id: ins, effect: "reverb".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new() });
     }
     let lim = p.next_id();
-    p.mixer.master.inserts.push(Insert { id: lim, effect: "limiter".into(), enabled: true, mix: 1.0, params: dragon_engine::effects::find("limiter").unwrap().defaults(), sidechain: None, plugin: None, preset: String::new() });
+    p.mixer.master.inserts.push(Insert {
+        id: lim,
+        effect: "limiter".into(),
+        enabled: true,
+        mix: 1.0,
+        params: dragon_engine::effects::find("limiter").unwrap().defaults(),
+        sidechain: None,
+        plugin: None,
+        preset: String::new(),
+    });
     // The beat on the first track, four bars.
     if let Some(t) = p.tracks.first().map(|t| t.id) {
         if let Some(tr) = p.track_mut(t) {
@@ -391,7 +406,15 @@ impl State {
                 let id = p.next_id();
                 let name = t.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 if let Some(tr) = p.track_mut(t.track) {
-                    tr.clips.push(Clip { id, name, start: t.start_beat, length: len.max(0.01), muted: false, color: tr.color, kind: ClipKind::Audio(AudioClip { source: t.path, offset: t.latency, ..Default::default() }) });
+                    tr.clips.push(Clip {
+                        id,
+                        name,
+                        start: t.start_beat,
+                        length: len.max(0.01),
+                        muted: false,
+                        color: tr.color,
+                        kind: ClipKind::Audio(AudioClip { source: t.path, offset: t.latency, ..Default::default() }),
+                    });
                 }
             }
         });

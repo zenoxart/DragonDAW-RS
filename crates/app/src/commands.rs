@@ -100,7 +100,19 @@ pub fn register(st: &mut State) {
         let owner = if *id == "view.palette" { "shell" } else { "dragon" };
         st.ctx.commands.register(owner, d, CommandHandler::App);
     }
-    let groups = [("file", "File"), ("edit", "Edit"), ("add", "Add"), ("transport", "Transport"), ("view", "View"), ("tools", "Tools"), ("help", "Help"), ("file/import", "Import"), ("file/export", "Export"), ("edit/notes", "Notes"), ("add/instrument", "Instrument")];
+    let groups = [
+        ("file", "File"),
+        ("edit", "Edit"),
+        ("add", "Add"),
+        ("transport", "Transport"),
+        ("view", "View"),
+        ("tools", "Tools"),
+        ("help", "Help"),
+        ("file/import", "Import"),
+        ("file/export", "Export"),
+        ("edit/notes", "Notes"),
+        ("add/instrument", "Instrument"),
+    ];
     for (i, (path, label)) in groups.iter().enumerate() {
         st.ctx.commands.register_group("dragon", CommandGroupDescriptor { menu: placements::MAIN_MENU.into(), path: (*path).into(), label: TextKey::new(*label), icon: IconRef::new(""), order: i as i32 });
     }
@@ -242,7 +254,8 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "edit.split" => {
             let beat = st.beat_now();
-            let targets: Vec<(Id, Id)> = st.session.project.tracks.iter().flat_map(|t| t.clips.iter().filter(|c| c.start < beat && c.end() > beat && (st.ui.clips.is_empty() || st.ui.clips.contains(&c.id))).map(move |c| (t.id, c.id))).collect();
+            let targets: Vec<(Id, Id)> =
+                st.session.project.tracks.iter().flat_map(|t| t.clips.iter().filter(|c| c.start < beat && c.end() > beat && (st.ui.clips.is_empty() || st.ui.clips.contains(&c.id))).map(move |c| (t.id, c.id))).collect();
             st.session.edit("Split clips", |p| {
                 for (t, c) in targets {
                     dragon_engine::edit::split_clip(p, t, c, beat);
@@ -378,7 +391,15 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 match st.session.cache.get(&path, st.audio.rate()) {
                     Ok(d) => {
                         let a = dragon_engine::analysis::analyze(&d);
-                        st.toast(format!("{}: {} BPM, key {}", path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), a.bpm.map(|b| format!("{b:.1}")).unwrap_or("?".into()), a.key.unwrap_or("?".into())), Severity::Info);
+                        st.toast(
+                            format!(
+                                "{}: {} BPM, key {}",
+                                path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(),
+                                a.bpm.map(|b| format!("{b:.1}")).unwrap_or("?".into()),
+                                a.key.unwrap_or("?".into())
+                            ),
+                            Severity::Info,
+                        );
                     }
                     Err(e) => st.toast(e.to_string(), Severity::Error),
                 }
@@ -389,7 +410,15 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "tools.normalize" => {
             let ids = st.ui.clips.clone();
             let rate = st.audio.rate();
-            let peaks: Vec<(Id, f32)> = st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).filter(|c| ids.contains(&c.id)).filter_map(|c| c.audio().and_then(|a| st.session.cache.get(&a.source, rate).ok()).map(|d| (c.id, d.peak()))).collect();
+            let peaks: Vec<(Id, f32)> = st
+                .session
+                .project
+                .tracks
+                .iter()
+                .flat_map(|t| t.clips.iter())
+                .filter(|c| ids.contains(&c.id))
+                .filter_map(|c| c.audio().and_then(|a| st.session.cache.get(&a.source, rate).ok()).map(|d| (c.id, d.peak())))
+                .collect();
             st.session.edit("Normalize", |p| {
                 for t in p.tracks.iter_mut() {
                     for c in t.clips.iter_mut() {

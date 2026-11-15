@@ -3,7 +3,7 @@
 use dragon_engine::effects::Effect;
 use dragon_engine::instruments::{InstrumentVoice, NoteOn};
 use dragon_engine::model::PluginFormat;
-use dragon_engine::plugins::{scan_file, vst3::Vst3Plugin, clap::ClapPlugin};
+use dragon_engine::plugins::{clap::ClapPlugin, scan_file, vst3::Vst3Plugin};
 use std::path::{Path, PathBuf};
 
 fn built_library() -> PathBuf {

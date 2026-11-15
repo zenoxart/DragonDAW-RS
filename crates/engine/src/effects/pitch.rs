@@ -121,7 +121,14 @@ impl PitchShifter {
 }
 
 pub const KEYS: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-pub const TUNE_SCALES: &[(&str, &[u8])] = &[("Chromatic", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]), ("Major", &[0, 2, 4, 5, 7, 9, 11]), ("Minor", &[0, 2, 3, 5, 7, 8, 10]), ("Major pentatonic", &[0, 2, 4, 7, 9]), ("Minor pentatonic", &[0, 3, 5, 7, 10]), ("Harmonic minor", &[0, 2, 3, 5, 7, 8, 11])];
+pub const TUNE_SCALES: &[(&str, &[u8])] = &[
+    ("Chromatic", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    ("Major", &[0, 2, 4, 5, 7, 9, 11]),
+    ("Minor", &[0, 2, 3, 5, 7, 8, 10]),
+    ("Major pentatonic", &[0, 2, 4, 7, 9]),
+    ("Minor pentatonic", &[0, 3, 5, 7, 10]),
+    ("Harmonic minor", &[0, 2, 3, 5, 7, 8, 11]),
+];
 const SCALE_NAMES: &[&str] = &["Chromatic", "Major", "Minor", "Major pentatonic", "Minor pentatonic", "Harmonic minor"];
 
 /// Nearest note (fractional MIDI → integer MIDI) allowed by `root` + `scale`.
@@ -175,7 +182,24 @@ pub struct PitchCorrect {
 
 impl PitchCorrect {
     pub fn new(rate: f32) -> Self {
-        PitchCorrect { rate, key: 0, scale: 0, speed_ms: 25.0, amount: 1.0, mix: 1.0, ring: vec![0.0; FRAME], pos: 0, analysis: vec![0.0; FRAME], fill: 0, since: 0, target_ratio: 1.0, ratio: 1.0, sl: PitchShifter::new(rate), sr: PitchShifter::new(rate), detected: None }
+        PitchCorrect {
+            rate,
+            key: 0,
+            scale: 0,
+            speed_ms: 25.0,
+            amount: 1.0,
+            mix: 1.0,
+            ring: vec![0.0; FRAME],
+            pos: 0,
+            analysis: vec![0.0; FRAME],
+            fill: 0,
+            since: 0,
+            target_ratio: 1.0,
+            ratio: 1.0,
+            sl: PitchShifter::new(rate),
+            sr: PitchShifter::new(rate),
+            detected: None,
+        }
     }
 
     fn analyse(&mut self) {
@@ -241,7 +265,15 @@ impl Effect for PitchCorrect {
 }
 
 pub fn pitch_correct_def() -> EffectDef {
-    EffectDef { id: "tune", name: "Dragon Tune (pitch correction)", category: "Pitch", description: "Real-time pitch correction: snaps a monophonic voice or instrument to the notes of a key.", params: TUNE_PARAMS, uses_sidechain: false, create: |rate| Box::new(PitchCorrect::new(rate)) }
+    EffectDef {
+        id: "tune",
+        name: "Dragon Tune (pitch correction)",
+        category: "Pitch",
+        description: "Real-time pitch correction: snaps a monophonic voice or instrument to the notes of a key.",
+        params: TUNE_PARAMS,
+        uses_sidechain: false,
+        create: |rate| Box::new(PitchCorrect::new(rate)),
+    }
 }
 
 #[cfg(test)]

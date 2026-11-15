@@ -5,8 +5,8 @@
 //! the same registry. A module's commands are removed in one call when it unloads; ids stay stable across
 //! hot-swaps, so shortcut overrides and menu positions survive updates.
 
-use redhive_contracts::ui::has_permission;
 use redhive_contracts::commands::{CommandDescriptor, CommandGroupDescriptor, CommandTreeNode};
+use redhive_contracts::ui::has_permission;
 use redhive_contracts::{IconRef, TextKey};
 use std::collections::BTreeMap;
 
@@ -248,7 +248,14 @@ mod tests {
         let t = p.tree("shell.mainmenu", &["documents.view".into()], |_| None);
         assert_eq!(t.len(), 1, "admin group without visible items is removed");
         let CommandTreeNode::Group { children, .. } = &t[0] else { panic!() };
-        let kinds: Vec<&str> = children.iter().map(|c| match c { CommandTreeNode::Group { .. } => "group", CommandTreeNode::Command { command_id, .. } => command_id, CommandTreeNode::Separator { .. } => "sep" }).collect();
+        let kinds: Vec<&str> = children
+            .iter()
+            .map(|c| match c {
+                CommandTreeNode::Group { .. } => "group",
+                CommandTreeNode::Command { command_id, .. } => command_id,
+                CommandTreeNode::Separator { .. } => "sep",
+            })
+            .collect();
         assert_eq!(kinds, vec!["group", "shell.save", "sep", "shell.exit"]);
         assert_eq!(p.unregister_owner("docs"), 2);
     }

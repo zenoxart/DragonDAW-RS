@@ -115,7 +115,8 @@ pub fn scan_isolated(exe: &Path, format: PluginFormat, path: &Path, timeout: std
         PluginFormat::Clap => "clap",
         PluginFormat::Vst3 => "vst3",
     };
-    let mut child = std::process::Command::new(exe).arg("scan-plugin").arg(fmt).arg(path).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().map_err(|e| EngineError::Plugin(e.to_string()))?;
+    let mut child =
+        std::process::Command::new(exe).arg("scan-plugin").arg(fmt).arg(path).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().map_err(|e| EngineError::Plugin(e.to_string()))?;
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {

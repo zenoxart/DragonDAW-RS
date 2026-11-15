@@ -64,7 +64,11 @@ pub fn poll_scan(st: &mut State) {
 
 pub fn show(ui: &mut Ui, st: &mut State) {
     ui.heading("Plugins");
-    ui.label(RichText::new("CLAP and VST3 instruments and effects. Each file is scanned in its own process, so a plugin that crashes while loading is skipped instead of taking Dragon DAW down.").small().color(theme::TEXT_DIM));
+    ui.label(
+        RichText::new("CLAP and VST3 instruments and effects. Each file is scanned in its own process, so a plugin that crashes while loading is skipped instead of taking Dragon DAW down.")
+            .small()
+            .color(theme::TEXT_DIM),
+    );
     ui.horizontal(|ui| {
         let scanning = st.ui.plugin_scan.is_some();
         if ui.add_enabled(!scanning, egui::Button::new(if scanning { "Scanning…" } else { "Scan now" })).clicked() {

@@ -159,13 +159,25 @@ mod imp {
             unsafe {
                 let class = wide("DragonPluginEditor");
                 let inst = GetModuleHandleW(std::ptr::null());
-                let wc = WNDCLASSW { style: 0, lpfnWndProc: Some(wndproc), cbClsExtra: 0, cbWndExtra: 0, hInstance: inst, hIcon: std::ptr::null_mut(), hCursor: std::ptr::null_mut(), hbrBackground: std::ptr::null_mut(), lpszMenuName: std::ptr::null(), lpszClassName: class.as_ptr() };
+                let wc = WNDCLASSW {
+                    style: 0,
+                    lpfnWndProc: Some(wndproc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: inst,
+                    hIcon: std::ptr::null_mut(),
+                    hCursor: std::ptr::null_mut(),
+                    hbrBackground: std::ptr::null_mut(),
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: class.as_ptr(),
+                };
                 RegisterClassW(&wc);
                 let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
                 let mut rect = windows_sys::Win32::Foundation::RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
                 AdjustWindowRect(&mut rect, style, 0);
                 let t = wide(title);
-                let hwnd = CreateWindowExW(0, class.as_ptr(), t.as_ptr(), style, CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, std::ptr::null_mut(), std::ptr::null_mut(), inst, std::ptr::null());
+                let hwnd =
+                    CreateWindowExW(0, class.as_ptr(), t.as_ptr(), style, CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, std::ptr::null_mut(), std::ptr::null_mut(), inst, std::ptr::null());
                 if hwnd.is_null() {
                     return Err(EngineError::Plugin("CreateWindowExW failed".into()));
                 }

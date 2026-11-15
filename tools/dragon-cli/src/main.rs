@@ -109,20 +109,13 @@ fn render(args: &[String]) -> Result<(), String> {
         eprintln!("warning: missing file {}", m.display());
     }
     let mut last = -1i32;
-    let report = export_with(
-        &p,
-        &cache,
-        &out,
-        &o,
-        &mut || if use_plugins { Pool::with_plugins(Box::new(plugins::Host)) } else { Pool::new() },
-        &mut |x| {
-            let pc = (x * 100.0) as i32;
-            if pc / 10 != last / 10 {
-                eprint!("\rrendering {pc:3}%");
-                last = pc;
-            }
-        },
-    )
+    let report = export_with(&p, &cache, &out, &o, &mut || if use_plugins { Pool::with_plugins(Box::new(plugins::Host)) } else { Pool::new() }, &mut |x| {
+        let pc = (x * 100.0) as i32;
+        if pc / 10 != last / 10 {
+            eprint!("\rrendering {pc:3}%");
+            last = pc;
+        }
+    })
     .map_err(|e| e.to_string())?;
     eprintln!("\rrendering 100%");
     for f in &report.files {

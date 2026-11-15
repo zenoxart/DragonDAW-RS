@@ -29,9 +29,7 @@ impl TextKey {
     /// Whether the value looks like a text key (otherwise it is literal text).
     pub fn is_key(s: &str) -> bool {
         match s.split_once(':') {
-            Some((scope, key)) => {
-                !scope.is_empty() && !key.is_empty() && !key.contains(' ') && scope.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            }
+            Some((scope, key)) => !scope.is_empty() && !key.is_empty() && !key.contains(' ') && scope.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
             None => false,
         }
     }

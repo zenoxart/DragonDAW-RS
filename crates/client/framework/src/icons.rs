@@ -107,11 +107,7 @@ mod glyph_tests {
         let _ = ctx.run(Default::default(), |_| {});
         let names: Vec<(String, String)> = super::SHELL.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         let font = egui::FontId::proportional(14.0);
-        let missing: Vec<String> = names
-            .iter()
-            .filter(|(_, g)| ctx.fonts(|f| g.chars().any(|c| !f.has_glyph(&font, c))))
-            .map(|(k, g)| format!("{k}={g}"))
-            .collect();
+        let missing: Vec<String> = names.iter().filter(|(_, g)| ctx.fonts(|f| g.chars().any(|c| !f.has_glyph(&font, c)))).map(|(k, g)| format!("{k}={g}")).collect();
         assert!(missing.is_empty(), "icons without glyph: {missing:?}");
         // every non-ASCII character in the UI sources and text tables
         let mut chars = std::collections::BTreeSet::new();

@@ -103,7 +103,22 @@ pub fn delay_def() -> EffectDef {
         params: DELAY_PARAMS,
         uses_sidechain: false,
         create: |rate| {
-            Box::new(Delay { rate, bpm: 120.0, sync: 6, time_ms: 375.0, feedback: 0.4, mode: 1, lc: [OnePole::new(150.0, rate); 2], hc: [OnePole::new(8000.0, rate); 2], lines: [DelayLine::new((rate * 4.2) as usize), DelayLine::new((rate * 4.2) as usize)], lfo: Lfo::default(), modulation: 0.1, offset: 0.0, mix: 0.3, smoothed: rate * 0.3 })
+            Box::new(Delay {
+                rate,
+                bpm: 120.0,
+                sync: 6,
+                time_ms: 375.0,
+                feedback: 0.4,
+                mode: 1,
+                lc: [OnePole::new(150.0, rate); 2],
+                hc: [OnePole::new(8000.0, rate); 2],
+                lines: [DelayLine::new((rate * 4.2) as usize), DelayLine::new((rate * 4.2) as usize)],
+                lfo: Lfo::default(),
+                modulation: 0.1,
+                offset: 0.0,
+                mix: 0.3,
+                smoothed: rate * 0.3,
+            })
         },
     }
 }
@@ -124,7 +139,17 @@ struct ModDelay {
 
 impl ModDelay {
     fn new(rate: f32, base_ms: f32) -> Self {
-        ModDelay { rate, lines: [DelayLine::new((rate * 0.06) as usize), DelayLine::new((rate * 0.06) as usize)], lfo: [Lfo::with_phase(0.0), Lfo::with_phase(0.25)], speed: 0.8, depth: 0.5, base_ms, feedback: 0.0, mix: 0.5, fb: [0.0; 2] }
+        ModDelay {
+            rate,
+            lines: [DelayLine::new((rate * 0.06) as usize), DelayLine::new((rate * 0.06) as usize)],
+            lfo: [Lfo::with_phase(0.0), Lfo::with_phase(0.25)],
+            speed: 0.8,
+            depth: 0.5,
+            base_ms,
+            feedback: 0.0,
+            mix: 0.5,
+            fb: [0.0; 2],
+        }
     }
     fn run(&mut self, l: &mut [f32], r: &mut [f32], depth_ms: f32) {
         for i in 0..l.len() {
@@ -153,8 +178,15 @@ impl ModDelay {
 pub struct Chorus(ModDelay);
 pub struct Flanger(ModDelay);
 
-const CHORUS_PARAMS: &[ParamInfo] = &[ParamInfo::log("rate", "Rate", 0.05, 8.0, 0.8, "Hz"), ParamInfo::lin("depth", "Depth", 0.0, 1.0, 0.5, ""), ParamInfo::log("delay", "Delay", 5.0, 30.0, 12.0, "ms"), ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.5, "")];
-const FLANGER_PARAMS: &[ParamInfo] = &[ParamInfo::log("rate", "Rate", 0.02, 5.0, 0.25, "Hz"), ParamInfo::lin("depth", "Depth", 0.0, 1.0, 0.7, ""), ParamInfo::lin("feedback", "Feedback", -0.9, 0.9, 0.6, ""), ParamInfo::log("delay", "Delay", 0.1, 10.0, 1.0, "ms"), ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.5, "")];
+const CHORUS_PARAMS: &[ParamInfo] =
+    &[ParamInfo::log("rate", "Rate", 0.05, 8.0, 0.8, "Hz"), ParamInfo::lin("depth", "Depth", 0.0, 1.0, 0.5, ""), ParamInfo::log("delay", "Delay", 5.0, 30.0, 12.0, "ms"), ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.5, "")];
+const FLANGER_PARAMS: &[ParamInfo] = &[
+    ParamInfo::log("rate", "Rate", 0.02, 5.0, 0.25, "Hz"),
+    ParamInfo::lin("depth", "Depth", 0.0, 1.0, 0.7, ""),
+    ParamInfo::lin("feedback", "Feedback", -0.9, 0.9, 0.6, ""),
+    ParamInfo::log("delay", "Delay", 0.1, 10.0, 1.0, "ms"),
+    ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.5, ""),
+];
 
 impl Effect for Chorus {
     fn set_param(&mut self, id: &str, v: f32) {
@@ -181,11 +213,27 @@ impl Effect for Flanger {
 }
 
 pub fn chorus_def() -> EffectDef {
-    EffectDef { id: "chorus", name: "Chorus", category: "Modulation", description: "Stereo chorus with quadrature LFOs.", params: CHORUS_PARAMS, uses_sidechain: false, create: |rate| Box::new(Chorus(ModDelay::new(rate, 12.0))) }
+    EffectDef {
+        id: "chorus",
+        name: "Chorus",
+        category: "Modulation",
+        description: "Stereo chorus with quadrature LFOs.",
+        params: CHORUS_PARAMS,
+        uses_sidechain: false,
+        create: |rate| Box::new(Chorus(ModDelay::new(rate, 12.0))),
+    }
 }
 
 pub fn flanger_def() -> EffectDef {
-    EffectDef { id: "flanger", name: "Flanger", category: "Modulation", description: "Through-zero style flanger with positive or negative feedback.", params: FLANGER_PARAMS, uses_sidechain: false, create: |rate| Box::new(Flanger(ModDelay::new(rate, 1.0))) }
+    EffectDef {
+        id: "flanger",
+        name: "Flanger",
+        category: "Modulation",
+        description: "Through-zero style flanger with positive or negative feedback.",
+        params: FLANGER_PARAMS,
+        uses_sidechain: false,
+        create: |rate| Box::new(Flanger(ModDelay::new(rate, 1.0))),
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ phaser
@@ -258,7 +306,21 @@ pub fn phaser_def() -> EffectDef {
         description: "2–12 stage all-pass phaser with feedback.",
         params: PHASER_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Phaser { rate, ap: [[Biquad::default(); 12]; 2], lfo: [Lfo::with_phase(0.0), Lfo::with_phase(0.25)], speed: 0.4, depth: 0.8, stages: 6, feedback: 0.5, center: 900.0, mix: 0.5, fb: [0.0; 2], counter: 0 }),
+        create: |rate| {
+            Box::new(Phaser {
+                rate,
+                ap: [[Biquad::default(); 12]; 2],
+                lfo: [Lfo::with_phase(0.0), Lfo::with_phase(0.25)],
+                speed: 0.4,
+                depth: 0.8,
+                stages: 6,
+                feedback: 0.5,
+                center: 900.0,
+                mix: 0.5,
+                fb: [0.0; 2],
+                counter: 0,
+            })
+        },
     }
 }
 
@@ -316,7 +378,15 @@ impl Effect for Tremolo {
 }
 
 pub fn tremolo_def() -> EffectDef {
-    EffectDef { id: "tremolo", name: "Tremolo / Auto-pan", category: "Modulation", description: "Tempo-synced volume or pan modulation.", params: TREM_PARAMS, uses_sidechain: false, create: |rate| Box::new(Tremolo { rate, bpm: 120.0, sync: 5, speed: 4.0, depth: 0.6, shape: LfoShape::Sine, pan: false, lfo: Lfo::default() }) }
+    EffectDef {
+        id: "tremolo",
+        name: "Tremolo / Auto-pan",
+        category: "Modulation",
+        description: "Tempo-synced volume or pan modulation.",
+        params: TREM_PARAMS,
+        uses_sidechain: false,
+        create: |rate| Box::new(Tremolo { rate, bpm: 120.0, sync: 5, speed: 4.0, depth: 0.6, shape: LfoShape::Sine, pan: false, lfo: Lfo::default() }),
+    }
 }
 
 #[cfg(test)]

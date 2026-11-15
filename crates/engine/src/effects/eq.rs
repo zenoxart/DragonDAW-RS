@@ -19,7 +19,15 @@ macro_rules! band {
 }
 
 const fn flatten() -> [ParamInfo; EQ_BANDS * 5 + 1] {
-    let bands: [[ParamInfo; 5]; EQ_BANDS] = [band!("1", false, 4.0, 30.0), band!("2", true, 1.0, 100.0), band!("3", true, 0.0, 300.0), band!("4", true, 0.0, 1000.0), band!("5", true, 0.0, 3000.0), band!("6", true, 2.0, 8000.0), band!("7", false, 3.0, 18000.0)];
+    let bands: [[ParamInfo; 5]; EQ_BANDS] = [
+        band!("1", false, 4.0, 30.0),
+        band!("2", true, 1.0, 100.0),
+        band!("3", true, 0.0, 300.0),
+        band!("4", true, 0.0, 1000.0),
+        band!("5", true, 0.0, 3000.0),
+        band!("6", true, 2.0, 8000.0),
+        band!("7", false, 3.0, 18000.0),
+    ];
     let mut out = [ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB"); EQ_BANDS * 5 + 1];
     let mut i = 0;
     while i < EQ_BANDS {
@@ -138,7 +146,15 @@ impl Effect for ParametricEq {
 }
 
 pub fn def() -> EffectDef {
-    EffectDef { id: "eq", name: "Parametric EQ", category: "EQ", description: "7-band parametric EQ with shelves, cuts and notch per band.", params: &PARAMS, uses_sidechain: false, create: |r| Box::new(ParametricEq::new(r)) }
+    EffectDef {
+        id: "eq",
+        name: "Parametric EQ",
+        category: "EQ",
+        description: "7-band parametric EQ with shelves, cuts and notch per band.",
+        params: &PARAMS,
+        uses_sidechain: false,
+        create: |r| Box::new(ParametricEq::new(r)),
+    }
 }
 
 #[cfg(test)]

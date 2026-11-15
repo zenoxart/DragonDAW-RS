@@ -102,7 +102,15 @@ impl NavigationWheel {
         if !self.open {
             self.open = true;
             self.opened_at = Some(Instant::now());
-            self.inner = if count > 1 { if backwards { count - 1 } else { 1 } } else { 0 };
+            self.inner = if count > 1 {
+                if backwards {
+                    count - 1
+                } else {
+                    1
+                }
+            } else {
+                0
+            };
             self.outer = None;
             self.shown = false;
         } else if count > 0 {

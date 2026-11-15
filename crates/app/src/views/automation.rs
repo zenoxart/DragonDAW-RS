@@ -162,10 +162,12 @@ fn lane_editor(ui: &mut Ui, st: &mut State, lane: &AutomationLane, len: f64, bea
         p.line_segment([Pos2::new(x_of(b), rect.top()), Pos2::new(x_of(b), rect.bottom())], Stroke::new(1.0_f32, theme::GRID));
         b += bpb * 4.0;
     }
-    let curve: Vec<Pos2> = (0..=rect.width() as usize / 2).map(|i| {
-        let x = rect.left() + i as f32 * 2.0;
-        Pos2::new(x, y_of(lane.value_at(b_of(x)).unwrap_or(min)))
-    }).collect();
+    let curve: Vec<Pos2> = (0..=rect.width() as usize / 2)
+        .map(|i| {
+            let x = rect.left() + i as f32 * 2.0;
+            Pos2::new(x, y_of(lane.value_at(b_of(x)).unwrap_or(min)))
+        })
+        .collect();
     p.add(egui::Shape::line(curve, Stroke::new(2.0_f32, if lane.mode == AutomationMode::Off { theme::TEXT_DIM } else { theme::ACCENT_2 })));
     let pts: Vec<Pos2> = lane.points.iter().map(|pt| Pos2::new(x_of(pt.beat), y_of(pt.value))).collect();
     for q in &pts {

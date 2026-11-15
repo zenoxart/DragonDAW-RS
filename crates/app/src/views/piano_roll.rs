@@ -37,10 +37,21 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     };
     toolbar(ui, st, pat, ch);
     let notes: Vec<Note> = st.session.project.pattern(pat).and_then(|p| p.channels.get(&ch)).map(|c| c.notes.clone()).unwrap_or_default();
-    let ghosts: Vec<(Rgb, Note)> = st.session.project.pattern(pat).map(|p| p.channels.iter().filter(|(id, _)| **id != ch).flat_map(|(id, c)| {
-        let col = st.session.project.channel(*id).map(|x| x.color).unwrap_or_default();
-        c.notes.iter().map(move |n| (col, *n))
-    }).collect()).unwrap_or_default();
+    let ghosts: Vec<(Rgb, Note)> = st
+        .session
+        .project
+        .pattern(pat)
+        .map(|p| {
+            p.channels
+                .iter()
+                .filter(|(id, _)| **id != ch)
+                .flat_map(|(id, c)| {
+                    let col = st.session.project.channel(*id).map(|x| x.color).unwrap_or_default();
+                    c.notes.iter().map(move |n| (col, *n))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let ch_color = st.session.project.channel(ch).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT);
     let pat_len = st.session.project.pattern(pat).map(|p| p.length_beats()).unwrap_or(4.0);
 
@@ -102,13 +113,31 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
     // beat grid
     let end_beat = sx + grid.width() as f64 / zoom;
-    let step = if zoom < 40.0 { 1.0 } else if zoom < 160.0 { 0.25 } else { 0.125 };
+    let step = if zoom < 40.0 {
+        1.0
+    } else if zoom < 160.0 {
+        0.25
+    } else {
+        0.125
+    };
     let mut b = snap_floor(sx, step);
     while b <= end_beat {
         let x = grid.left() + ((b - sx) * zoom) as f32;
         let strong = (b % 4.0).abs() < 1e-9;
         let beat = (b.fract()).abs() < 1e-9;
-        gp.line_segment([Pos2::new(x, grid.top()), Pos2::new(x, grid.bottom())], Stroke::new(1.0_f32, if strong { theme::GRID_BAR } else if beat { theme::GRID } else { Color32::from_gray(38) }));
+        gp.line_segment(
+            [Pos2::new(x, grid.top()), Pos2::new(x, grid.bottom())],
+            Stroke::new(
+                1.0_f32,
+                if strong {
+                    theme::GRID_BAR
+                } else if beat {
+                    theme::GRID
+                } else {
+                    Color32::from_gray(38)
+                },
+            ),
+        );
         b += step;
     }
     // pattern end
@@ -166,7 +195,17 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let r = Rect::from_x_y_ranges(keys.x_range(), y..=y + kh);
         let black = is_black(pitch);
         let held = st.ui.held_keys.iter().any(|(_, n)| *n == pitch);
-        kp.rect_filled(r.shrink2(Vec2::new(0.0, 0.5)), 1.0, if held { theme::ACCENT_2 } else if black { Color32::from_gray(20) } else { Color32::from_gray(225) });
+        kp.rect_filled(
+            r.shrink2(Vec2::new(0.0, 0.5)),
+            1.0,
+            if held {
+                theme::ACCENT_2
+            } else if black {
+                Color32::from_gray(20)
+            } else {
+                Color32::from_gray(225)
+            },
+        );
         if pitch % 12 == 0 || kh >= 13.0 && !black {
             kp.text(r.right_center() - Vec2::new(3.0, 0.0), egui::Align2::RIGHT_CENTER, note_name(pitch), egui::FontId::proportional(9.0), if black { Color32::WHITE } else { Color32::BLACK });
         }
@@ -349,11 +388,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 let pitch = snap_pitch(st, pitch_of(pos.y));
                 let len = st.ui.last_note_len;
                 let chord = st.ui.chord;
-                let new: Vec<Note> = if chord == 0 {
-                    vec![Note { pitch, start, length: len, velocity: 0.78, ..Default::default() }]
-                } else {
-                    edit::chord(pitch, CHORDS[chord - 1].1, start, len, 0.78, false)
-                };
+                let new: Vec<Note> = if chord == 0 { vec![Note { pitch, start, length: len, velocity: 0.78, ..Default::default() }] } else { edit::chord(pitch, CHORDS[chord - 1].1, start, len, 0.78, false) };
                 preview(st, pitch, 0.78);
                 let first = notes.len();
                 let n = new.len();

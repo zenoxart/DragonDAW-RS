@@ -46,7 +46,16 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             });
             if m.integrated > -69.0 {
                 let diff = target - m.integrated;
-                ui.label(RichText::new(if diff.abs() < 0.5 { "On target".to_string() } else if diff > 0.0 { format!("{diff:.1} dB below target") } else { format!("{:.1} dB above target", -diff) }).color(if diff.abs() < 1.0 { theme::OK } else { theme::WARN }));
+                ui.label(
+                    RichText::new(if diff.abs() < 0.5 {
+                        "On target".to_string()
+                    } else if diff > 0.0 {
+                        format!("{diff:.1} dB below target")
+                    } else {
+                        format!("{:.1} dB above target", -diff)
+                    })
+                    .color(if diff.abs() < 1.0 { theme::OK } else { theme::WARN }),
+                );
             } else {
                 ui.label(RichText::new("Play the song to measure.").color(theme::TEXT_DIM));
             }

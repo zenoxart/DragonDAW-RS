@@ -244,7 +244,10 @@ pub fn adm_xml(title: &str, objects: &[AdmObject], rate: u32) -> String {
     let length = dur(frames / rate.max(1) as f64);
     let mut x = String::new();
     x.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ebuCoreMain xmlns=\"urn:ebu:metadata-schema:ebuCore_2016\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><coreMetadata><format><audioFormatExtended version=\"ITU-R_BS.2076-2\">\n");
-    x.push_str(&format!("<audioProgramme audioProgrammeID=\"APR_1001\" audioProgrammeName=\"{}\" start=\"00:00:00.00000\" end=\"{length}\"><audioContentIDRef>ACO_1001</audioContentIDRef></audioProgramme>\n", xml_escape(title)));
+    x.push_str(&format!(
+        "<audioProgramme audioProgrammeID=\"APR_1001\" audioProgrammeName=\"{}\" start=\"00:00:00.00000\" end=\"{length}\"><audioContentIDRef>ACO_1001</audioContentIDRef></audioProgramme>\n",
+        xml_escape(title)
+    ));
     x.push_str(&format!("<audioContent audioContentID=\"ACO_1001\" audioContentName=\"{}\">", xml_escape(title)));
     for k in 0..objects.len() {
         x.push_str(&format!("<audioObjectIDRef>AO_{:04X}</audioObjectIDRef>", 0x1001 + k));

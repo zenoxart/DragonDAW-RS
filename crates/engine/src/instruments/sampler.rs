@@ -80,13 +80,28 @@ impl InstrumentVoice for Sampler {
         if self.voices.len() >= MAX_VOICES {
             self.voices.remove(0);
         }
-        let mut env = EnvGen::new(if self.envelope.enabled { self.envelope } else { Envelope { enabled: true, delay: 0.0, attack: 0.0, hold: 0.0, decay: 0.0, sustain: 1.0, release: 0.005, attack_tension: 0.0, release_tension: 0.0 } }, self.rate);
+        let mut env = EnvGen::new(
+            if self.envelope.enabled { self.envelope } else { Envelope { enabled: true, delay: 0.0, attack: 0.0, hold: 0.0, decay: 0.0, sustain: 1.0, release: 0.005, attack_tension: 0.0, release_tension: 0.0 } },
+            self.rate,
+        );
         env.trigger();
         let (pl, pr) = pan_law(n.pan);
         let vel = n.velocity.clamp(0.0, 1.0);
         let pos = if self.params.reverse { end - 1.0 } else { start };
         self.last_rate = ratio;
-        self.voices.push(Voice { note: n.note, pos, rate: ratio, target_rate: ratio, start, end, gain_l: vel * pl * std::f32::consts::FRAC_1_SQRT_2, gain_r: vel * pr * std::f32::consts::FRAC_1_SQRT_2, env, released: false, done: false });
+        self.voices.push(Voice {
+            note: n.note,
+            pos,
+            rate: ratio,
+            target_rate: ratio,
+            start,
+            end,
+            gain_l: vel * pl * std::f32::consts::FRAC_1_SQRT_2,
+            gain_r: vel * pr * std::f32::consts::FRAC_1_SQRT_2,
+            env,
+            released: false,
+            done: false,
+        });
     }
 
     fn note_off(&mut self, note: u8) {

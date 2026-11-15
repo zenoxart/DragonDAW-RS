@@ -2,9 +2,9 @@
 
 use crate::state::State;
 use crate::{splash, theme};
+use egui::RichText;
 use redhive_client_framework::widgets::{severity_color, severity_icon};
 use redhive_contracts::ui::Severity;
-use egui::RichText;
 
 pub fn palette(ctx: &egui::Context, st: &mut State) {
     let Some(mut q) = st.ui.palette.take() else { return };
@@ -78,7 +78,13 @@ pub fn recovery(ctx: &egui::Context, st: &mut State) {
         egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
             for (p, t) in list.iter().take(20) {
                 let age = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-                let ago = if age < 3600 { format!("{} min ago", age / 60) } else if age < 86400 { format!("{} h ago", age / 3600) } else { format!("{} days ago", age / 86400) };
+                let ago = if age < 3600 {
+                    format!("{} min ago", age / 60)
+                } else if age < 86400 {
+                    format!("{} h ago", age / 3600)
+                } else {
+                    format!("{} days ago", age / 86400)
+                };
                 if ui.button(format!("{}  ·  {ago}", p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default())).clicked() {
                     match st.autosave.load(p) {
                         Ok(proj) => {

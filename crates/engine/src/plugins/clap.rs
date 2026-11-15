@@ -173,9 +173,17 @@ unsafe extern "C" fn fd_unregister(h: *const clap_host, fd: i32) -> bool {
 struct HostExt<T>(T);
 // SAFETY: tables of function pointers.
 unsafe impl<T> Sync for HostExt<T> {}
-static HOST_GUI: HostExt<clap_sys::ext::gui::clap_host_gui> = HostExt(clap_sys::ext::gui::clap_host_gui { resize_hints_changed: Some(gui_resize_hints), request_resize: Some(gui_request_resize), request_show: Some(gui_request_show), request_hide: Some(gui_request_hide), closed: Some(gui_closed) });
-static HOST_TIMER: HostExt<clap_sys::ext::timer_support::clap_host_timer_support> = HostExt(clap_sys::ext::timer_support::clap_host_timer_support { register_timer: Some(timer_register), unregister_timer: Some(timer_unregister) });
-static HOST_FD: HostExt<clap_sys::ext::posix_fd_support::clap_host_posix_fd_support> = HostExt(clap_sys::ext::posix_fd_support::clap_host_posix_fd_support { register_fd: Some(fd_register), modify_fd: Some(fd_modify), unregister_fd: Some(fd_unregister) });
+static HOST_GUI: HostExt<clap_sys::ext::gui::clap_host_gui> = HostExt(clap_sys::ext::gui::clap_host_gui {
+    resize_hints_changed: Some(gui_resize_hints),
+    request_resize: Some(gui_request_resize),
+    request_show: Some(gui_request_show),
+    request_hide: Some(gui_request_hide),
+    closed: Some(gui_closed),
+});
+static HOST_TIMER: HostExt<clap_sys::ext::timer_support::clap_host_timer_support> =
+    HostExt(clap_sys::ext::timer_support::clap_host_timer_support { register_timer: Some(timer_register), unregister_timer: Some(timer_unregister) });
+static HOST_FD: HostExt<clap_sys::ext::posix_fd_support::clap_host_posix_fd_support> =
+    HostExt(clap_sys::ext::posix_fd_support::clap_host_posix_fd_support { register_fd: Some(fd_register), modify_fd: Some(fd_modify), unregister_fd: Some(fd_unregister) });
 
 unsafe extern "C" fn host_get_extension(_h: *const clap_host, id: *const c_char) -> *const c_void {
     if id.is_null() {
@@ -314,7 +322,15 @@ impl ClapPlugin {
                 for i in 0..n {
                     let mut pi: clap_param_info = std::mem::zeroed();
                     if (*params_ext).get_info.map(|g| g(plugin, i, &mut pi)).unwrap_or(false) {
-                        params.push(ParamMeta { id: pi.id, name: cstr(pi.name.as_ptr()), min: pi.min_value, max: pi.max_value, default: pi.default_value, stepped: pi.flags & CLAP_PARAM_IS_STEPPED != 0, automatable: pi.flags & CLAP_PARAM_IS_AUTOMATABLE != 0 });
+                        params.push(ParamMeta {
+                            id: pi.id,
+                            name: cstr(pi.name.as_ptr()),
+                            min: pi.min_value,
+                            max: pi.max_value,
+                            default: pi.default_value,
+                            stepped: pi.flags & CLAP_PARAM_IS_STEPPED != 0,
+                            automatable: pi.flags & CLAP_PARAM_IS_AUTOMATABLE != 0,
+                        });
                     }
                 }
             }
@@ -329,7 +345,27 @@ impl ClapPlugin {
                 return Err(EngineError::Plugin("activate failed".into()));
             }
             let latency = if latency_ext.is_null() { 0 } else { (*latency_ext).get.map(|g| g(plugin)).unwrap_or(0) };
-            let mut me = ClapPlugin { _host: host, _strings: strings, plugin, params_ext, gui, params, events: Vec::with_capacity(256), pending: Vec::with_capacity(256), scratch: Scratch::new(max_block), inputs, outputs, latency, processing: false, steady: 0, voices: 0, gui_open: false, state, window: None, info: r.clone() };
+            let mut me = ClapPlugin {
+                _host: host,
+                _strings: strings,
+                plugin,
+                params_ext,
+                gui,
+                params,
+                events: Vec::with_capacity(256),
+                pending: Vec::with_capacity(256),
+                scratch: Scratch::new(max_block),
+                inputs,
+                outputs,
+                latency,
+                processing: false,
+                steady: 0,
+                voices: 0,
+                gui_open: false,
+                state,
+                window: None,
+                info: r.clone(),
+            };
             for (id, v) in &r.params {
                 me.pending.push(HostEvent::Param { id: *id, value: me.plain(*id, *v) });
             }
@@ -365,7 +401,16 @@ impl ClapPlugin {
                     slot.note = note_event(CLAP_EVENT_NOTE_OFF, key, 0.0);
                 }
                 HostEvent::Param { id, value } => {
-                    slot.param = clap_event_param_value { header: clap_event_header { size: std::mem::size_of::<clap_event_param_value>() as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_: CLAP_EVENT_PARAM_VALUE, flags: 0 }, param_id: id, cookie: std::ptr::null_mut(), note_id: -1, port_index: -1, channel: -1, key: -1, value };
+                    slot.param = clap_event_param_value {
+                        header: clap_event_header { size: std::mem::size_of::<clap_event_param_value>() as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_: CLAP_EVENT_PARAM_VALUE, flags: 0 },
+                        param_id: id,
+                        cookie: std::ptr::null_mut(),
+                        note_id: -1,
+                        port_index: -1,
+                        channel: -1,
+                        key: -1,
+                        value,
+                    };
                 }
             }
             self.events.push(slot);
@@ -381,7 +426,17 @@ impl ClapPlugin {
         let mut outb = clap_audio_buffer { data32: out_ptrs.as_mut_ptr(), data64: std::ptr::null_mut(), channel_count: 2, latency: 0, constant_mask: 0 };
         let in_events = clap_input_events { ctx: &self.events as *const Vec<EvSlot> as *mut c_void, size: Some(in_size), get: Some(in_get) };
         let out_events = clap_output_events { ctx: std::ptr::null_mut(), try_push: Some(out_push) };
-        let process = clap_process { steady_time: self.steady, frames_count: n as u32, transport: std::ptr::null(), audio_inputs: inb.as_ptr(), audio_outputs: &mut outb, audio_inputs_count: self.inputs, audio_outputs_count: self.outputs, in_events: &in_events, out_events: &out_events };
+        let process = clap_process {
+            steady_time: self.steady,
+            frames_count: n as u32,
+            transport: std::ptr::null(),
+            audio_inputs: inb.as_ptr(),
+            audio_outputs: &mut outb,
+            audio_inputs_count: self.inputs,
+            audio_outputs_count: self.outputs,
+            in_events: &in_events,
+            out_events: &out_events,
+        };
         // SAFETY: CLAP processing per spec; buffers live for the call.
         unsafe {
             if !self.processing {
@@ -395,7 +450,16 @@ impl ClapPlugin {
     }
 
     fn params_list(&self) -> Vec<PluginParam> {
-        self.params.iter().map(|p| PluginParam { id: p.id, name: p.name.clone(), default: if p.max > p.min { (p.default - p.min) / (p.max - p.min) } else { 0.0 }, steps: if p.stepped { (p.max - p.min).round() as u32 } else { 0 }, automatable: p.automatable }).collect()
+        self.params
+            .iter()
+            .map(|p| PluginParam {
+                id: p.id,
+                name: p.name.clone(),
+                default: if p.max > p.min { (p.default - p.min) / (p.max - p.min) } else { 0.0 },
+                steps: if p.stepped { (p.max - p.min).round() as u32 } else { 0 },
+                automatable: p.automatable,
+            })
+            .collect()
     }
 
     fn value(&self, id: u32) -> Option<f64> {
@@ -515,10 +579,17 @@ impl ClapPlugin {
             let timer = ext(clap_sys::ext::timer_support::CLAP_EXT_TIMER_SUPPORT) as *const clap_sys::ext::timer_support::clap_plugin_timer_support;
             if !timer.is_null() {
                 let now = std::time::Instant::now();
-                let due: Vec<u32> = self.state.timers.borrow_mut().iter_mut().filter(|t| now.duration_since(t.2) >= t.1).map(|t| {
-                    t.2 = now;
-                    t.0
-                }).collect();
+                let due: Vec<u32> = self
+                    .state
+                    .timers
+                    .borrow_mut()
+                    .iter_mut()
+                    .filter(|t| now.duration_since(t.2) >= t.1)
+                    .map(|t| {
+                        t.2 = now;
+                        t.0
+                    })
+                    .collect();
                 for id in due {
                     if let Some(f) = (*timer).on_timer {
                         f(self.plugin, id);
@@ -545,7 +616,14 @@ impl ClapPlugin {
 }
 
 fn note_event(kind: u16, key: u8, velocity: f64) -> clap_event_note {
-    clap_event_note { header: clap_event_header { size: std::mem::size_of::<clap_event_note>() as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_: kind, flags: 0 }, note_id: -1, port_index: 0, channel: 0, key: key as i16, velocity }
+    clap_event_note {
+        header: clap_event_header { size: std::mem::size_of::<clap_event_note>() as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_: kind, flags: 0 },
+        note_id: -1,
+        port_index: 0,
+        channel: 0,
+        key: key as i16,
+        velocity,
+    }
 }
 
 impl Drop for ClapPlugin {

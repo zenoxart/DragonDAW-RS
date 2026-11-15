@@ -60,7 +60,18 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        ExportOptions { format: ExportFormat::Wav(BitDepth::Int24), rate: 48000, render_rate: 48000, range: ExportRange::Song, tail: 2.0, normalize_peak: None, loudness_target: None, dither: true, mono: false, stems: false }
+        ExportOptions {
+            format: ExportFormat::Wav(BitDepth::Int24),
+            rate: 48000,
+            render_rate: 48000,
+            range: ExportRange::Song,
+            tail: 2.0,
+            normalize_peak: None,
+            loudness_target: None,
+            dither: true,
+            mono: false,
+            stems: false,
+        }
     }
 }
 
@@ -321,7 +332,11 @@ pub fn export_with(p: &Project, cache: &SampleCache, path: &Path, opts: &ExportO
         return Ok(ExportReport { files: vec![path.to_path_buf()], loudness: st, seconds: d.duration() });
     }
     // Stems: solo each audio channel in turn (soloing keeps its sources and sends audible).
-    let (dir, prefix) = if path.extension().is_some() { (path.parent().unwrap_or(Path::new(".")).to_path_buf(), path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()) } else { (path.to_path_buf(), String::new()) };
+    let (dir, prefix) = if path.extension().is_some() {
+        (path.parent().unwrap_or(Path::new(".")).to_path_buf(), path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default())
+    } else {
+        (path.to_path_buf(), String::new())
+    };
     std::fs::create_dir_all(&dir).map_err(|e| EngineError::Io(e.to_string()))?;
     let channels: Vec<(Id, String)> = p.mixer.channels.iter().filter(|c| c.kind == ChannelKind::Audio).map(|c| (c.id, c.name.clone())).collect();
     let mut files = Vec::new();

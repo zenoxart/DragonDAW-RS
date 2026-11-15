@@ -90,18 +90,25 @@ impl Splash {
         }
         let ty = c.y + size * 0.62;
         painter.text(Pos2::new(c.x, ty), egui::Align2::CENTER_TOP, "DRAGON DAW", egui::FontId::proportional(30.0), Color32::WHITE.gamma_multiply(alpha));
-        painter.text(Pos2::new(c.x, ty + 38.0), egui::Align2::CENTER_TOP, format!("record · make beats · mix · master   v{}", env!("CARGO_PKG_VERSION")), egui::FontId::proportional(13.0), theme::TEXT_DIM.gamma_multiply(alpha));
+        painter.text(
+            Pos2::new(c.x, ty + 38.0),
+            egui::Align2::CENTER_TOP,
+            format!("record · make beats · mix · master   v{}", env!("CARGO_PKG_VERSION")),
+            egui::FontId::proportional(13.0),
+            theme::TEXT_DIM.gamma_multiply(alpha),
+        );
         ctx.request_repaint();
         true
     }
 }
 
 fn hexagon(c: Pos2, r: f32, rot: f32) -> Vec<Pos2> {
-    (0..6).map(|i| {
-        let a = rot + i as f32 * std::f32::consts::TAU / 6.0;
-        Pos2::new(c.x + r * a.cos(), c.y + r * a.sin())
-    })
-    .collect()
+    (0..6)
+        .map(|i| {
+            let a = rot + i as f32 * std::f32::consts::TAU / 6.0;
+            Pos2::new(c.x + r * a.cos(), c.y + r * a.sin())
+        })
+        .collect()
 }
 
 /// Animated hexagon with a flame gradient and a pulsing waveform through it.

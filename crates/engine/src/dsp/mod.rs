@@ -153,11 +153,25 @@ impl Biquad {
             BiquadKind::Peak => (1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a),
             BiquadKind::LowShelf => {
                 let s = 2.0 * a.sqrt() * alpha;
-                (a * ((a + 1.0) - (a - 1.0) * cos + s), 2.0 * a * ((a - 1.0) - (a + 1.0) * cos), a * ((a + 1.0) - (a - 1.0) * cos - s), (a + 1.0) + (a - 1.0) * cos + s, -2.0 * ((a - 1.0) + (a + 1.0) * cos), (a + 1.0) + (a - 1.0) * cos - s)
+                (
+                    a * ((a + 1.0) - (a - 1.0) * cos + s),
+                    2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
+                    a * ((a + 1.0) - (a - 1.0) * cos - s),
+                    (a + 1.0) + (a - 1.0) * cos + s,
+                    -2.0 * ((a - 1.0) + (a + 1.0) * cos),
+                    (a + 1.0) + (a - 1.0) * cos - s,
+                )
             }
             BiquadKind::HighShelf => {
                 let s = 2.0 * a.sqrt() * alpha;
-                (a * ((a + 1.0) + (a - 1.0) * cos + s), -2.0 * a * ((a - 1.0) + (a + 1.0) * cos), a * ((a + 1.0) + (a - 1.0) * cos - s), (a + 1.0) - (a - 1.0) * cos + s, 2.0 * ((a - 1.0) - (a + 1.0) * cos), (a + 1.0) - (a - 1.0) * cos - s)
+                (
+                    a * ((a + 1.0) + (a - 1.0) * cos + s),
+                    -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
+                    a * ((a + 1.0) + (a - 1.0) * cos - s),
+                    (a + 1.0) - (a - 1.0) * cos + s,
+                    2.0 * ((a - 1.0) - (a + 1.0) * cos),
+                    (a + 1.0) - (a - 1.0) * cos - s,
+                )
             }
             BiquadKind::LowPass => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
             BiquadKind::HighPass => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),

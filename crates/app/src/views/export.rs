@@ -37,7 +37,19 @@ impl ExportDialog {
         let name = if p.meta.name.is_empty() { "Untitled".to_string() } else { p.meta.name.clone() };
         let dir = dirs_documents().join("DragonDAW Exports");
         let path = if stems { dir.join(format!("{name} stems")) } else { dir.join(format!("{name}.wav")) };
-        ExportDialog { opts: ExportOptions { stems, ..Default::default() }, path, norm: Norm::None, peak: -0.3, lufs: p.loudness_target, progress: Arc::new(AtomicU32::new(0)), rx: None, result: None, with_video: p.video.is_some() && !stems, surround: false, adm: false }
+        ExportDialog {
+            opts: ExportOptions { stems, ..Default::default() },
+            path,
+            norm: Norm::None,
+            peak: -0.3,
+            lufs: p.loudness_target,
+            progress: Arc::new(AtomicU32::new(0)),
+            rx: None,
+            result: None,
+            with_video: p.video.is_some() && !stems,
+            surround: false,
+            adm: false,
+        }
     }
 
     /// Shows the dialog; returns `false` when it should close.
@@ -78,7 +90,11 @@ impl ExportDialog {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(self.path.display().to_string()).small());
                     if ui.button("…").clicked() {
-                        let pick = if self.opts.stems { rfd::FileDialog::new().pick_folder() } else { rfd::FileDialog::new().set_file_name(self.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()).save_file() };
+                        let pick = if self.opts.stems {
+                            rfd::FileDialog::new().pick_folder()
+                        } else {
+                            rfd::FileDialog::new().set_file_name(self.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()).save_file()
+                        };
                         if let Some(p) = pick {
                             self.path = p;
                         }
@@ -87,7 +103,16 @@ impl ExportDialog {
                 ui.end_row();
                 ui.label("Format");
                 ui.horizontal_wrapped(|ui| {
-                    for (f, n) in [(ExportFormat::Wav(BitDepth::Int16), "WAV 16"), (ExportFormat::Wav(BitDepth::Int24), "WAV 24"), (ExportFormat::Wav(BitDepth::Float32), "WAV 32f"), (ExportFormat::Flac16, "FLAC 16"), (ExportFormat::Flac24, "FLAC 24"), (ExportFormat::Mp3(320), "MP3 320"), (ExportFormat::Mp3(192), "MP3 192"), (ExportFormat::Ogg(0.6), "OGG")] {
+                    for (f, n) in [
+                        (ExportFormat::Wav(BitDepth::Int16), "WAV 16"),
+                        (ExportFormat::Wav(BitDepth::Int24), "WAV 24"),
+                        (ExportFormat::Wav(BitDepth::Float32), "WAV 32f"),
+                        (ExportFormat::Flac16, "FLAC 16"),
+                        (ExportFormat::Flac24, "FLAC 24"),
+                        (ExportFormat::Mp3(320), "MP3 320"),
+                        (ExportFormat::Mp3(192), "MP3 192"),
+                        (ExportFormat::Ogg(0.6), "OGG"),
+                    ] {
                         ui.selectable_value(&mut self.opts.format, f, n);
                     }
                 });
@@ -205,10 +230,14 @@ impl ExportDialog {
             let r = if adm {
                 let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "mix".into());
                 let path = path.with_file_name(format!("{stem}_adm.wav"));
-                dragon_engine::surround::export_adm(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed)).map(|_| ExportReport { files: vec![path], loudness: dragon_engine::dsp::loudness::LoudnessStats { integrated: -70.0, true_peak_db: -180.0, sample_peak_db: -180.0 }, seconds: 0.0 })
+                dragon_engine::surround::export_adm(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed))
+                    .map(|_| ExportReport { files: vec![path], loudness: dragon_engine::dsp::loudness::LoudnessStats { integrated: -70.0, true_peak_db: -180.0, sample_peak_db: -180.0 }, seconds: 0.0 })
             } else if surround {
                 let path = path.with_extension("wav");
-                dragon_engine::surround::export_surround(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed)).map(|_| ExportReport { files: vec![path], loudness: dragon_engine::dsp::loudness::LoudnessStats { integrated: -70.0, true_peak_db: -180.0, sample_peak_db: -180.0 }, seconds: 0.0 })
+                dragon_engine::surround::export_surround(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| {
+                    progress.store((x * 1000.0) as u32, Ordering::Relaxed)
+                })
+                .map(|_| ExportReport { files: vec![path], loudness: dragon_engine::dsp::loudness::LoudnessStats { integrated: -70.0, true_peak_db: -180.0, sample_peak_db: -180.0 }, seconds: 0.0 })
             } else {
                 dragon_engine::export::export_with(&project, &cache, &path, &opts, &mut || Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), &mut |x| progress.store((x * 1000.0) as u32, Ordering::Relaxed))
             };

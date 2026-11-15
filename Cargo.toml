@@ -24,7 +24,7 @@ edition = "2021"
 license = "Apache-2.0"
 authors = ["ZenoxArt"]
 repository = "https://github.com/zenoxart/RedHiveFramework"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 redhive-monads = { path = "crates/shared/monads" }

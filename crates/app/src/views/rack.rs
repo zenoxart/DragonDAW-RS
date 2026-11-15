@@ -107,7 +107,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         }
                     }
                 });
-                let name_btn = egui::Button::new(RichText::new(short(&c.name, 14)).color(if selected { Color32::BLACK } else { Color32::WHITE })).fill(if selected { theme::rgb(c.color) } else { theme::rgb(c.color).gamma_multiply(0.35) }).min_size(Vec2::new(118.0, 24.0));
+                let name_btn = egui::Button::new(RichText::new(short(&c.name, 14)).color(if selected { Color32::BLACK } else { Color32::WHITE }))
+                    .fill(if selected { theme::rgb(c.color) } else { theme::rgb(c.color).gamma_multiply(0.35) })
+                    .min_size(Vec2::new(118.0, 24.0));
                 let nb = ui.add(name_btn).on_hover_text(format!("{} – {}\nclick: select · double-click: settings · right-click: menu", c.name, c.instrument.kind_name()));
                 if nb.clicked() {
                     st.ui.channel = Some(cid);
@@ -198,7 +200,13 @@ fn step_row(ui: &mut Ui, st: &mut State, pat: Id, cid: Id, cur: Vec<Step>, steps
         let painting = ui.input(|i| i.pointer.primary_down()) && r.hovered() && ui.ctx().dragged_id().is_some();
         let toggle = r.clicked() || r.drag_started();
         if toggle || r.secondary_clicked() || (painting && !s.on) {
-            let val = if r.secondary_clicked() { false } else if toggle { !s.on } else { true };
+            let val = if r.secondary_clicked() {
+                false
+            } else if toggle {
+                !s.on
+            } else {
+                true
+            };
             let edit = |p: &mut Project| {
                 if let Some(pt) = p.pattern_mut(pat) {
                     let pc = pt.channels.entry(cid).or_default();

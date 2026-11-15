@@ -24,7 +24,17 @@ impl Session {
     pub fn new(project: Project, path: Option<PathBuf>) -> Self {
         let cache = SampleCache::default();
         cache.set_base(path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())));
-        Session { project, path, history: History::default(), cache, stretch: StretchCache::default(), pool: Pool::with_plugins(Box::new(dragon_engine::plugins::Host)), gesture: None, compiled_revision: None, warnings: Vec::new() }
+        Session {
+            project,
+            path,
+            history: History::default(),
+            cache,
+            stretch: StretchCache::default(),
+            pool: Pool::with_plugins(Box::new(dragon_engine::plugins::Host)),
+            gesture: None,
+            compiled_revision: None,
+            warnings: Vec::new(),
+        }
     }
 
     pub fn title(&self) -> String {

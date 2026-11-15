@@ -49,7 +49,12 @@ pub fn knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32, labe
     let arc = |from: f32, to: f32| -> Vec<Pos2> { (0..=24).map(|i| from + (to - from) * i as f32 / 24.0).map(|a| Pos2::new(c.x + rad * a.cos(), c.y + rad * a.sin())).collect() };
     p.add(egui::Shape::line(arc(a0, a0 + sweep), Stroke::new(3.0_f32, theme::GRID)));
     // Bipolar knobs fill from the centre.
-    let (fa, fb) = if min < 0.0 && max > 0.0 { let z = (-min / range).clamp(0.0, 1.0); (a0 + sweep * z.min(n), a0 + sweep * z.max(n)) } else { (a0, a0 + sweep * n) };
+    let (fa, fb) = if min < 0.0 && max > 0.0 {
+        let z = (-min / range).clamp(0.0, 1.0);
+        (a0 + sweep * z.min(n), a0 + sweep * z.max(n))
+    } else {
+        (a0, a0 + sweep * n)
+    };
     p.add(egui::Shape::line(arc(fa, fb), Stroke::new(3.0_f32, theme::ACCENT_2)));
     let a = a0 + sweep * n;
     p.line_segment([c, Pos2::new(c.x + (rad - 4.0) * a.cos(), c.y + (rad - 4.0) * a.sin())], Stroke::new(2.0_f32, Color32::WHITE));

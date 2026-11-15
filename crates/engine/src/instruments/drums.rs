@@ -32,7 +32,24 @@ impl DrumPads {
 
 /// The default 16-pad layout (GM drum notes).
 pub fn default_pads() -> Vec<Pad> {
-    let names = [("Kick", 36), ("Rim", 37), ("Snare", 38), ("Clap", 39), ("Snare 2", 40), ("Low tom", 41), ("Closed hat", 42), ("Mid tom", 43), ("Pedal hat", 44), ("Hi tom", 45), ("Open hat", 46), ("Tom 4", 47), ("Tom 5", 48), ("Crash", 49), ("Tom 6", 50), ("Ride", 51)];
+    let names = [
+        ("Kick", 36),
+        ("Rim", 37),
+        ("Snare", 38),
+        ("Clap", 39),
+        ("Snare 2", 40),
+        ("Low tom", 41),
+        ("Closed hat", 42),
+        ("Mid tom", 43),
+        ("Pedal hat", 44),
+        ("Hi tom", 45),
+        ("Open hat", 46),
+        ("Tom 4", 47),
+        ("Tom 5", 48),
+        ("Crash", 49),
+        ("Tom 6", 50),
+        ("Ride", 51),
+    ];
     names.iter().map(|(n, k)| Pad { name: n.to_string(), note: *k, choke: if *k == 42 || *k == 44 || *k == 46 { 1 } else { 0 }, ..Pad::default() }).collect()
 }
 

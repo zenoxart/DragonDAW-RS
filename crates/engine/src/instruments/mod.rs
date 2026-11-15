@@ -86,7 +86,7 @@ pub fn note_name(n: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{SynthParams, Instrument as M};
+    use crate::model::{Instrument as M, SynthParams};
 
     #[test]
     fn note_names() {

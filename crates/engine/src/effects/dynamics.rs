@@ -123,7 +123,9 @@ pub fn compressor_def() -> EffectDef {
         description: "Soft-knee compressor with external sidechain, sidechain high-pass, auto makeup and parallel mix.",
         params: COMP_PARAMS,
         uses_sidechain: true,
-        create: |rate| Box::new(Compressor { core: CompCore::new(rate), makeup: 0.0, mix: 1.0, use_sidechain: false, sc_hp: [Biquad::new(BiquadKind::HighPass, 20.0, 0.707, 0.0, rate); 2], sc_hp_freq: 20.0, auto_makeup: false }),
+        create: |rate| {
+            Box::new(Compressor { core: CompCore::new(rate), makeup: 0.0, mix: 1.0, use_sidechain: false, sc_hp: [Biquad::new(BiquadKind::HighPass, 20.0, 0.707, 0.0, rate); 2], sc_hp_freq: 20.0, auto_makeup: false })
+        },
     }
 }
 
@@ -259,7 +261,16 @@ pub fn multiband_def() -> EffectDef {
         params: MB_PARAMS,
         uses_sidechain: false,
         create: |rate| {
-            let mut m = Multiband { rate, x1: [Crossover::new(200.0, rate); 2], x2: [Crossover::new(3000.0, rate); 2], ap: [Crossover::new(3000.0, rate); 2], bands: [CompCore::new(rate), CompCore::new(rate), CompCore::new(rate)], gains: [1.0; 3], f1: 200.0, f2: 3000.0 };
+            let mut m = Multiband {
+                rate,
+                x1: [Crossover::new(200.0, rate); 2],
+                x2: [Crossover::new(3000.0, rate); 2],
+                ap: [Crossover::new(3000.0, rate); 2],
+                bands: [CompCore::new(rate), CompCore::new(rate), CompCore::new(rate)],
+                gains: [1.0; 3],
+                f1: 200.0,
+                f2: 3000.0,
+            };
             m.rebuild();
             Box::new(m)
         },
@@ -437,7 +448,21 @@ pub fn limiter_def() -> EffectDef {
         uses_sidechain: false,
         create: |rate| {
             let n = ((LOOKAHEAD_MS * 0.001 * rate) as usize).max(8);
-            Box::new(Limiter { rate, ceiling: db_to_gain(-1.0), gain_in: 1.0, release: 80.0, lookahead: n, true_peak: true, buf_l: vec![0.0; n], buf_r: vec![0.0; n], peaks: vec![0.0; n], pos: 0, gain: 1.0, tp: Default::default(), gr: 0.0 })
+            Box::new(Limiter {
+                rate,
+                ceiling: db_to_gain(-1.0),
+                gain_in: 1.0,
+                release: 80.0,
+                lookahead: n,
+                true_peak: true,
+                buf_l: vec![0.0; n],
+                buf_r: vec![0.0; n],
+                peaks: vec![0.0; n],
+                pos: 0,
+                gain: 1.0,
+                tp: Default::default(),
+                gr: 0.0,
+            })
         },
     }
 }

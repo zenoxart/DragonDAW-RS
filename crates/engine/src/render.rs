@@ -419,11 +419,31 @@ impl Song {
                 // Envelope is applied through a dedicated hook on the sampler.
                 let mut g = i.lock().unwrap();
                 g.set_param("__env_enabled", if c.envelope.enabled { 1.0 } else { 0.0 });
-                for (k, v) in [("__env_delay", c.envelope.delay), ("__env_attack", c.envelope.attack), ("__env_hold", c.envelope.hold), ("__env_decay", c.envelope.decay), ("__env_sustain", c.envelope.sustain), ("__env_release", c.envelope.release), ("__env_atens", c.envelope.attack_tension), ("__env_rtens", c.envelope.release_tension)] {
+                for (k, v) in [
+                    ("__env_delay", c.envelope.delay),
+                    ("__env_attack", c.envelope.attack),
+                    ("__env_hold", c.envelope.hold),
+                    ("__env_decay", c.envelope.decay),
+                    ("__env_sustain", c.envelope.sustain),
+                    ("__env_release", c.envelope.release),
+                    ("__env_atens", c.envelope.attack_tension),
+                    ("__env_rtens", c.envelope.release_tension),
+                ] {
                     g.set_param(k, v);
                 }
             }
-            channels.push(CChannel { id: c.id, strip: strip_index.get(&c.mixer).copied().unwrap_or(master), volume: c.volume, pan: c.pan, pitch: c.pitch, audible: !c.muted && (!any_ch_solo || c.solo), cut_group: c.cut_group, cut_by: c.cut_by, cut_self: c.cut_self, instrument: inst });
+            channels.push(CChannel {
+                id: c.id,
+                strip: strip_index.get(&c.mixer).copied().unwrap_or(master),
+                volume: c.volume,
+                pan: c.pan,
+                pitch: c.pitch,
+                audible: !c.muted && (!any_ch_solo || c.solo),
+                cut_group: c.cut_group,
+                cut_by: c.cut_by,
+                cut_self: c.cut_self,
+                instrument: inst,
+            });
         }
         cx.pool.retain(&effect_ids, &instrument_ids);
         let channel_index: HashMap<Id, usize> = p.channels.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
@@ -717,17 +737,30 @@ fn quantize_up(beat: f64, q: f64) -> f64 {
 /// Live events from the UI / MIDI input, applied at the next block.
 #[derive(Debug, Clone)]
 pub enum LiveEvent {
-    NoteOn { channel: Id, note: u8, velocity: f32 },
-    NoteOff { channel: Id, note: u8 },
+    NoteOn {
+        channel: Id,
+        note: u8,
+        velocity: f32,
+    },
+    NoteOff {
+        channel: Id,
+        note: u8,
+    },
     AllNotesOff,
     /// Plays a one-shot of an audio file (browser preview) through the master.
     Preview(Arc<AudioData>),
     StopPreview,
     /// Clip launcher: starts `pattern` looping on `lane` (or stops the lane with `None`) at the next multiple
     /// of `quantize` beats (0 = immediately). Launched patterns play on top of the song.
-    Launch { lane: Id, pattern: Option<Id>, quantize: f64 },
+    Launch {
+        lane: Id,
+        pattern: Option<Id>,
+        quantize: f64,
+    },
     /// Stops every launched pattern at the next quantize boundary.
-    StopAllLaunches { quantize: f64 },
+    StopAllLaunches {
+        quantize: f64,
+    },
 }
 
 /// A pattern looping in a launcher lane.
@@ -1612,7 +1645,14 @@ mod tests {
 
     #[test]
     fn swing_delays_odd_steps() {
-        let pat = Pattern { id: 1, name: "p".into(), color: Rgb::default(), steps: 16, swing: 1.0, channels: [(9, PatternChannel { steps: (0..16).map(|i| Step { on: i < 2, ..Step::default() }).collect(), notes: vec![] })].into_iter().collect() };
+        let pat = Pattern {
+            id: 1,
+            name: "p".into(),
+            color: Rgb::default(),
+            steps: 16,
+            swing: 1.0,
+            channels: [(9, PatternChannel { steps: (0..16).map(|i| Step { on: i < 2, ..Step::default() }).collect(), notes: vec![] })].into_iter().collect(),
+        };
         let idx: HashMap<Id, usize> = [(9, 0)].into_iter().collect();
         let ev = pattern_to_events(&pat, &idx, 0.0, 4.0);
         let ons: Vec<f64> = ev.iter().filter(|e| e.on).map(|e| e.beat).collect();
@@ -1662,7 +1702,16 @@ mod tests {
         // A limiter (look-ahead latency) on track 1 only.
         let m1 = p.tracks[0].mixer;
         let ins = p.next_id();
-        p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "limiter".into(), enabled: true, mix: 1.0, params: [("ceiling".to_string(), 0.0)].into_iter().collect(), sidechain: None, plugin: None, preset: String::new() });
+        p.mixer.get_mut(m1).unwrap().inserts.push(Insert {
+            id: ins,
+            effect: "limiter".into(),
+            enabled: true,
+            mix: 1.0,
+            params: [("ceiling".to_string(), 0.0)].into_iter().collect(),
+            sidechain: None,
+            plugin: None,
+            preset: String::new(),
+        });
         let (l, _) = render_secs(&p, 0.1);
         let peaks: Vec<usize> = l.iter().enumerate().filter(|(_, x)| x.abs() > 0.05).map(|(i, _)| i).collect();
         // Both clicks arrive at the same (delayed) frame – one combined spike.
@@ -1681,7 +1730,13 @@ mod tests {
         p.tracks[0].clips.push(Clip { id, name: "a".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: f, ..Default::default() }) });
         let ch = p.tracks[0].mixer;
         let lid = p.next_id();
-        p.automation.push(AutomationLane { id: lid, target: Target::MixerVolume(ch), points: vec![AutoPoint { beat: 0.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 2.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 2.01, value: 1.0, tension: 0.0 }], mode: AutomationMode::Read, visible: true });
+        p.automation.push(AutomationLane {
+            id: lid,
+            target: Target::MixerVolume(ch),
+            points: vec![AutoPoint { beat: 0.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 2.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 2.01, value: 1.0, tension: 0.0 }],
+            mode: AutomationMode::Read,
+            visible: true,
+        });
         let (l, _) = render_secs(&p, 1.5);
         assert!(l[1000..40000].iter().all(|x| x.abs() < 1e-6));
         assert!(l[46000..60000].iter().any(|x| x.abs() > 0.1));

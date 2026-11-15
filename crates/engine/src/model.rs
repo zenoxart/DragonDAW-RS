@@ -26,18 +26,7 @@ impl Default for Rgb {
 }
 
 /// The palette new items cycle through.
-pub const PALETTE: [Rgb; 10] = [
-    Rgb(229, 57, 53),
-    Rgb(255, 152, 0),
-    Rgb(253, 216, 53),
-    Rgb(124, 179, 66),
-    Rgb(38, 166, 154),
-    Rgb(41, 182, 246),
-    Rgb(92, 107, 192),
-    Rgb(171, 71, 188),
-    Rgb(236, 64, 122),
-    Rgb(141, 110, 99),
-];
+pub const PALETTE: [Rgb; 10] = [Rgb(229, 57, 53), Rgb(255, 152, 0), Rgb(253, 216, 53), Rgb(124, 179, 66), Rgb(38, 166, 154), Rgb(41, 182, 246), Rgb(92, 107, 192), Rgb(171, 71, 188), Rgb(236, 64, 122), Rgb(141, 110, 99)];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -171,7 +160,22 @@ pub struct AudioClip {
 
 impl Default for AudioClip {
     fn default() -> Self {
-        AudioClip { source: PathBuf::new(), offset: 0.0, gain_db: 0.0, pan: 0.0, fade_in: 0.0, fade_out: 0.0, fade_curve: FadeCurve::EqualPower, reverse: false, pitch: 0.0, stretch: StretchMode::Resample, speed: 1.0, source_bpm: None, gain_line: Vec::new(), take: None }
+        AudioClip {
+            source: PathBuf::new(),
+            offset: 0.0,
+            gain_db: 0.0,
+            pan: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            fade_curve: FadeCurve::EqualPower,
+            reverse: false,
+            pitch: 0.0,
+            stretch: StretchMode::Resample,
+            speed: 1.0,
+            source_bpm: None,
+            gain_line: Vec::new(),
+            take: None,
+        }
     }
 }
 
@@ -179,7 +183,9 @@ impl Default for AudioClip {
 pub enum ClipKind {
     Audio(AudioClip),
     /// Plays a Channel-Rack pattern.
-    Pattern { pattern: Id },
+    Pattern {
+        pattern: Id,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -640,7 +646,27 @@ pub struct MixerChannel {
 
 impl MixerChannel {
     pub fn new(id: Id, name: &str, color: Rgb) -> Self {
-        MixerChannel { id, name: name.into(), color, kind: ChannelKind::Audio, volume: 0.8, pan: 0.0, muted: false, solo: false, solo_safe: false, phase_invert: false, swap_lr: false, width: 1.0, inserts: Vec::new(), sends: Vec::new(), output: None, vca: None, input: None, group: None, surround: SurroundPan::default() }
+        MixerChannel {
+            id,
+            name: name.into(),
+            color,
+            kind: ChannelKind::Audio,
+            volume: 0.8,
+            pan: 0.0,
+            muted: false,
+            solo: false,
+            solo_safe: false,
+            phase_invert: false,
+            swap_lr: false,
+            width: 1.0,
+            inserts: Vec::new(),
+            sends: Vec::new(),
+            output: None,
+            vca: None,
+            input: None,
+            group: None,
+            surround: SurroundPan::default(),
+        }
     }
 }
 
@@ -935,7 +961,23 @@ impl Project {
         let mixer = self.add_mixer_channel(name);
         let id = self.next_id();
         let color = PALETTE[self.tracks.len() % PALETTE.len()];
-        self.tracks.push(Track { id, name: name.into(), color, height: 64.0, muted: false, solo: false, armed: false, input: Some(InputSource { left: 0, right: Some(1) }), monitor: MonitorMode::Auto, mixer, clips: Vec::new(), takes: Vec::new(), show_takes: false, group: None, pinned: false });
+        self.tracks.push(Track {
+            id,
+            name: name.into(),
+            color,
+            height: 64.0,
+            muted: false,
+            solo: false,
+            armed: false,
+            input: Some(InputSource { left: 0, right: Some(1) }),
+            monitor: MonitorMode::Auto,
+            mixer,
+            clips: Vec::new(),
+            takes: Vec::new(),
+            show_takes: false,
+            group: None,
+            pinned: false,
+        });
         id
     }
 
@@ -944,7 +986,23 @@ impl Project {
         let mixer = self.add_mixer_channel(name);
         let id = self.next_id();
         let color = PALETTE[(self.channels.len() + 3) % PALETTE.len()];
-        self.channels.push(RackChannel { id, name: name.into(), color, instrument, volume: 0.8, pan: 0.0, pitch: 0.0, muted: false, solo: false, mixer, envelope: Envelope::default(), cut_group: 0, cut_by: 0, cut_self: false, group: String::new() });
+        self.channels.push(RackChannel {
+            id,
+            name: name.into(),
+            color,
+            instrument,
+            volume: 0.8,
+            pan: 0.0,
+            pitch: 0.0,
+            muted: false,
+            solo: false,
+            mixer,
+            envelope: Envelope::default(),
+            cut_group: 0,
+            cut_by: 0,
+            cut_self: false,
+            group: String::new(),
+        });
         id
     }
 
@@ -1075,7 +1133,8 @@ mod tests {
 
     #[test]
     fn automation_interpolates() {
-        let lane = AutomationLane { id: 1, target: Target::Tempo, points: vec![AutoPoint { beat: 0.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 4.0, value: 1.0, tension: 0.0 }], mode: AutomationMode::Read, visible: true };
+        let lane =
+            AutomationLane { id: 1, target: Target::Tempo, points: vec![AutoPoint { beat: 0.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 4.0, value: 1.0, tension: 0.0 }], mode: AutomationMode::Read, visible: true };
         assert_eq!(lane.value_at(-1.0), Some(0.0));
         assert!((lane.value_at(2.0).unwrap() - 0.5).abs() < 1e-6);
         assert_eq!(lane.value_at(10.0), Some(1.0));

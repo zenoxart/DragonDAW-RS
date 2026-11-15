@@ -1,8 +1,8 @@
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use vst3::Steinberg::Linux::{IRunLoop, IRunLoopTrait, ITimerHandler, ITimerHandlerTrait};
-use vst3::ComPtr;
 use std::ffi::{c_char, c_void};
+use std::rc::Rc;
+use vst3::ComPtr;
+use vst3::Steinberg::Linux::{IRunLoop, IRunLoopTrait, ITimerHandler, ITimerHandlerTrait};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{uid, Class, ComRef, ComWrapper};
@@ -219,7 +219,14 @@ impl IEditControllerTrait for Gain {
         kResultOk
     }
     unsafe fn createView(&self, _name: FIDString) -> *mut IPlugView {
-        let view = ComWrapper::new(View { param: self.normalized.clone(), child: RefCell::new(None), frame: RefCell::new(None), sized: Cell::new(false), me_timer: Cell::new(std::ptr::null_mut()), me_view: Cell::new(std::ptr::null_mut()) });
+        let view = ComWrapper::new(View {
+            param: self.normalized.clone(),
+            child: RefCell::new(None),
+            frame: RefCell::new(None),
+            sized: Cell::new(false),
+            me_timer: Cell::new(std::ptr::null_mut()),
+            me_view: Cell::new(std::ptr::null_mut()),
+        });
         view.me_timer.set(view.as_com_ref::<ITimerHandler>().unwrap().as_ptr());
         view.me_view.set(view.as_com_ref::<IPlugView>().unwrap().as_ptr());
         view.to_com_ptr::<IPlugView>().unwrap().into_raw()

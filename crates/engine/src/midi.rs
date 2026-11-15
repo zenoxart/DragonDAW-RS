@@ -102,7 +102,14 @@ pub fn import_bytes(data: &[u8]) -> Result<ImportedMidi> {
                         }
                         midly::MidiMessage::NoteOn { key, .. } | midly::MidiMessage::NoteOff { key, .. } => {
                             if let Some((start, vel)) = open.remove(&(ch, key.as_int())) {
-                                notes.push(Note { pitch: key.as_int(), start: (start as f64 * scale).round() as u32, length: (((t - start) as f64 * scale).round() as u32).max(1), velocity: vel as f32 / 127.0, color: ch, ..Note::default() });
+                                notes.push(Note {
+                                    pitch: key.as_int(),
+                                    start: (start as f64 * scale).round() as u32,
+                                    length: (((t - start) as f64 * scale).round() as u32).max(1),
+                                    velocity: vel as f32 / 127.0,
+                                    color: ch,
+                                    ..Note::default()
+                                });
                             }
                         }
                         _ => {}
@@ -130,7 +137,10 @@ pub fn export_bytes(pattern: &Pattern, channel_names: &dyn Fn(u64) -> String, bp
     use midly::{Format, Header, MetaMessage, MidiMessage as M, Smf, Timing, TrackEvent, TrackEventKind};
     let names: Vec<(u64, Vec<u8>)> = pattern.channels.keys().map(|id| (*id, channel_names(*id).into_bytes())).collect();
     let mut tracks: Vec<Vec<TrackEvent>> = Vec::new();
-    let tempo = [TrackEvent { delta: u28::new(0), kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new((60_000_000.0 / bpm.max(1.0)) as u32))) }, TrackEvent { delta: u28::new(0), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) }];
+    let tempo = [
+        TrackEvent { delta: u28::new(0), kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new((60_000_000.0 / bpm.max(1.0)) as u32))) },
+        TrackEvent { delta: u28::new(0), kind: TrackEventKind::Meta(MetaMessage::EndOfTrack) },
+    ];
     tracks.push(tempo.to_vec());
     for (i, (id, name)) in names.iter().enumerate() {
         let pc = &pattern.channels[id];
@@ -214,7 +224,6 @@ impl RetroBuffer {
     }
 }
 
-
 // ---------------------------------------------------------------------------------------------- Mackie Control
 
 /// An action decoded from a Mackie Control Universal (MCU) compatible control surface (Behringer X-Touch,
@@ -222,9 +231,15 @@ impl RetroBuffer {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum McuAction {
     /// Fader position 0 … 1 (strip 8 = master).
-    Fader { strip: u8, value: f32 },
+    Fader {
+        strip: u8,
+        value: f32,
+    },
     /// V-pot turned by `delta` detents (negative = left).
-    Pan { strip: u8, delta: i8 },
+    Pan {
+        strip: u8,
+        delta: i8,
+    },
     Mute(u8),
     Solo(u8),
     Arm(u8),
