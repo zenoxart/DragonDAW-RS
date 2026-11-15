@@ -23,6 +23,11 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mod", "Modulation", 0.0, 1.0, 0.3, ""),
     ParamInfo::lin("width", "Width", 0.0, 1.5, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.25, ""),
+    // Decay-rate EQ (Pro-R): the low and high parts of the tail decay faster or slower than the middle.
+    ParamInfo::log("decay_low", "Decay rate low ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("decay_lo_f", "Decay rate low freq", 50.0, 1000.0, 250.0, "Hz"),
+    ParamInfo::log("decay_high", "Decay rate high ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("decay_hi_f", "Decay rate high freq", 1000.0, 16000.0, 4000.0, "Hz"),
     // Early reflections.
     ParamInfo::lin("early", "Early level", 0.0, 1.0, 0.4, ""),
     ParamInfo::lin("er_size", "Early size", 0.2, 2.0, 1.0, ""),
@@ -95,6 +100,12 @@ pub struct Reverb {
     early: [DelayLine; 2],
     lines: Vec<DelayLine>,
     damp: [OnePole; LINES],
+    split_lo: [OnePole; LINES],
+    split_hi: [OnePole; LINES],
+    /// Feedback gains of the low, middle and high parts per line.
+    gains3: [[f32; 3]; LINES],
+    decay_mul: [f32; 2],
+    decay_f: [f32; 2],
     lowcut: [OnePole; 2],
     lfos: Vec<Lfo>,
     lengths: [f32; LINES],
@@ -126,6 +137,11 @@ impl Reverb {
             early: [DelayLine::new((rate * 0.16) as usize), DelayLine::new((rate * 0.16) as usize)],
             lines: (0..LINES).map(|_| DelayLine::new(max)).collect(),
             damp: [OnePole::new(7000.0, rate); LINES],
+            split_lo: [OnePole::new(250.0, rate); LINES],
+            split_hi: [OnePole::new(4000.0, rate); LINES],
+            gains3: [[0.0; 3]; LINES],
+            decay_mul: [1.0, 1.0],
+            decay_f: [250.0, 4000.0],
             lowcut: [OnePole::new(120.0, rate); 2],
             lfos: (0..LINES).map(|i| Lfo::with_phase(i as f32 / LINES as f32)).collect(),
             lengths: [0.0; LINES],
@@ -162,6 +178,10 @@ impl Reverb {
             self.lengths[i] = len.min(self.lines[i].len() as f32 - 8.0);
             // g = 10^(−3·len/(RT60·rate)) gives RT60 decay.
             self.gains[i] = 10f32.powf(-3.0 * self.lengths[i] / (self.decay.max(0.05) * self.rate));
+            let g = |mul: f32| 10f32.powf(-3.0 * self.lengths[i] / ((self.decay * mul).max(0.05) * self.rate));
+            self.gains3[i] = [g(self.decay_mul[0]), self.gains[i], g(self.decay_mul[1])];
+            self.split_lo[i].set(self.decay_f[0], self.rate);
+            self.split_hi[i].set(self.decay_f[1].min(self.rate * 0.45), self.rate);
             self.damp[i].set((self.damping * bright).min(self.rate * 0.45), self.rate);
         }
         for f in &mut self.lowcut {
@@ -196,6 +216,10 @@ impl Effect for Reverb {
             "mod" => self.modulation = v,
             "width" => self.width = v,
             "mix" => self.mix = v,
+            "decay_low" => self.decay_mul[0] = v,
+            "decay_high" => self.decay_mul[1] = v,
+            "decay_lo_f" => self.decay_f[0] = v,
+            "decay_hi_f" => self.decay_f[1] = v,
             _ => return,
         }
         self.update();
@@ -203,7 +227,7 @@ impl Effect for Reverb {
 
     fn reset(&mut self) {
         self.pre.iter_mut().chain(self.early.iter_mut()).chain(self.lines.iter_mut()).for_each(DelayLine::clear);
-        self.damp.iter_mut().chain(self.lowcut.iter_mut()).for_each(OnePole::reset);
+        self.damp.iter_mut().chain(self.lowcut.iter_mut()).chain(self.split_lo.iter_mut()).chain(self.split_hi.iter_mut()).for_each(OnePole::reset);
         self.early_eq.reset();
         self.late_eq.reset();
     }
@@ -234,7 +258,13 @@ impl Effect for Reverb {
             let mut outs = [0.0f32; LINES];
             for k in 0..LINES {
                 let m = self.lfos[k].next(0.3 + k as f32 * 0.07, self.rate, LfoShape::Sine) * mod_depth;
-                outs[k] = self.damp[k].process(self.lines[k].read(self.lengths[k] + m)) * self.gains[k];
+                let x = self.damp[k].process(self.lines[k].read(self.lengths[k] + m));
+                // Decay-rate EQ: low, middle and high parts get their own feedback gain.
+                let lo = self.split_lo[k].process(x);
+                let hi = x - self.split_hi[k].process(x);
+                let mid = x - lo - hi;
+                let [gl, gm, gh] = self.gains3[k];
+                outs[k] = lo * gl + mid * gm + hi * gh;
             }
             // Householder mix: y = x − 2/N·Σx.
             let sum: f32 = outs.iter().sum::<f32>() * (2.0 / LINES as f32);
@@ -344,6 +374,37 @@ mod tests {
         let large = impulse_response(&[base[0], base[1], ("er_size", 2.0)]);
         let last = |x: &[f32]| x.iter().rposition(|v| v.abs() > 1e-4).unwrap_or(0);
         assert!(last(&large) > last(&small) * 3, "{} vs {}", last(&large), last(&small));
+    }
+
+    /// Decay-rate EQ: with the low part decaying 4× longer, the tail's low end lasts longer than its top.
+    #[test]
+    fn decay_rate_eq_shapes_the_tail() {
+        let tail = |set: &[(&str, f32)]| {
+            let mut p = super::reverb_def().defaults();
+            p.insert("mix".into(), 1.0);
+            p.insert("early".into(), 0.0);
+            p.insert("decay".into(), 1.0);
+            for (k, v) in set {
+                p.insert((*k).into(), *v);
+            }
+            let mut e = crate::effects::create("reverb", 48000.0, &p).unwrap();
+            let mut rng = crate::dsp::Rng::new(3);
+            let mut l: Vec<f32> = (0..96000).map(|i| if i < 4800 { rng.bipolar() * 0.5 } else { 0.0 }).collect();
+            let mut r = l.clone();
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                e.process(a, b, None);
+            }
+            // Low vs high energy 1 s after the burst.
+            let seg = &l[48000 + 4800..48000 + 4800 + 9600];
+            let mut lp = crate::dsp::OnePole::new(200.0, 48000.0);
+            let low: f32 = seg.iter().map(|x| lp.process(*x).powi(2)).sum();
+            let mut lp2 = crate::dsp::OnePole::new(5000.0, 48000.0);
+            let high: f32 = seg.iter().map(|x| (x - lp2.process(*x)).powi(2)).sum();
+            low / high.max(1e-12)
+        };
+        let flat = tail(&[]);
+        let warm = tail(&[("decay_low", 4.0), ("decay_high", 0.25)]);
+        assert!(warm > flat * 4.0, "{flat} → {warm}");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! 7-band parametric EQ (bell, shelves, cuts, notch, band pass per band) with output gain, after
+//! 24-band parametric EQ (7 on by default) (bell, shelves, cuts, notch, band pass per band) with output gain, after
 //! FabFilter Pro-Q: per-band stereo placement (stereo, mid, side, left, right), per-band dynamic gain
 //! (range and threshold), band solo, auto gain and a live analyzer.
 
@@ -107,13 +107,14 @@ impl LinearPhase {
     }
 }
 
-pub const EQ_BANDS: usize = 7;
+pub const EQ_BANDS: usize = 24;
 const TYPES: &[&str] = &["Bell", "Low shelf", "High shelf", "Low pass", "High pass", "Band pass", "Notch"];
 /// Where a band works (Pro-Q's stereo placement).
 pub const PLACEMENTS: &[&str] = &["Stereo", "Mid", "Side", "Left", "Right"];
 /// Pro-Q's processing modes: zero latency (minimum phase) or linear phase (no phase shift, ~64 ms
 /// latency; bands are stereo and static there).
-pub const PHASE_MODES: &[&str] = &["Zero latency", "Linear phase"];
+/// Natural phase runs the filters at twice the rate (analog-like curves up to the top, small latency).
+pub const PHASE_MODES: &[&str] = &["Zero latency", "Linear phase", "Natural phase"];
 /// Parameters per band.
 pub const PER_BAND: usize = 8;
 
@@ -133,6 +134,7 @@ macro_rules! band {
 }
 
 const EXTRA: usize = 4;
+const SOLO_NAMES: [&str; EQ_BANDS + 1] = ["Off", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"];
 
 const fn flatten() -> [ParamInfo; EQ_BANDS * PER_BAND + EXTRA] {
     let bands: [[ParamInfo; PER_BAND]; EQ_BANDS] = [
@@ -143,10 +145,27 @@ const fn flatten() -> [ParamInfo; EQ_BANDS * PER_BAND + EXTRA] {
         band!("5", true, 0.0, 3000.0),
         band!("6", true, 2.0, 8000.0),
         band!("7", false, 3.0, 18000.0),
+        band!("8", false, 0.0, 40.0),
+        band!("9", false, 0.0, 58.0),
+        band!("10", false, 0.0, 85.0),
+        band!("11", false, 0.0, 123.0),
+        band!("12", false, 0.0, 179.0),
+        band!("13", false, 0.0, 260.0),
+        band!("14", false, 0.0, 378.0),
+        band!("15", false, 0.0, 550.0),
+        band!("16", false, 0.0, 800.0),
+        band!("17", false, 0.0, 1163.0),
+        band!("18", false, 0.0, 1692.0),
+        band!("19", false, 0.0, 2460.0),
+        band!("20", false, 0.0, 3578.0),
+        band!("21", false, 0.0, 5203.0),
+        band!("22", false, 0.0, 7566.0),
+        band!("23", false, 0.0, 11002.0),
+        band!("24", false, 0.0, 16000.0),
     ];
     let mut out = [ParamInfo::lin("output", "Output", -18.0, 18.0, 0.0, "dB"); EQ_BANDS * PER_BAND + EXTRA];
     out[EQ_BANDS * PER_BAND + 1] = ParamInfo::toggle("auto_gain", "Auto gain", false);
-    out[EQ_BANDS * PER_BAND + 2] = ParamInfo::choice("solo", "Solo band (listen)", &["Off", "1", "2", "3", "4", "5", "6", "7"], 0.0);
+    out[EQ_BANDS * PER_BAND + 2] = ParamInfo::choice("solo", "Solo band (listen)", &SOLO_NAMES, 0.0);
     out[EQ_BANDS * PER_BAND + 3] = ParamInfo::choice("phase", "Processing", PHASE_MODES, 0.0);
     let mut i = 0;
     while i < EQ_BANDS {
@@ -173,6 +192,48 @@ fn auto_gain(curve: impl Fn(f32) -> f32) -> f32 {
         wsum += w;
     }
     -(sum / wsum).clamp(-18.0, 18.0)
+}
+
+/// Pro-Q style EQ match: from the average spectra (dB per analyzer band, see `dsp::spectrum`) of this
+/// track and a reference, a set of up to `max` bell bands (freq, gain dB, Q) whose sum follows the smoothed
+/// difference (reference − own), limited to ±`limit` dB. `amount` 0 … 1 scales the result.
+pub fn match_bands(own: &[f32], reference: &[f32], max: usize, limit: f32, amount: f32, rate: f32) -> Vec<(f32, f32, f32)> {
+    use crate::dsp::spectrum::{band_freq, BANDS};
+    if own.len() < BANDS || reference.len() < BANDS {
+        return Vec::new();
+    }
+    // Level-match first (only the shape is matched), then smooth over ±3 bands (≈ ⅓ octave).
+    let mean = |v: &[f32]| v[8..BANDS - 8].iter().sum::<f32>() / (BANDS - 16) as f32;
+    let off = mean(reference) - mean(own);
+    let raw: Vec<f32> = (0..BANDS).map(|b| (reference[b] - own[b] - off).clamp(-limit, limit)).collect();
+    let mut target: Vec<f32> = (0..BANDS)
+        .map(|b| {
+            let (lo, hi) = (b.saturating_sub(3), (b + 3).min(BANDS - 1));
+            raw[lo..=hi].iter().sum::<f32>() / (hi - lo + 1) as f32 * amount
+        })
+        .collect();
+    let mut out = Vec::new();
+    for _ in 0..max {
+        // Largest remaining deviation inside 30 Hz … 16 kHz.
+        let Some((b, &dev)) = target.iter().enumerate().filter(|(b, _)| (30.0..16000.0).contains(&band_freq(*b))).max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())) else { break };
+        if dev.abs() < 0.5 {
+            break;
+        }
+        let f = band_freq(b);
+        // Width: how far the deviation keeps its sign and at least half its size.
+        let mut w = 1;
+        while b >= w && b + w < BANDS && target[b - w].signum() == dev.signum() && target[b + w].signum() == dev.signum() && target[b - w].abs() > dev.abs() * 0.5 && target[b + w].abs() > dev.abs() * 0.5 {
+            w += 1;
+        }
+        let octaves = (w as f32 * 2.0) * 10.0 / BANDS as f32; // the analyzer spans ~10 octaves
+        let q = (1.0 / octaves.max(0.15)).clamp(0.3, 6.0);
+        let bq = Biquad::new(BiquadKind::Peak, f, q, dev, rate);
+        for (k, t) in target.iter_mut().enumerate() {
+            *t -= bq.response_db(band_freq(k), rate);
+        }
+        out.push((f, dev, q));
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,6 +266,11 @@ pub struct ParametricEq {
     auto_gain: bool,
     dyns: [Dyn; EQ_BANDS],
     linear: bool,
+    natural: bool,
+    /// The rate the band filters run at (twice the rate in natural phase).
+    frate: f32,
+    ovs: [crate::dsp::oversample::Oversampler; 2],
+    up: [Vec<f32>; 2],
     lp: Box<LinearPhase>,
     solo: usize,
     solo_f: [Biquad; 2],
@@ -227,6 +293,10 @@ impl ParametricEq {
             auto_gain: false,
             dyns: [Dyn::default(); EQ_BANDS],
             linear: false,
+            natural: false,
+            frate: rate,
+            ovs: [crate::dsp::oversample::Oversampler::new(2), crate::dsp::oversample::Oversampler::new(2)],
+            up: [Vec::new(), Vec::new()],
             lp: Box::new(LinearPhase::new()),
             solo: 0,
             solo_f: [Biquad::default(); 2],
@@ -240,9 +310,9 @@ impl ParametricEq {
         for (i, b) in self.bands.iter().enumerate() {
             let g = b.gain + self.dyns[i].applied;
             for f in &mut self.filters[i] {
-                f.set(b.kind, b.freq, b.q, g, self.rate);
+                f.set(b.kind, b.freq, b.q, g, self.frate);
             }
-            self.dyns[i].det.set(BiquadKind::BandPass, b.freq, b.q.max(0.5), 0.0, self.rate);
+            self.dyns[i].det.set(BiquadKind::BandPass, b.freq, b.q.max(0.5), 0.0, self.frate);
         }
         if self.linear {
             let rate = self.rate;
@@ -277,6 +347,69 @@ impl ParametricEq {
         sum + super::value(&d, params, "output")
     }
 
+    /// The minimum-phase band filters (dynamic bands and stereo placement included) at `self.frate`.
+    fn run_bands(&mut self, l: &mut [f32], r: &mut [f32]) {
+        const SUB: usize = 32;
+        let att = (-1.0 / (0.005 * self.frate)).exp();
+        let rel = (-1.0 / (0.080 * self.frate)).exp();
+        for i in 0..EQ_BANDS {
+            let b = self.bands[i];
+            if !b.on {
+                continue;
+            }
+            let dynamic = b.dyn_range.abs() > 0.05;
+            let mut start = 0;
+            while start < l.len() {
+                let end = (start + SUB).min(l.len());
+                if dynamic {
+                    // Detector on this band's region of the signal it sees; the gain moves from the static
+                    // gain towards gain + range as the level rises over the threshold (6 dB to full range).
+                    let d = &mut self.dyns[i];
+                    for k in start..end {
+                        let x = d.det.process(0.5 * (l[k] + r[k])).abs();
+                        let c = if x > d.env { att } else { rel };
+                        d.env = x + (d.env - x) * c;
+                    }
+                    let over = (crate::dsp::gain_to_db(d.env.max(1e-6)) - b.thr) / 6.0;
+                    let want = b.dyn_range * over.clamp(0.0, 1.0);
+                    if (want - d.applied).abs() > 0.05 {
+                        d.applied = want;
+                        for f in &mut self.filters[i] {
+                            f.set(b.kind, b.freq, b.q, b.gain + want, self.frate);
+                        }
+                    }
+                } else if self.dyns[i].applied != 0.0 {
+                    self.dyns[i].applied = 0.0;
+                    for f in &mut self.filters[i] {
+                        f.set(b.kind, b.freq, b.q, b.gain, self.frate);
+                    }
+                }
+                let [fl, fr] = &mut self.filters[i];
+                for k in start..end {
+                    let (a, c) = (l[k], r[k]);
+                    let (na, nc) = match b.place {
+                        1 => {
+                            let (m, s) = (0.5 * (a + c), 0.5 * (a - c));
+                            let m = fl.process(m);
+                            (m + s, m - s)
+                        }
+                        2 => {
+                            let (m, s) = (0.5 * (a + c), 0.5 * (a - c));
+                            let s = fl.process(s);
+                            (m + s, m - s)
+                        }
+                        3 => (fl.process(a), c),
+                        4 => (a, fr.process(c)),
+                        _ => (fl.process(a), fr.process(c)),
+                    };
+                    l[k] = na;
+                    r[k] = nc;
+                }
+                start = end;
+            }
+        }
+    }
+
     /// The auto-gain compensation (dB) for a parameter map, for the UI.
     pub fn auto_gain_for(params: &std::collections::BTreeMap<String, f32>, rate: f32) -> f32 {
         let d = def();
@@ -303,10 +436,19 @@ impl Effect for ParametricEq {
                 return;
             }
             "phase" => {
-                let on = v >= 0.5;
-                if on != self.linear {
-                    self.linear = on;
+                let mode = v.round() as i32;
+                let (lin, nat) = (mode == 1, mode == 2);
+                if lin != self.linear {
+                    self.linear = lin;
                     self.lp.reset();
+                }
+                if nat != self.natural {
+                    self.natural = nat;
+                    self.frate = if nat { self.rate * 2.0 } else { self.rate };
+                    self.ovs.iter_mut().for_each(|o| o.reset());
+                    for f in self.filters.iter_mut().flatten() {
+                        f.reset();
+                    }
                 }
                 self.dirty = true;
                 return;
@@ -356,64 +498,23 @@ impl Effect for ParametricEq {
         if self.linear {
             self.lp.process(l, r);
         }
-        const SUB: usize = 32;
-        let att = (-1.0 / (0.005 * self.rate)).exp();
-        let rel = (-1.0 / (0.080 * self.rate)).exp();
-        for i in 0..EQ_BANDS {
-            let b = self.bands[i];
-            if !b.on || self.linear {
-                continue;
+        if self.natural {
+            let n = l.len();
+            self.up[0].resize(n * 2, 0.0);
+            self.up[1].resize(n * 2, 0.0);
+            for i in 0..n {
+                self.ovs[0].up(l[i], &mut self.up[0][i * 2..i * 2 + 2]);
+                self.ovs[1].up(r[i], &mut self.up[1][i * 2..i * 2 + 2]);
             }
-            let dynamic = b.dyn_range.abs() > 0.05;
-            let mut start = 0;
-            while start < l.len() {
-                let end = (start + SUB).min(l.len());
-                if dynamic {
-                    // Detector on this band's region of the signal it sees; the gain moves from the static
-                    // gain towards gain + range as the level rises over the threshold (6 dB to full range).
-                    let d = &mut self.dyns[i];
-                    for k in start..end {
-                        let x = d.det.process(0.5 * (l[k] + r[k])).abs();
-                        let c = if x > d.env { att } else { rel };
-                        d.env = x + (d.env - x) * c;
-                    }
-                    let over = (crate::dsp::gain_to_db(d.env.max(1e-6)) - b.thr) / 6.0;
-                    let want = b.dyn_range * over.clamp(0.0, 1.0);
-                    if (want - d.applied).abs() > 0.05 {
-                        d.applied = want;
-                        for f in &mut self.filters[i] {
-                            f.set(b.kind, b.freq, b.q, b.gain + want, self.rate);
-                        }
-                    }
-                } else if self.dyns[i].applied != 0.0 {
-                    self.dyns[i].applied = 0.0;
-                    for f in &mut self.filters[i] {
-                        f.set(b.kind, b.freq, b.q, b.gain, self.rate);
-                    }
-                }
-                let [fl, fr] = &mut self.filters[i];
-                for k in start..end {
-                    let (a, c) = (l[k], r[k]);
-                    let (na, nc) = match b.place {
-                        1 => {
-                            let (m, s) = (0.5 * (a + c), 0.5 * (a - c));
-                            let m = fl.process(m);
-                            (m + s, m - s)
-                        }
-                        2 => {
-                            let (m, s) = (0.5 * (a + c), 0.5 * (a - c));
-                            let s = fl.process(s);
-                            (m + s, m - s)
-                        }
-                        3 => (fl.process(a), c),
-                        4 => (a, fr.process(c)),
-                        _ => (fl.process(a), fr.process(c)),
-                    };
-                    l[k] = na;
-                    r[k] = nc;
-                }
-                start = end;
+            let [mut ul, mut ur] = std::mem::take(&mut self.up);
+            self.run_bands(&mut ul, &mut ur);
+            for i in 0..n {
+                l[i] = self.ovs[0].down(&ul[i * 2..i * 2 + 2]);
+                r[i] = self.ovs[1].down(&ur[i * 2..i * 2 + 2]);
             }
+            self.up = [ul, ur];
+        } else if !self.linear {
+            self.run_bands(l, r);
         }
         let out = self.output * if self.auto_gain { db_to_gain(self.auto_gain_db()) } else { 1.0 };
         if self.solo > 0 {
@@ -444,6 +545,8 @@ impl Effect for ParametricEq {
     fn latency(&self) -> usize {
         if self.linear {
             LP_BLOCK + LP_KERNEL / 2
+        } else if self.natural {
+            self.ovs[0].latency()
         } else {
             0
         }
@@ -560,6 +663,53 @@ mod tests {
         for k in 1..200 {
             assert!((l[lat + k] - l[lat - k]).abs() < 1e-3, "asymmetric at {k}");
         }
+    }
+
+    /// EQ match: a dip in the reference around 1 kHz becomes a cut there.
+    #[test]
+    fn match_follows_the_reference() {
+        use crate::dsp::spectrum::{band_freq, BANDS};
+        let own = vec![-30.0f32; BANDS];
+        let reference: Vec<f32> = (0..BANDS).map(|b| -30.0 - 8.0 * (-((band_freq(b) / 1000.0).log2() / 0.5).powi(2)).exp()).collect();
+        let bands = match_bands(&own, &reference, 6, 12.0, 1.0, 48000.0);
+        assert!(!bands.is_empty());
+        let (f, g, _) = bands[0];
+        assert!((f / 1000.0 - 1.0).abs() < 0.25 && g < -4.0, "{bands:?}");
+        let total = |hz: f32| bands.iter().map(|(f, g, q)| Biquad::new(BiquadKind::Peak, *f, *q, *g, 48000.0).response_db(hz, 48000.0)).sum::<f32>();
+        assert!(total(1000.0) < -5.0 && total(100.0).abs() < 2.0 && total(10000.0).abs() < 2.0, "{} {} {}", total(1000.0), total(100.0), total(10000.0));
+    }
+
+    /// Natural phase: near the top of the spectrum the bell keeps its analog shape (no cramping): at 16 kHz a
+    /// 12 kHz bell measures closer to the analog curve than in zero-latency mode.
+    #[test]
+    fn natural_phase_avoids_cramping() {
+        let measure = |phase: f32| {
+            let mut e = ParametricEq::new(48000.0);
+            for (k, v) in &def().defaults() {
+                e.set_param(k, *v);
+            }
+            for b in 1..=EQ_BANDS {
+                e.set_param(&format!("b{b}_on"), 0.0);
+            }
+            e.set_param("b4_on", 1.0);
+            e.set_param("b4_freq", 12000.0);
+            e.set_param("b4_gain", 12.0);
+            e.set_param("b4_q", 1.0);
+            e.set_param("phase", phase);
+            let mut l = tone(16000.0, 0.1, 48000);
+            let mut r = l.clone();
+            e.process(&mut l, &mut r, None);
+            crate::dsp::gain_to_db(l[24000..].iter().fold(0.0f32, |m, x| m.max(x.abs())) / 0.1)
+        };
+        // Analog bell (s-domain) at 16 kHz, centre 12 kHz, Q 1, +12 dB.
+        let analog = {
+            let (w, a) = (16000.0f32 / 12000.0, 10f32.powf(12.0 / 40.0));
+            let num = ((1.0 - w * w).powi(2) + (w * a).powi(2)).sqrt();
+            let den = ((1.0 - w * w).powi(2) + (w / a).powi(2)).sqrt();
+            20.0 * (num / den).log10()
+        };
+        let (zero, natural) = (measure(0.0), measure(2.0));
+        assert!((natural - analog).abs() < (zero - analog).abs(), "analog {analog}, zero {zero}, natural {natural}");
     }
 
     /// A dynamic band cuts only while the band is loud.

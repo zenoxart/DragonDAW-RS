@@ -131,6 +131,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "delay" => delay(&p, r, h, col),
         "reverb" => reverb(&p, r, h, col),
         "saturator" | "bitcrusher" => shaper(&p, r, h, col),
+        "multisat" => multisat(&p, r, h, col),
         "chorus" | "flanger" | "phaser" | "tremolo" => lfo(&p, r, h, col),
         "imager" => phase_meter(&p, r, h, col),
         "utility" => stereo(&p, r, h, col),
@@ -169,11 +170,31 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             let range = 18.0;
             let y_of = |db: f32| r.center().y - db.clamp(-range, range) / range * r.height() * 0.5;
             let node = |b: usize| Pos2::new(fx(r, h.v(&format!("b{b}_freq"))), y_of(h.v(&format!("b{b}_gain"))));
-            let near = |at: Pos2| (1..=7).filter(|b| h.v(&format!("b{b}_on")) > 0.5).min_by(|a, b| node(*a).distance(at).total_cmp(&node(*b).distance(at))).filter(|b| node(*b).distance(at) < 16.0);
+            let near = |at: Pos2| {
+                (1..=dragon_engine::effects::eq::EQ_BANDS).filter(|b| h.v(&format!("b{b}_on")) > 0.5).min_by(|a, b| node(*a).distance(at).total_cmp(&node(*b).distance(at))).filter(|b| node(*b).distance(at) < 16.0)
+            };
             let nearest = near(pos);
             if resp.drag_started() {
                 let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
                 ui.data_mut(|d| d.insert_temp(grab, near(origin).unwrap_or(0)));
+                if let Some(b) = near(origin) {
+                    ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), b));
+                } else if let Some(f) = spectrum_peak(h.tele, r, origin.x) {
+                    // Spectrum grab (Pro-Q): dragging a peak of the analyzer makes a narrow band there.
+                    if let Some(b) = (1..=dragon_engine::effects::eq::EQ_BANDS).find(|b| h.v(&format!("b{b}_on")) < 0.5) {
+                        out.extend([
+                            (format!("b{b}_on"), 1.0),
+                            (format!("b{b}_type"), 0.0),
+                            (format!("b{b}_freq"), f),
+                            (format!("b{b}_gain"), 0.0),
+                            (format!("b{b}_q"), 4.0),
+                            (format!("b{b}_dyn"), 0.0),
+                            (format!("b{b}_stereo"), 0.0),
+                        ]);
+                        ui.data_mut(|d| d.insert_temp(grab, b));
+                        ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), b));
+                    }
+                }
             }
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
             if resp.dragged() && held > 0 {
@@ -200,10 +221,20 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 }
             } else if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                if r.contains(pos) {
+                    let f = freq_at(r, pos.x);
+                    let midi = 69.0 + 12.0 * (f / 440.0).log2();
+                    let note = midi.round().clamp(0.0, 127.0) as u8;
+                    let cents = ((midi - midi.round()) * 100.0).round();
+                    let db = (r.center().y - pos.y) / (r.height() * 0.5) * range;
+                    egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), resp.id.with("eq.where"), |ui| {
+                        ui.label(format!("{} · {} {cents:+.0} ct · {db:+.1} dB", hz_text(f), dragon_engine::instruments::note_name(note)));
+                    });
+                }
             }
             // Double-click on empty space adds a band there: a cut near the edges, a bell elsewhere.
             if resp.double_clicked() && nearest.is_none() && r.contains(pos) {
-                if let Some(b) = (1..=7).find(|b| h.v(&format!("b{b}_on")) < 0.5) {
+                if let Some(b) = (1..=dragon_engine::effects::eq::EQ_BANDS).find(|b| h.v(&format!("b{b}_on")) < 0.5) {
                     let f = freq_at(r, pos.x).clamp(20.0, 20_000.0);
                     let edge = (pos.x - r.left()) / r.width();
                     let ty = if edge < 0.08 {
@@ -214,10 +245,16 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                         0.0
                     };
                     let db = if ty == 0.0 { ((r.center().y - pos.y) / (r.height() * 0.5) * range).clamp(-range, range) } else { 0.0 };
+                    ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), b));
                     out.extend([(format!("b{b}_on"), 1.0), (format!("b{b}_type"), ty), (format!("b{b}_freq"), f), (format!("b{b}_gain"), (db * 10.0).round() / 10.0), (format!("b{b}_q"), 0.9)]);
                 }
             }
             // Right-click on a band: shape, Q presets, gain reset and removal.
+            if resp.clicked() {
+                if let Some(b) = nearest {
+                    ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), b));
+                }
+            }
             let menu_id = resp.id.with("eq.menu");
             if resp.secondary_clicked() {
                 ui.data_mut(|d| d.insert_temp(menu_id, nearest.unwrap_or(0)));
@@ -279,6 +316,24 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 });
             }
         }
+        "multisat" => {
+            // Drag a crossover line (Saturn): it follows the pointer in frequency.
+            let r = plot(r);
+            let n = h.v("bands").round() as usize + 1;
+            let xs = ["x1", "x2", "x3"];
+            if resp.drag_started() {
+                let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+                let hit = (0..n.saturating_sub(1)).min_by(|a, b| (fx(r, h.v(xs[*a])) - origin.x).abs().total_cmp(&(fx(r, h.v(xs[*b])) - origin.x).abs())).filter(|k| (fx(r, h.v(xs[*k])) - origin.x).abs() < 10.0);
+                ui.data_mut(|d| d.insert_temp(grab, hit.map(|k| k + 1).unwrap_or(0)));
+            }
+            let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
+            if resp.dragged() && held > 0 {
+                out.push((xs[held - 1].to_string(), freq_at(r, pos.x).clamp(30.0, 16_000.0)));
+            }
+            if (0..n.saturating_sub(1)).any(|k| (fx(r, h.v(xs[k])) - pos.x).abs() < 10.0) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+        }
         "dragon_particle" => {
             let c = r.center();
             let rad = (r.height() * 0.5 - 22.0).max(30.0);
@@ -333,6 +388,21 @@ fn hz_text(f: f32) -> String {
     }
 }
 
+/// A peak of the output spectrum near `x` (within 12 px): a local maximum standing 3 dB over its
+/// surroundings. Returns its frequency.
+fn spectrum_peak(tele: &[f32], pr: Rect, x: f32) -> Option<f32> {
+    use dragon_engine::dsp::spectrum::{band_freq, BANDS, FLOOR};
+    if tele.len() < BANDS * 2 {
+        return None;
+    }
+    let post = &tele[BANDS..BANDS * 2];
+    (3..BANDS - 3)
+        .filter(|b| (fx(pr, band_freq(*b)) - x).abs() < 12.0 && post[*b] > FLOOR + 20.0)
+        .filter(|b| post[*b] >= post[b - 1] && post[*b] >= post[b + 1] && post[*b] > post[b - 3].max(post[b + 3]) + 3.0)
+        .max_by(|a, b| post[*a].total_cmp(&post[*b]))
+        .map(band_freq)
+}
+
 /// The live analyzer behind the EQ curve: the input spectrum as a faint fill, the output as a line.
 /// `tele` holds the input bands then the output bands (see `dsp::spectrum`).
 fn spectrum(p: &egui::Painter, pr: Rect, tele: &[f32]) {
@@ -366,7 +436,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let pr = plot(r);
     let y_of = |db: f32| pr.center().y - db.clamp(-range, range) / range * pr.height() * 0.5;
     y_axis(p, pr, &[(12.0, "+12"), (6.0, "+6"), (0.0, "0"), (-6.0, "-6"), (-12.0, "-12")], y_of);
-    let bands: Vec<(usize, Biquad, f32, f32)> = (1..=7)
+    let bands: Vec<(usize, Biquad, f32, f32)> = (1..=dragon_engine::effects::eq::EQ_BANDS)
         .filter(|b| h.v(&format!("b{b}_on")) > 0.5)
         .map(|b| {
             let f = h.v(&format!("b{b}_freq"));
@@ -389,10 +459,44 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     } else {
         spectrum(&p, pr, h.tele);
     }
+    // Collisions with another track's EQ (Pro-Q): where both are loud, the overlap glows red.
+    let other: Option<Vec<f32>> = p.ctx().data(|d| d.get_temp(h.key.with("collide"))).flatten();
+    if let (Some(o), true) = (other, h.tele.len() >= dragon_engine::dsp::spectrum::BANDS * 2) {
+        use dragon_engine::dsp::spectrum::{band_freq, BANDS};
+        let own = &h.tele[BANDS..BANDS * 2];
+        let y = |db: f32| pr.bottom() - ((db + 84.0) / 90.0).clamp(0.0, 1.0) * pr.height();
+        let peak = own.iter().chain(o.iter()).fold(-120.0f32, |m, x| m.max(*x));
+        for b in 0..BANDS - 1 {
+            let both = own[b].min(o[b]);
+            if both > peak - 24.0 {
+                let strength = ((both - (peak - 24.0)) / 24.0).clamp(0.0, 1.0);
+                let r = Rect::from_min_max(Pos2::new(fx(pr, band_freq(b)), y(both)), Pos2::new(fx(pr, band_freq(b + 1)), pr.bottom()));
+                p.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(0xf0, 0x40, 0x40, (40.0 + 90.0 * strength) as u8));
+            }
+        }
+        p.add(Shape::line((0..BANDS).map(|b| Pos2::new(fx(pr, band_freq(b)), y(o[b]))).collect(), Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xf0, 0x90, 0x60, 120))));
+    }
+    // Piano scale along the frequency axis (Pro-Q): C keys marked, black keys darker.
+    {
+        let strip = Rect::from_min_max(Pos2::new(pr.left(), pr.bottom() - 7.0), pr.max);
+        for note in 16u8..=127 {
+            let f = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+            let f2 = 440.0 * 2f32.powf((note as f32 - 68.0) / 12.0);
+            if f < 20.0 || f2 > 20_000.0 {
+                continue;
+            }
+            let black = matches!(note % 12, 1 | 3 | 6 | 8 | 10);
+            let r = Rect::from_min_max(Pos2::new(fx(pr, f * 2f32.powf(-1.0 / 24.0)), strip.top()), Pos2::new(fx(pr, f2 * 2f32.powf(-1.0 / 24.0)), strip.bottom()));
+            p.rect_filled(r, 0.0, if black { Color32::from_gray(30) } else { Color32::from_gray(150) });
+            if note % 12 == 0 {
+                p.line_segment([r.left_top(), r.left_bottom()], Stroke::new(1.0_f32, theme::ACCENT));
+            }
+        }
+    }
     // Each band's own shape, faint, then the sum.
     for (k, bq, _, _) in &bands {
         let pts: Vec<Pos2> = (0..=120).map(|i| pr.left() + pr.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
-        p.add(Shape::line(pts, Stroke::new(1.0_f32, BAND_COLORS[*k].gamma_multiply(0.4))));
+        p.add(Shape::line(pts, Stroke::new(1.0_f32, BAND_COLORS[*k % 7].gamma_multiply(0.4))));
     }
     let pts: Vec<Pos2> = (0..=180)
         .map(|i| pr.left() + pr.width() * i as f32 / 180.0)
@@ -405,8 +509,8 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     for (k, bq, f, _) in &bands {
         let c = Pos2::new(fx(pr, *f), y_of(bq.response_db(*f, RATE)));
         let pulse = 1.0 + 0.15 * (h.t() * 2.0 + *k as f32).sin();
-        p.circle_filled(c, 10.0 * pulse, BAND_COLORS[*k].gamma_multiply(0.22));
-        p.circle_filled(c, 6.5, BAND_COLORS[*k]);
+        p.circle_filled(c, 10.0 * pulse, BAND_COLORS[*k % 7].gamma_multiply(0.22));
+        p.circle_filled(c, 6.5, BAND_COLORS[*k % 7]);
         p.circle_stroke(c, 6.5, Stroke::new(1.5_f32, Color32::from_white_alpha(200)));
         p.text(c, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(8.5), Color32::BLACK);
         if solo == k + 1 {
@@ -418,14 +522,14 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             // Pro-Q style: the dynamic range as a bar from the static gain, the live change as a dot.
             let g = h.v(&format!("b{b}_gain"));
             let x = c.x;
-            p.line_segment([Pos2::new(x, y_of(g)), Pos2::new(x, y_of(g + range))], Stroke::new(3.0_f32, BAND_COLORS[*k].gamma_multiply(0.5)));
+            p.line_segment([Pos2::new(x, y_of(g)), Pos2::new(x, y_of(g + range))], Stroke::new(3.0_f32, BAND_COLORS[*k % 7].gamma_multiply(0.5)));
             let live = h.tele.get(dragon_engine::dsp::spectrum::BANDS * 2 + k).copied().unwrap_or(0.0);
             p.circle_filled(Pos2::new(x, y_of(g + live)), 3.5, Color32::WHITE);
         }
         let place = h.v(&format!("b{b}_stereo")).round() as usize;
         if place > 0 {
             let tag = ["", "M", "S", "L", "R"][place.min(4)];
-            p.text(c + Vec2::new(9.0, -9.0), egui::Align2::LEFT_BOTTOM, tag, egui::FontId::proportional(9.0), BAND_COLORS[*k]);
+            p.text(c + Vec2::new(9.0, -9.0), egui::Align2::LEFT_BOTTOM, tag, egui::FontId::proportional(9.0), BAND_COLORS[*k % 7]);
         }
     }
     let mut tags = Vec::new();
@@ -440,6 +544,47 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     }
     if !tags.is_empty() {
         p.text(Pos2::new(pr.right() - 4.0, pr.top() + 2.0), egui::Align2::RIGHT_TOP, tags.join(" · "), egui::FontId::proportional(9.5), theme::WARN);
+    }
+}
+
+/// Multiband saturator: the bands across the frequency axis, each with its style, drive (bar, live value
+/// with dynamics as a dot) and level; crossovers are draggable lines.
+fn multisat(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::multisat::{shape, BANDS, SAT_STYLES};
+    grid(p, r, true);
+    let pr = plot(r);
+    let n = (h.v("bands").round() as usize + 1).clamp(1, BANDS);
+    let xs: Vec<f32> = ["x1", "x2", "x3"].iter().take(n - 1).map(|k| h.v(k)).collect();
+    let edges: Vec<f32> = std::iter::once(pr.left()).chain(xs.iter().map(|f| fx(pr, *f))).chain(std::iter::once(pr.right())).collect();
+    for b in 0..n {
+        let band = Rect::from_min_max(Pos2::new(edges[b] + 2.0, pr.top() + 4.0), Pos2::new(edges[b + 1] - 2.0, pr.bottom() - 4.0));
+        if band.width() < 8.0 {
+            continue;
+        }
+        let k = b + 1;
+        let c = BAND_COLORS[(b * 2) % 7];
+        p.rect_filled(band, 4.0, c.gamma_multiply(0.08));
+        let drive = h.v(&format!("b{k}_drive"));
+        let live = h.tele.get(BANDS + b).copied().filter(|_| h.tele.len() >= BANDS * 2).unwrap_or(drive);
+        let fh = (drive / 36.0).clamp(0.0, 1.0) * band.height() * 0.6;
+        let bar = Rect::from_min_max(Pos2::new(band.left() + 6.0, band.bottom() - fh), Pos2::new(band.left() + 14.0, band.bottom()));
+        p.rect_filled(bar, 2.0, c);
+        p.circle_filled(Pos2::new(bar.center().x, band.bottom() - (live / 36.0).clamp(0.0, 1.2) * band.height() * 0.6), 3.0, Color32::WHITE);
+        // The style's transfer curve, small.
+        let style = h.v(&format!("b{k}_style")).round() as usize;
+        let g = dragon_engine::dsp::db_to_gain(drive);
+        let cr = Rect::from_min_size(Pos2::new(band.left() + 20.0, band.top() + 18.0), Vec2::new((band.width() - 26.0).clamp(10.0, 60.0), (band.height() * 0.45).min(50.0)));
+        p.rect_stroke(cr, 2.0, Stroke::new(1.0_f32, Color32::from_white_alpha(20)), egui::StrokeKind::Inside);
+        let pts: Vec<Pos2> =
+            (0..=40).map(|i| -1.0 + 2.0 * i as f32 / 40.0).map(|x| Pos2::new(cr.center().x + x * cr.width() * 0.5, cr.center().y - (shape(style, x * g) / g.sqrt()).clamp(-1.2, 1.2) * cr.height() * 0.42)).collect();
+        p.add(Shape::line(pts, Stroke::new(1.5_f32, c)));
+        p.text(Pos2::new(band.left() + 4.0, band.top() + 2.0), egui::Align2::LEFT_TOP, format!("{k} · {}", SAT_STYLES.get(style).unwrap_or(&"")), egui::FontId::proportional(9.0), c);
+        p.text(Pos2::new(band.right() - 4.0, band.bottom() - 2.0), egui::Align2::RIGHT_BOTTOM, format!("{drive:.0} dB"), egui::FontId::monospace(9.0), theme::TEXT);
+    }
+    for (k, f) in xs.iter().enumerate() {
+        let x = fx(pr, *f);
+        p.line_segment([Pos2::new(x, pr.top()), Pos2::new(x, pr.bottom())], Stroke::new(2.0_f32, col));
+        p.text(Pos2::new(x + 3.0, pr.bottom() - 16.0 - 11.0 * k as f32), egui::Align2::LEFT_BOTTOM, hz_text(*f), egui::FontId::proportional(8.5), theme::TEXT_DIM);
     }
 }
 
@@ -533,7 +678,7 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         }
     }
     let m = Rect::from_min_max(Pos2::new(meter.right() + 30.0, sq.top()), Pos2::new(r.right() - 12.0, sq.bottom()));
-    let history = h.def.id == "compressor";
+    let history = matches!(h.def.id, "compressor" | "limiter");
     p.text(Pos2::new(m.left(), m.top() + 4.0), egui::Align2::LEFT_TOP, "GAIN REDUCTION", egui::FontId::proportional(9.5), theme::TEXT_DIM);
     p.text(
         Pos2::new(if history { m.right() } else { m.left() }, if history { m.top() } else { m.top() + 22.0 }),

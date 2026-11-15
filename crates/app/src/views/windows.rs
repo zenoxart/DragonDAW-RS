@@ -64,6 +64,81 @@ fn with_insert(p: &mut Project, m: Id, i: Id, f: impl FnOnce(&mut Insert)) {
     }
 }
 
+/// Pro-Q style comparison with another EQ in the project: spectrum collisions on the display, and EQ match
+/// (learn both spectra for a while, then fill free bands so this track's tone follows the reference).
+fn eq_compare(ui: &mut Ui, st: &mut State, m: Id, i: Id, ins: &Insert) {
+    use dragon_engine::dsp::spectrum::BANDS;
+    let others: Vec<(Id, String)> = st
+        .session
+        .project
+        .mixer
+        .channels
+        .iter()
+        .chain(std::iter::once(&st.session.project.mixer.master))
+        .flat_map(|c| c.inserts.iter().filter(|x| x.effect == "eq" && x.id != i).map(move |x| (x.id, c.name.clone())))
+        .collect();
+    let ref_key = egui::Id::new(("eq.ref", i));
+    let learn_key = egui::Id::new(("eq.learn", i));
+    let hero_key = egui::Id::new(("fx.hero", m, i));
+    let mut reference: Option<Id> = ui.data(|d| d.get_temp(ref_key)).flatten();
+    let data = st.audio.meters().snapshot().fx_data;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Compare with").small());
+        let name = reference.and_then(|r| others.iter().find(|o| o.0 == r)).map(|o| format!("{} · EQ", o.1)).unwrap_or("–".into());
+        egui::ComboBox::from_id_salt(("eq.refbox", i)).selected_text(name).width(140.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut reference, None, "–");
+            for (id, n) in &others {
+                ui.selectable_value(&mut reference, Some(*id), format!("{n} · EQ"));
+            }
+        });
+        if others.is_empty() {
+            ui.label(RichText::new("(add an EQ on another track to compare or match)").small().color(theme::TEXT_DIM));
+        }
+        ui.data_mut(|d| d.insert_temp(ref_key, reference));
+        // Collisions: hand the reference's output spectrum to the display.
+        let other = reference.and_then(|r| data.get(&r)).filter(|t| t.len() >= BANDS * 2).map(|t| t[BANDS..BANDS * 2].to_vec());
+        ui.data_mut(|d| d.insert_temp(hero_key.with("collide"), other.clone()));
+        // Match: average both spectra while learning.
+        let mut learn: (bool, u32, Vec<f32>, Vec<f32>) = ui.data(|d| d.get_temp(learn_key)).unwrap_or((false, 0, vec![0.0; BANDS], vec![0.0; BANDS]));
+        if reference.is_some() {
+            if ui.selectable_label(learn.0, if learn.0 { format!("⏺ Learning ({} s)", learn.1 / 30) } else { "Learn".into() }).on_hover_text("Play both tracks; the two spectra are averaged").clicked() {
+                learn = if learn.0 { (false, learn.1, learn.2, learn.3) } else { (true, 0, vec![0.0; BANDS], vec![0.0; BANDS]) };
+            }
+            if learn.0 {
+                if let (Some(own), Some(o)) = (data.get(&i).filter(|t| t.len() >= BANDS), other.as_ref()) {
+                    for b in 0..BANDS {
+                        learn.2[b] += own[b];
+                        learn.3[b] += o[b];
+                    }
+                    learn.1 += 1;
+                }
+                ui.ctx().request_repaint();
+            }
+            let ready = !learn.0 && learn.1 > 10;
+            if ui.add_enabled(ready, egui::Button::new("Apply match")).on_hover_text("Fills free bands with bells so this track's tone follows the reference").clicked() {
+                let n = learn.1 as f32;
+                let own: Vec<f32> = learn.2.iter().map(|x| x / n).collect();
+                let rf: Vec<f32> = learn.3.iter().map(|x| x / n).collect();
+                let def = effects::find("eq").unwrap();
+                let free: Vec<usize> = (1..=dragon_engine::effects::eq::EQ_BANDS).filter(|b| effects::value(def, &ins.params, &format!("b{b}_on")) < 0.5).collect();
+                let fit = dragon_engine::effects::eq::match_bands(&own, &rf, free.len().min(8), 12.0, 1.0, 48_000.0);
+                let count = fit.len();
+                st.session.edit("EQ match", |p| {
+                    with_insert(p, m, i, |x| {
+                        for (b, (f, g, q)) in free.iter().zip(fit) {
+                            for (k, v) in [("on", 1.0), ("type", 0.0), ("freq", f), ("gain", (g * 10.0).round() / 10.0), ("q", q), ("stereo", 0.0), ("dyn", 0.0)] {
+                                x.params.insert(format!("b{b}_{k}"), v);
+                            }
+                        }
+                    })
+                });
+                st.ui.status = format!("EQ match: {count} bands");
+            }
+        }
+        ui.data_mut(|d| d.insert_temp(learn_key, learn));
+    });
+}
+
 /// FabFilter-style modulation: LFOs and envelope followers, each moving one parameter by a depth.
 fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDef, ins: &Insert) {
     use dragon_engine::model::{ModSource, Modulation};
@@ -260,8 +335,34 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             _ => String::new(),
         }
     };
+    // Pro-Q style: the EQ shows one band's controls at a time – the band last touched on the display, or the
+    // one picked in the band strip.
+    let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");
+    let eq_band: Option<usize> = (def.id == "eq").then(|| {
+        let n = dragon_engine::effects::eq::EQ_BANDS;
+        let on = |b: usize| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5;
+        let mut sel: usize = ui.data(|d| d.get_temp(eq_sel_key)).unwrap_or_else(|| (1..=n).find(|b| on(*b)).unwrap_or(1));
+        eq_compare(ui, st, m, i, &ins);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Band").small());
+            for b in 1..=n {
+                let txt = RichText::new(format!("{b}")).small().color(if on(b) { theme::TEXT } else { theme::TEXT_DIM });
+                if ui.selectable_label(sel == b, txt).on_hover_text(if on(b) { "on" } else { "off – select it, then switch it on" }).clicked() {
+                    sel = b;
+                    ui.data_mut(|d| d.insert_temp(eq_sel_key, b));
+                }
+            }
+        });
+        sel
+    });
     let mut groups: Vec<(String, Vec<&effects::ParamInfo>)> = Vec::new();
     for prm in def.params {
+        if let Some(b) = eq_band {
+            let prefix = format!("b{b}_");
+            if prm.id.starts_with('b') && prm.id[1..2].chars().all(|c| c.is_ascii_digit()) && !prm.id.starts_with(&prefix) {
+                continue;
+            }
+        }
         let g = group_of(prm.name);
         match groups.iter_mut().find(|x| x.0 == g) {
             Some(x) => x.1.push(prm),

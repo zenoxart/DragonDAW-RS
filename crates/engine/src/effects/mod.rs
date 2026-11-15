@@ -8,6 +8,7 @@ pub mod alter;
 pub mod dynamics;
 pub mod eq;
 mod modulation;
+pub mod multisat;
 pub mod pitch;
 mod reverb;
 pub mod strips;
@@ -209,6 +210,7 @@ pub fn registry() -> &'static [EffectDef] {
             modulation::phaser_def(),
             modulation::tremolo_def(),
             color::saturator_def(),
+            multisat::multiband_saturator_def(),
             color::bitcrusher_def(),
             color::filter_def(),
             color::utility_def(),

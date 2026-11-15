@@ -525,6 +525,8 @@ const LIMITER_PARAMS: &[ParamInfo] = &[
     ParamInfo::log("release", "Release", 1.0, 1000.0, 80.0, "ms"),
     ParamInfo::toggle("true_peak", "True peak", true),
     ParamInfo::choice("style", "Style", LIMITER_STYLES, 0.0),
+    ParamInfo::choice("oversampling", "Oversampling", &["Off", "2×", "4×"], 0.0),
+    ParamInfo::toggle("unity", "Unity-gain listen", false),
 ];
 
 /// Limiter styles after FabFilter Pro-L: how fast the gain recovers, how hard the attack is smoothed and
@@ -616,32 +618,124 @@ impl Effect for Limiter {
     }
 }
 
+fn limiter_core(rate: f32) -> Limiter {
+    let n = ((LOOKAHEAD_MS * 0.001 * rate) as usize).max(8);
+    Limiter {
+        rate,
+        ceiling: db_to_gain(-1.0),
+        gain_in: 1.0,
+        release: 80.0,
+        lookahead: n,
+        true_peak: true,
+        buf_l: vec![0.0; n],
+        buf_r: vec![0.0; n],
+        peaks: vec![0.0; n],
+        style: 0,
+        slow: 1.0,
+        pos: 0,
+        gain: 1.0,
+        tp: Default::default(),
+        gr: 0.0,
+    }
+}
+
+/// The limiter with Pro-L style oversampling: the core runs at 1×, 2× or 4× the rate (gain changes alias
+/// less, inter-sample peaks are caught), behind half-band filters; a level / gain-reduction history for the
+/// display.
+pub struct OversampledLimiter {
+    cores: [Limiter; 3],
+    os: usize,
+    ovs: [[crate::dsp::oversample::Oversampler; 2]; 3],
+    up_l: Vec<f32>,
+    up_r: Vec<f32>,
+    tele: [f32; 3],
+    /// Unity-gain listening (Pro-L): the output drops by the input gain, so only the limiting is heard.
+    unity: bool,
+}
+
+impl Effect for OversampledLimiter {
+    fn set_param(&mut self, id: &str, v: f32) {
+        if id == "unity" {
+            self.unity = v >= 0.5;
+            return;
+        }
+        if id == "oversampling" {
+            let k = (v.round().max(0.0) as usize).min(2);
+            if k != self.os {
+                self.os = k;
+                self.cores[k].reset();
+                self.ovs[k].iter_mut().for_each(|o| o.reset());
+            }
+            return;
+        }
+        for c in &mut self.cores {
+            c.set_param(id, v);
+        }
+    }
+    fn reset(&mut self) {
+        for c in &mut self.cores {
+            c.reset();
+        }
+        self.ovs.iter_mut().flatten().for_each(|o| o.reset());
+    }
+    fn latency(&self) -> usize {
+        self.cores[self.os].latency() / (1 << self.os) + self.ovs[self.os][0].latency()
+    }
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
+        let pin = l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        if self.os == 0 {
+            self.cores[0].process(l, r, sc);
+        } else {
+            let f = 1 << self.os;
+            let n = l.len();
+            self.up_l.resize(n * f, 0.0);
+            self.up_r.resize(n * f, 0.0);
+            let [ol, or] = &mut self.ovs[self.os];
+            for i in 0..n {
+                ol.up(l[i], &mut self.up_l[i * f..i * f + f]);
+                or.up(r[i], &mut self.up_r[i * f..i * f + f]);
+            }
+            self.cores[self.os].process(&mut self.up_l, &mut self.up_r, None);
+            let ceil = self.cores[self.os].ceiling;
+            for i in 0..n {
+                // The down filter can ring a hair over the ceiling; the final clip holds it.
+                l[i] = ol.down(&self.up_l[i * f..i * f + f]).clamp(-ceil, ceil);
+                r[i] = or.down(&self.up_r[i * f..i * f + f]).clamp(-ceil, ceil);
+            }
+        }
+        if self.unity {
+            let g = 1.0 / self.cores[self.os].gain_in.max(1e-6);
+            l.iter_mut().chain(r.iter_mut()).for_each(|x| *x *= g);
+        }
+        let pout = l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
+        self.tele = [db(pin), db(pout), self.cores[self.os].gr];
+    }
+    fn gain_reduction(&self) -> f32 {
+        self.cores[self.os].gr
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
+    }
+}
+
 pub fn limiter_def() -> EffectDef {
     EffectDef {
         id: "limiter",
         name: "Limiter",
         category: "Dynamics",
-        description: "Look-ahead brickwall limiter with true-peak detection and eight styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe) for mastering.",
+        description: "Look-ahead brickwall limiter with true-peak detection, eight styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe) and 2× / 4× oversampling for mastering.",
         params: LIMITER_PARAMS,
         uses_sidechain: false,
         create: |rate| {
-            let n = ((LOOKAHEAD_MS * 0.001 * rate) as usize).max(8);
-            Box::new(Limiter {
-                rate,
-                ceiling: db_to_gain(-1.0),
-                gain_in: 1.0,
-                release: 80.0,
-                lookahead: n,
-                true_peak: true,
-                buf_l: vec![0.0; n],
-                buf_r: vec![0.0; n],
-                peaks: vec![0.0; n],
-                style: 0,
-                slow: 1.0,
-                pos: 0,
-                gain: 1.0,
-                tp: Default::default(),
-                gr: 0.0,
+            Box::new(OversampledLimiter {
+                cores: [limiter_core(rate), limiter_core(rate * 2.0), limiter_core(rate * 4.0)],
+                os: 0,
+                ovs: std::array::from_fn(|k| [crate::dsp::oversample::Oversampler::new(1 << k), crate::dsp::oversample::Oversampler::new(1 << k)]),
+                up_l: Vec::new(),
+                up_r: Vec::new(),
+                tele: [-90.0, -90.0, 0.0],
+                unity: false,
             })
         },
     }
@@ -1108,5 +1202,37 @@ mod tests {
             let peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
             assert!(peak <= db_to_gain(-0.1) + 1e-5, "guard {guard}: {peak}");
         }
+    }
+
+    /// Oversampling: the latency grows by the filters, the ceiling holds, and inter-sample peaks (measured
+    /// on a 4× upsampled copy) come out lower than without it.
+    #[test]
+    fn limiter_oversampling_catches_inter_sample_peaks() {
+        let tp = |y: &[f32]| {
+            let mut o = crate::dsp::oversample::Oversampler::new(4);
+            let mut b = [0.0f32; 4];
+            y.iter().fold(0.0f32, |m, v| {
+                o.up(*v, &mut b);
+                m.max(b.iter().fold(0.0f32, |a, x| a.max(x.abs())))
+            })
+        };
+        let mut peaks = Vec::new();
+        for os in [0.0, 2.0] {
+            let mut e = make("limiter", &[("gain", 12.0), ("ceiling", -1.0), ("true_peak", 0.0), ("oversampling", os)]);
+            if os > 0.0 {
+                assert!(e.latency() > make("limiter", &[]).latency());
+            }
+            // Bright material: a high tone and noise have peaks between samples.
+            let mut rng = crate::dsp::Rng::new(5);
+            let mut l: Vec<f32> = (0..48000).map(|i| (i as f32 * 2.7).sin() * 0.4 + rng.bipolar() * 0.3).collect();
+            let mut r = l.clone();
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                e.process(a, b, None);
+            }
+            let sample_peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+            assert!(sample_peak <= db_to_gain(-1.0) + 1e-4, "{sample_peak}");
+            peaks.push(tp(&l[4800..]));
+        }
+        assert!(peaks[1] < peaks[0], "inter-sample peaks: {peaks:?}");
     }
 }

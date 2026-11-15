@@ -109,7 +109,10 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Playlist: Shift+Q quick-quantize clip starts, Alt+T time marker, Alt+P picker panel, Shift+drag clone, Ctrl+drag select | ✅ same |
 | F4 next empty pattern, F5 playlist, F6 channel rack, F7 piano roll, F8 plugin picker, F9 mixer, F10 settings, F11 song info, F12 close windows, Alt+F8 browser | ✅ same |
 | File: Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+N save new version, Ctrl+R export WAV, Ctrl+Shift+R MP3, Ctrl+Shift+M MIDI | ✅ same |
-| Channel-rack Alt keys (Alt+C clone, Alt+G group, Alt+Z / U zip, Alt+↑/↓ move, Ctrl+L route to mixer), piano roll G / K / H / J channel stepping, M keyboard view, O portamento, F / Shift+F event properties, Shift+R / Shift+C select by random / colour, Ctrl+I controller value, performance-mode keys (6, Ctrl+P in the playlist), Shift+G / Alt+G clip groups, Ctrl+Alt+C consolidate | ❌ not yet |
+| Channel rack: Ctrl+click multi-select, Alt+C clone, Alt+Del delete, Alt+G group, PgUp / PgDn group view, Alt+Z / Alt+U zip / unzip, Alt+↑/↓ move, Ctrl+L route to free mixer tracks, Alt+M mixer selectors, ↑/↓ select, Shift+↑/↓ extend, Ctrl+Enter focus playlist | ✅ |
+| Piano roll: G / K and H / J channel stepping, Shift+H / Shift+K, M note names, O portamento, F / Shift+F event lane (velocity, pan, release), Shift+D discard lengths, Shift+N chord off, Shift+R select at random, Shift+C select by colour, Alt+C colour, Shift+G / Alt+G groups, Alt+B helpers, Alt+V ghosts, Alt+arrows nudge, Ctrl+Alt+Q quick quantize, Ctrl+M import MIDI | ✅ |
+| Playlist: Shift+G / Alt+G clip groups, Shift+C select by source, Ctrl+Alt+C consolidate, Ctrl+P performance, 6 zoom, Ctrl+← / → / Enter time selection, Shift+Alt+T time signature, Ctrl+F8 project picker | ✅ (6 shows the whole song – there is no separate performance zone) |
+| Piano roll Alt+N waveform helper, Ctrl+I insert controller value, Shift+M random note groups, Alt+* / Alt+/ marker jumps (the numeric-pad keys), Ctrl+Alt+Home resize from the left, Shift+M stretch mode, Shift+Alt+wheel nudge | ❌ not yet (FL itself binds Shift+M twice) |
 
 ## Comparison with the FabFilter bundle
 
@@ -117,19 +120,20 @@ What the stock effects share with FabFilter's handling, and what is still missin
 
 | FabFilter | Dragon DAW stock effects |
 |---|---|
-| Pro-Q: live pre / post analyzer, double-click to add a band, drag nodes, wheel = Q, right-click shape menu, hover readout, remove a band, band solo, auto gain | ✅ |
-| Pro-Q: dynamic EQ per band (range and threshold, live gain shown on the node), stereo placement per band (stereo, mid, side, left, right), zero-latency or linear-phase processing | ✅ (linear phase: bands are stereo and static, ~64 ms latency) |
-| Pro-Q: EQ match, spectrum grab, collision detection, piano scale, 24 bands, natural phase | ❌ (7 bands) |
-| Pro-C: styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain high- and low-pass, external sidechain, transfer curve with threshold drag, scrolling level / gain-reduction history, mix, auto makeup | ✅ (our styles are designed after Pro-C's names, not measured against it) |
-| Pro-L: true-peak limiting, styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe), loudness meters | ✅ (LUFS in the Mastering view) |
-| Pro-L: oversampling choice, scrolling waveform display, unity-gain listening | ❌ |
+| Pro-Q: 24 bands, live pre / post analyzer, double-click to add a band, spectrum grab (drag a peak of the analyzer), drag nodes, wheel = Q, right-click shape menu, hover readout with note names, piano scale, remove a band, band solo, auto gain, one band's controls at a time | ✅ |
+| Pro-Q: dynamic EQ per band, stereo placement per band (stereo, mid, side, left, right), zero-latency, natural-phase (filters at 2× rate, ~0.5 ms) and linear-phase processing | ✅ (linear phase: bands are stereo and static) |
+| Pro-Q: EQ match against another EQ in the project (learn both spectra, fill free bands), collision display with another EQ's spectrum | ✅ (the reference is another Dragon EQ, not a sidechain or file) |
+| Pro-C: styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain high- and low-pass, external sidechain, transfer curve with threshold drag, scrolling level / gain-reduction history, mix, auto makeup | ✅ (styles designed after Pro-C's names, not measured against it) |
+| Pro-L: true-peak limiting, styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe), 2× / 4× oversampling, scrolling level / gain-reduction display, unity-gain listening, loudness meters | ✅ (LUFS in the Mastering view) |
+| Saturn: multiband saturation – up to four bands with draggable crossovers, eight styles, drive, dynamics, tone, level and mix per band | ✅ "Multiband Saturator" (no per-band feedback) |
+| Pro-R: decay-rate EQ (low / high parts of the tail decay faster or slower) | ✅ on the reverb (two crossover points, not Pro-R's free curve) |
 | Modulation: LFOs (five shapes, free or tempo-synced) and envelope followers on any stock-effect parameter, with depth | ✅ (no XY pads, MIDI sources or slew) |
-| Pro-R / Pro-DS / Pro-MB / Saturn / Timeless / Volcano | partial: reverb with early / late EQ, de-esser, multiband, saturator with nine tubes, delay, filter – without decay-rate EQ or per-band saturation |
+| Pro-DS / Pro-MB / Timeless / Volcano / Pro-G | partial: de-esser, multiband compressor, delay, filter and gate exist with their own, simpler controls |
 | Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ |
 
 ## The new plugins against their published references
 
-Checked against the manufacturers' manuals and spec sheets (tests in `effects/strips.rs`, `alter.rs`, `dynamics.rs`). None of them has been measured against recordings of the real units – the sound is our model.
+Checked against the manufacturers' manuals and spec sheets (tests in `effects/strips.rs`, `alter.rs`, `dynamics.rs`). None of them has been measured against recordings of the real units – that needs the hardware (or recordings of it) to compare with, which this project does not have; the sound is our model.
 
 | Reference | Matches | Differs |
 |---|---|---|
