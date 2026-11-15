@@ -120,12 +120,36 @@ mod glyph_tests {
                 }
             }
         }
-        for f in files {
-            for line in std::fs::read_to_string(&f).unwrap().lines() {
+        // The engine's user-facing text (effect, parameter and choice names), without its test modules.
+        let mut engine = vec![];
+        for dir in [base.join("../../engine/src"), base.join("../../engine/src/effects")] {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                if e.path().extension().is_some_and(|x| x == "rs") {
+                    engine.push(e.path());
+                }
+            }
+        }
+        for f in files.iter().chain(engine.iter()) {
+            let text = std::fs::read_to_string(f).unwrap();
+            let text = if engine.contains(f) { text.split("#[cfg(test)]").next().unwrap_or("").to_string() } else { text };
+            for line in text.lines() {
                 if line.trim_start().starts_with("//") {
                     continue;
                 }
-                chars.extend(line.chars().filter(|c| !c.is_ascii()));
+                // Only text inside string literals reaches the screen.
+                let mut inside = false;
+                let mut esc = false;
+                for c in line.chars() {
+                    match (inside, esc, c) {
+                        (true, false, '\\') => esc = true,
+                        (true, true, _) => esc = false,
+                        (_, false, '"') => inside = !inside,
+                        (true, false, c) if !c.is_ascii() => {
+                            chars.insert(c);
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         let tofu: String = chars.into_iter().filter(|c| ctx.fonts(|f| !f.has_glyph(&font, *c))).collect();

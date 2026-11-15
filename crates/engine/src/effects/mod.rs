@@ -9,6 +9,7 @@ pub mod dynamics;
 pub mod eq;
 mod modulation;
 pub mod multisat;
+pub mod panner;
 pub mod pitch;
 pub mod reverb;
 pub mod strips;
@@ -126,6 +127,9 @@ pub trait Effect: Send {
     }
     /// Project tempo (for synced effects).
     fn set_tempo(&mut self, _bpm: f64) {}
+    /// The song position (beats) at the start of the next block and whether the transport plays, called
+    /// before every `process` (for effects that lock their motion to the bar).
+    fn set_position(&mut self, _beat: f64, _playing: bool) {}
     /// Parameters of a hosted third-party plugin (empty for built-ins, which use [`EffectDef::params`]).
     fn plugin_params(&self) -> Vec<PluginParam> {
         Vec::new()
@@ -209,6 +213,7 @@ pub fn registry() -> &'static [EffectDef] {
             modulation::flanger_def(),
             modulation::phaser_def(),
             modulation::tremolo_def(),
+            panner::orbit_def(),
             color::saturator_def(),
             multisat::multiband_saturator_def(),
             color::bitcrusher_def(),
@@ -368,6 +373,9 @@ impl Effect for Smoothed {
     }
     fn gain_reduction(&self) -> f32 {
         self.inner.gain_reduction()
+    }
+    fn set_position(&mut self, beat: f64, playing: bool) {
+        self.inner.set_position(beat, playing)
     }
     fn set_tempo(&mut self, bpm: f64) {
         self.inner.set_tempo(bpm)

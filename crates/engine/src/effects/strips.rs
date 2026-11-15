@@ -22,6 +22,7 @@ const LOW_HZ: [f32; 4] = [35.0, 60.0, 110.0, 220.0];
 const MID_HZ: [f32; 6] = [360.0, 700.0, 1600.0, 3200.0, 4800.0, 7200.0];
 
 const STRIP_PARAMS: &[ParamInfo] = &[
+    ParamInfo::lin("ns", "Noise suppressor", 0.0, 100.0, 0.0, "%"),
     ParamInfo::lin("drive", "Preamp drive", 0.0, 30.0, 6.0, "dB"),
     ParamInfo::toggle("eq_on", "EQ in", true),
     ParamInfo::choice("hpf", "EQ high-pass", HPF_FREQS, 0.0),
@@ -37,9 +38,145 @@ const STRIP_PARAMS: &[ParamInfo] = &[
     ParamInfo::log("attack", "Comp attack", 0.5, 300.0, 10.0, "ms"),
     ParamInfo::log("release", "Comp release", 50.0, 10000.0, 400.0, "ms"),
     ParamInfo::lin("comp_gain", "Comp gain", 0.0, 30.0, 4.0, "dB"),
-    ParamInfo::choice("order", "Order", &["Pre → EQ → Comp", "Pre → Comp → EQ"], 0.0),
+    ParamInfo::choice("order", "Order", &["Pre > EQ > Comp", "Pre > Comp > EQ"], 0.0),
     ParamInfo::lin("output", "Output", -24.0, 12.0, -6.0, "dB"),
 ];
+
+// ------------------------------------------------------------------------------------- noise suppressor
+
+/// Band edges of the suppressor (Hz): below 250, 250 – 1.2 k, 1.2 k – 5 k, above 5 k.
+const NS_EDGES: [f32; 3] = [250.0, 1200.0, 5000.0];
+
+/// A one-fader broadband noise suppressor after Waves NS1: four bands, each tracking its own noise floor
+/// (the minimum of its level over a sliding 2 s window, rising at most 30 dB/s, kept within -96 … -40 dBFS
+/// so that program material louder than that is never taken for noise) and pulled down when its level sits
+/// near that floor. The fader sets the margin above the floor (3 … 12 dB), the
+/// expansion ratio and the depth (up to 30 dB). The bands are split complementarily (each the remainder of
+/// the previous minus a low-pass), so they sum back to the input exactly: at 0 % it is bit-transparent, and
+/// it adds no latency (usable while tracking).
+#[derive(Clone)]
+struct NoiseSuppressor {
+    amount: f32,
+    lp: [[Biquad; 2]; 3],
+    /// Per band: power envelope, noise floor (dB), applied gain (linear).
+    env: [f32; 4],
+    floor: [f32; 4],
+    gain: [f32; 4],
+    k_att: f32,
+    k_rel: f32,
+    rise: f32,
+    /// Sliding minimum: per band the minima of the last 8 slots of 250 ms, the current slot's, and the
+    /// samples left in it.
+    mins: [[f32; 8]; 4],
+    slot_min: [f32; 4],
+    slot: usize,
+    slot_len: usize,
+    left: usize,
+    g_open: f32,
+    g_close: f32,
+    /// Deepest band attenuation in the last block (dB, positive).
+    red: f32,
+}
+
+impl NoiseSuppressor {
+    fn new(rate: f32) -> Self {
+        let mut lp = [[Biquad::default(); 2]; 3];
+        for (k, f) in NS_EDGES.iter().enumerate() {
+            for b in &mut lp[k] {
+                b.set(BiquadKind::LowPass, f.min(rate * 0.45), std::f32::consts::FRAC_1_SQRT_2, 0.0, rate);
+            }
+        }
+        let k = |ms: f32| (-1.0 / (ms * 0.001 * rate)).exp();
+        NoiseSuppressor {
+            amount: 0.0,
+            lp,
+            env: [0.0; 4],
+            floor: [-40.0; 4],
+            gain: [1.0; 4],
+            k_att: k(5.0),
+            k_rel: k(25.0),
+            rise: 30.0 / rate,
+            mins: [[-40.0; 8]; 4],
+            slot_min: [0.0; 4],
+            slot: 0,
+            slot_len: (rate * 0.25) as usize,
+            left: (rate * 0.25) as usize,
+            g_open: k(2.0),
+            g_close: k(40.0),
+            red: 0.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.env = [0.0; 4];
+        self.floor = [-40.0; 4];
+        self.gain = [1.0; 4];
+        self.red = 0.0;
+        self.mins = [[-40.0; 8]; 4];
+        self.slot_min = [0.0; 4];
+        self.left = self.slot_len;
+        for b in self.lp.iter_mut().flatten() {
+            b.reset();
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
+        // Split (complementary: the bands sum to the input).
+        let mut bl = [0.0f32; 4];
+        let mut br = [0.0f32; 4];
+        let (mut rl, mut rr) = (l, r);
+        for k in 0..3 {
+            bl[k] = self.lp[k][0].process(rl);
+            br[k] = self.lp[k][1].process(rr);
+            rl -= bl[k];
+            rr -= br[k];
+        }
+        bl[3] = rl;
+        br[3] = rr;
+        if self.amount <= 0.0 {
+            return (l, r);
+        }
+        let a = self.amount;
+        let margin = 3.0 + 9.0 * a;
+        let ratio = 1.5 + 2.5 * a;
+        let depth = 30.0 * a;
+        let (mut ol, mut or) = (0.0, 0.0);
+        let mut red = self.red;
+        // Close a 250 ms slot of the sliding minimum.
+        self.left -= 1;
+        let close = self.left == 0;
+        if close {
+            self.left = self.slot_len;
+            self.slot = (self.slot + 1) % 8;
+        }
+        for k in 0..4 {
+            let p = bl[k] * bl[k] + br[k] * br[k];
+            let c = if p > self.env[k] { self.k_att } else { self.k_rel };
+            self.env[k] = p + c * (self.env[k] - p);
+            let db = 10.0 * (self.env[k] * 0.5 + 1e-12).log10();
+            // Noise floor: the minimum over the last 2 s, rising at most 30 dB/s, within -96 … -40 dBFS.
+            self.slot_min[k] = self.slot_min[k].min(db);
+            if close {
+                self.mins[k][self.slot] = self.slot_min[k];
+                self.slot_min[k] = 0.0;
+            }
+            let target = self.mins[k].iter().fold(self.slot_min[k], |a, &b| a.min(b)).clamp(-96.0, -40.0);
+            self.floor[k] = if target < self.floor[k] { target } else { (self.floor[k] + self.rise).min(target) };
+            // A running minimum sits a few dB under the noise's mean level: +4 dB bias compensation.
+            let under = self.floor[k] + 4.0 + margin - db;
+            let att = if under > 0.0 { (under * (ratio - 1.0)).min(depth) } else { 0.0 };
+            let want = db_to_gain(-att);
+            let c = if want > self.gain[k] { self.g_open } else { self.g_close };
+            self.gain[k] = want + c * (self.gain[k] - want);
+            red = red.max(-gain_to_db(self.gain[k].max(1e-6)));
+            ol += bl[k] * self.gain[k];
+            or += br[k] * self.gain[k];
+        }
+        self.red = red;
+        (ol, or)
+    }
+}
 
 /// One channel of the preamp: input transformer → class-A stage → output transformer.
 #[derive(Clone, Copy, Default)]
@@ -192,7 +329,8 @@ pub struct ClassAStrip {
     cell: OptoCell,
     tube: [crate::dsp::tube::TubeStage; 2],
     gr: f32,
-    tele: [f32; 4],
+    ns: NoiseSuppressor,
+    tele: [f32; 5],
 }
 
 impl ClassAStrip {
@@ -223,7 +361,8 @@ impl ClassAStrip {
             cell: OptoCell::default(),
             tube: [tube; 2],
             gr: 0.0,
-            tele: [0.0; 4],
+            ns: NoiseSuppressor::new(rate),
+            tele: [0.0; 5],
         };
         s.update_eq();
         s
@@ -269,6 +408,7 @@ impl ClassAStrip {
 impl Effect for ClassAStrip {
     fn set_param(&mut self, id: &str, v: f32) {
         match id {
+            "ns" => self.ns.amount = (v / 100.0).clamp(0.0, 1.0),
             "drive" => self.drive = db_to_gain(v),
             "eq_on" => self.eq_on = v > 0.5,
             "hpf" => self.eq_p.0 = (v.round() as usize).min(4),
@@ -295,6 +435,7 @@ impl Effect for ClassAStrip {
     fn reset(&mut self) {
         self.cell = OptoCell::default();
         self.tube.iter_mut().for_each(|t| t.reset());
+        self.ns.reset();
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let manual = match self.mode {
@@ -304,10 +445,13 @@ impl Effect for ClassAStrip {
         };
         let mut peak_gr = 0.0f32;
         let (mut pin, mut pout) = (0.0f32, 0.0f32);
+        self.ns.red = 0.0;
         for i in 0..l.len() {
             pin = pin.max(l[i].abs().max(r[i].abs()));
-            let mut a = self.pre[0].process(l[i], self.drive);
-            let mut b = self.pre[1].process(r[i], self.drive);
+            // NS1-style suppression first: the preamp's gain would otherwise lift the noise with the signal.
+            let (x, y) = self.ns.process(l[i], r[i]);
+            let mut a = self.pre[0].process(x, self.drive);
+            let mut b = self.pre[1].process(y, self.drive);
             if !self.comp_first {
                 a = self.eq(0, a);
                 b = self.eq(1, b);
@@ -341,7 +485,7 @@ impl Effect for ClassAStrip {
             pout = pout.max(l[i].abs().max(r[i].abs()));
         }
         self.gr = peak_gr;
-        self.tele = [pin, peak_gr, pout, gain_to_db(self.drive)];
+        self.tele = [pin, peak_gr, pout, gain_to_db(self.drive), self.ns.red];
     }
     fn gain_reduction(&self) -> f32 {
         self.gr
@@ -356,7 +500,7 @@ pub fn class_a_strip_def() -> EffectDef {
         id: "class_a_strip",
         name: "Class-A Strip",
         category: "Channel strip",
-        description: "Recording channel: British class-A transformer mic preamp with stepped inductor-style EQ into a tube opto compressor (program-dependent opto attack, two-stage release with memory, fixed or manual timing). Zero latency – track through it.",
+        description: "Recording channel: a one-fader noise suppressor (NS1 style), British class-A transformer mic preamp with stepped inductor-style EQ into a tube opto compressor (program-dependent opto attack, two-stage release with memory, fixed or manual timing). Zero latency – track through it.",
         params: STRIP_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(ClassAStrip::new(rate)),
@@ -679,6 +823,49 @@ pub fn drum_bus_def() -> EffectDef {
         params: DRUM_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(DrumBus::new(rate)),
+    }
+}
+
+#[cfg(test)]
+mod ns_tests {
+    use super::*;
+
+    /// A tone with hiss between its notes: at 0 % untouched; at 70 % the hiss gaps drop by well over
+    /// 10 dB while the tone keeps its level.
+    #[test]
+    fn noise_suppressor_cleans_gaps_and_keeps_the_signal() {
+        let rate = 48000.0;
+        let mut seed = 1u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        // 4 s: alternating 0.5 s of tone + hiss and 0.5 s of hiss alone.
+        let n = (rate * 4.0) as usize;
+        let sig: Vec<f32> = (0..n)
+            .map(|i| {
+                let on = (i / (rate as usize / 2)).is_multiple_of(2);
+                let tone = if on { (i as f32 * 2.0 * std::f32::consts::PI * 440.0 / rate).sin() * 0.3 } else { 0.0 };
+                tone + noise() * 0.006
+            })
+            .collect();
+        let run = |amount: f32| {
+            let mut ns = NoiseSuppressor::new(rate);
+            ns.amount = amount;
+            sig.iter().map(|&x| ns.process(x, x).0).collect::<Vec<f32>>()
+        };
+        let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+        let half = rate as usize / 2;
+        // Last gap (3.5 … 4 s, skipping its first 100 ms) and last tone (3 … 3.5 s).
+        let gap = |v: &[f32]| rms(&v[7 * half + 4800..8 * half]);
+        let tone = |v: &[f32]| rms(&v[6 * half + 4800..7 * half]);
+        let off = run(0.0);
+        assert_eq!(off, sig, "0 % is bit-transparent");
+        let on = run(0.7);
+        let gap_drop = 20.0 * (gap(&sig) / gap(&on)).log10();
+        let tone_change = 20.0 * (tone(&on) / tone(&sig)).log10();
+        assert!(gap_drop > 10.0, "hiss gaps down by {gap_drop:.1} dB");
+        assert!(tone_change.abs() < 1.0, "tone level changed by {tone_change:.2} dB");
     }
 }
 

@@ -113,6 +113,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let base = match h.def.id {
         "tune" | "clean_voice" | "class_a_strip" => 230.0,
         "alter" => 200.0,
+        "orbit" => 220.0,
         "drum_bus" => 230.0,
         "dragon_particle" => 240.0,
         _ => 170.0,
@@ -144,6 +145,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "class_a_strip" => class_a_strip(&p, r, h, col),
         "drum_bus" => drum_bus(&p, r, h, col),
         "alter" => alter(&p, r, h, col),
+        "orbit" => orbit(&p, r, h, col),
         _ => {
             grid(&p, r, false);
             let pts: Vec<Pos2> = (0..=96).map(|k| Pos2::new(r.left() + r.width() * k as f32 / 96.0, r.center().y + (k as f32 * 0.25 + h.t() * 3.0).sin() * r.height() * 0.3)).collect();
@@ -409,6 +411,58 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 let s = ui.input(|i| i.smooth_scroll_delta.y);
                 if s != 0.0 {
                     out.push(("amount".into(), (h.v("amount") + s / 800.0).clamp(0.0, 1.0)));
+                }
+            }
+        }
+        "orbit" => {
+            let (field, shapes, modes) = orbit_layout(r);
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            if resp.clicked() {
+                if let Some(k) = shapes.iter().position(|b| b.contains(pos)) {
+                    out.push(("shape".into(), k as f32));
+                } else if let Some(k) = modes.iter().position(|b| b.contains(pos)) {
+                    out.push(("mode".into(), k as f32));
+                }
+            }
+            if field.contains(pos) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+                let s = ui.input(|i| i.smooth_scroll_delta.y);
+                if s != 0.0 {
+                    out.push(("width".into(), (h.v("width") + s / 6.0).clamp(0.0, 100.0)));
+                }
+                if resp.double_clicked() {
+                    out.push(("center".into(), 0.0));
+                    out.push(("width".into(), 70.0));
+                }
+            }
+            if resp.dragged() && field.contains(origin) {
+                // Left / right: centre; up / down: width.
+                let d = resp.drag_delta();
+                if d.x != 0.0 {
+                    out.push(("center".into(), (h.v("center") + d.x / field.width() * 200.0).clamp(-100.0, 100.0)));
+                }
+                if d.y != 0.0 {
+                    out.push(("width".into(), (h.v("width") - d.y / field.height() * 100.0).clamp(0.0, 100.0)));
+                }
+            }
+        }
+        "class_a_strip" => {
+            // The NS1-style noise-suppressor fader: drag (or wheel) the cap, double-click for 0 %.
+            let (track, _) = ns_fader(r);
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            let zone = track.expand2(Vec2::new(14.0, 10.0));
+            if resp.dragged() && zone.contains(origin) {
+                let v = (track.bottom() - pos.y) / track.height() * 100.0;
+                out.push(("ns".into(), v.clamp(0.0, 100.0).round()));
+            }
+            if zone.contains(pos) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                let s = ui.input(|i| i.smooth_scroll_delta.y);
+                if s != 0.0 {
+                    out.push(("ns".into(), (h.v("ns") + s / 8.0).clamp(0.0, 100.0).round()));
+                }
+                if resp.double_clicked() {
+                    out.push(("ns".into(), 0.0));
                 }
             }
         }
@@ -1511,12 +1565,129 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     );
 }
 
-/// Class-A Strip: the preamp's drive with the transformer warming up, the EQ curve as set, and the opto
+// ---------------------------------------------------------------------------------------------- orbit
+
+/// Dragon Orbit's display: (stereo field, the seven shape buttons, the three mode buttons).
+fn orbit_layout(r: Rect) -> (Rect, Vec<Rect>, Vec<Rect>) {
+    let bar = 30.0;
+    let field = Rect::from_min_max(r.min + Vec2::new(10.0, 8.0), Pos2::new(r.right() - 10.0, r.bottom() - bar - 10.0));
+    let y = r.bottom() - bar - 4.0;
+    let shapes = (0..7).map(|k| Rect::from_min_size(Pos2::new(r.left() + 10.0 + k as f32 * 38.0, y), Vec2::new(34.0, bar - 4.0))).collect();
+    let modes = (0..3).rev().enumerate().map(|(j, k)| (k, Rect::from_min_size(Pos2::new(r.right() - 10.0 - (j as f32 + 1.0) * 62.0, y), Vec2::new(58.0, bar - 4.0)))).fold(vec![Rect::NOTHING; 3], |mut v, (k, b)| {
+        v[k] = b;
+        v
+    });
+    (field, shapes, modes)
+}
+
+fn orbit(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::panner::{shape_value, ORBIT_MODES};
+    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x1a));
+    let (field, shapes, modes) = orbit_layout(r);
+    let (width, center) = (h.v("width") / 100.0, h.v("center") / 100.0);
+    let shape = h.v("shape").round() as usize;
+    let mode = h.v("mode").round() as usize;
+    // The listener sits at the bottom centre; positions -1 … 1 map to an arc from left to right.
+    let ear = Pos2::new(field.center().x, field.bottom() - 6.0);
+    let rad = (field.height() - 18.0).min(field.width() * 0.46);
+    let at = |pos: f32, rr: f32| {
+        let a = PI + (pos.clamp(-1.0, 1.0) + 1.0) * 0.5 * PI;
+        Pos2::new(ear.x + rr * a.cos(), ear.y + rr * a.sin())
+    };
+    for k in 1..=4 {
+        let rr = rad * k as f32 / 4.0;
+        let pts: Vec<Pos2> = (0..=48).map(|j| at(-1.0 + 2.0 * j as f32 / 48.0, rr)).collect();
+        p.add(Shape::line(pts, Stroke::new(1.0_f32, Color32::from_white_alpha(if k == 4 { 40 } else { 14 }))));
+    }
+    for (pos, t) in [(-1.0, "L"), (0.0, "C"), (1.0, "R")] {
+        p.text(at(pos, rad + 10.0), egui::Align2::CENTER_CENTER, t, egui::FontId::proportional(10.0), Color32::from_white_alpha(120));
+    }
+    // The range the motion covers (a wedge).
+    let (lo, hi) = ((center - width).max(-1.0), (center + width).min(1.0));
+    let mut wedge = vec![ear];
+    wedge.extend((0..=32).map(|j| at(lo + (hi - lo) * j as f32 / 32.0, rad)));
+    p.add(Shape::convex_polygon(wedge, col.gamma_multiply(0.12), Stroke::NONE));
+    // The shape's path over one cycle, drawn along the arc as a ribbon of dots.
+    for j in 0..40 {
+        let ph = j as f32 / 40.0;
+        let v = (center + width * shape_value(shape, ph, 7)).clamp(-1.0, 1.0);
+        p.circle_filled(at(v, rad * (0.35 + 0.6 * ph)), 1.6, col.gamma_multiply(0.45));
+    }
+    // The sound: live position, or a demonstration of the motion when there is no audio.
+    let (pos, flash) = match h.tele {
+        [a, b, ..] => (*a, *b),
+        _ => ((center + width * shape_value(shape, h.t() * 0.5, (h.t() * 0.5) as i64)).clamp(-1.0, 1.0), 0.0),
+    };
+    let ball = at(pos, rad * 0.8);
+    p.line_segment([ear, ball], Stroke::new(1.0_f32, col.gamma_multiply(0.35)));
+    if flash > 0.02 {
+        p.circle_stroke(ball, 10.0 + 14.0 * (1.0 - flash), Stroke::new(2.0_f32, col.gamma_multiply(flash)));
+    }
+    p.circle_filled(ball, 12.0, col.gamma_multiply(0.18));
+    p.circle_filled(ball, 7.0, col);
+    p.circle_filled(ear, 5.0, Color32::from_gray(150));
+    p.text(field.left_top(), egui::Align2::LEFT_TOP, format!("centre {:+.0}  width {:.0} %", center * 100.0, width * 100.0), egui::FontId::proportional(10.0), Color32::from_white_alpha(150));
+    // Shape buttons: each draws its waveform.
+    for (k, b) in shapes.iter().enumerate() {
+        let on = k == shape;
+        p.rect_filled(*b, 4.0, if on { col.gamma_multiply(0.3) } else { Color32::from_rgb(0x1e, 0x22, 0x2a) });
+        p.rect_stroke(*b, 4.0, Stroke::new(1.0_f32, if on { col } else { Color32::from_white_alpha(25) }), egui::StrokeKind::Inside);
+        let g = b.shrink2(Vec2::new(5.0, 6.0));
+        let pts: Vec<Pos2> = (0..=24)
+            .map(|j| {
+                let ph = j as f32 / 24.0;
+                // Random shapes: show four cycles' worth of steps.
+                let v = if k >= 5 { shape_value(k, (ph * 4.0).fract(), (ph * 4.0) as i64 + 3) } else { shape_value(k, ph, 0) };
+                Pos2::new(g.left() + g.width() * ph, g.center().y - v * g.height() * 0.5)
+            })
+            .collect();
+        p.add(Shape::line(pts, Stroke::new(1.5_f32, if on { Color32::WHITE } else { Color32::from_white_alpha(140) })));
+    }
+    for (k, b) in modes.iter().enumerate() {
+        let on = k == mode;
+        p.rect_filled(*b, 4.0, if on { col.gamma_multiply(0.3) } else { Color32::from_rgb(0x1e, 0x22, 0x2a) });
+        p.rect_stroke(*b, 4.0, Stroke::new(1.0_f32, if on { col } else { Color32::from_white_alpha(25) }), egui::StrokeKind::Inside);
+        p.text(b.center(), egui::Align2::CENTER_CENTER, ORBIT_MODES[k].to_uppercase(), egui::FontId::proportional(10.0), if on { Color32::WHITE } else { Color32::from_white_alpha(150) });
+    }
+}
+
+/// The strip's noise-suppressor column: (fader track, whole section).
+fn ns_fader(r: Rect) -> (Rect, Rect) {
+    let sec = Rect::from_min_size(Pos2::new(r.left() + 10.0, r.top() + 10.0), Vec2::new(56.0, r.height() - 20.0));
+    let track = Rect::from_center_size(Pos2::new(sec.center().x, sec.center().y + 4.0), Vec2::new(6.0, sec.height() - 64.0));
+    (track, sec)
+}
+
+/// Class-A Strip: the NS1-style suppressor fader, the preamp's drive with the transformer warming up, the EQ curve as set, and the opto
 /// compressor's cell glowing with its gain reduction above a moving-coil GR meter.
 fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::dsp::{Biquad, BiquadKind};
     p.rect_filled(r, 8.0, Color32::from_rgb(0x3a, 0x44, 0x52));
     p.rect_stroke(r.shrink(3.0), 6.0, Stroke::new(1.0_f32, Color32::from_white_alpha(30)), egui::StrokeKind::Inside);
+    // ---- noise suppressor (NS1 style: one fader)
+    let (track, nsr) = ns_fader(r);
+    p.rect_filled(nsr, 6.0, Color32::from_rgb(0x2b, 0x32, 0x3d));
+    p.text(Pos2::new(nsr.center().x, nsr.top() + 6.0), egui::Align2::CENTER_TOP, "NS", egui::FontId::proportional(11.0), Color32::from_rgb(0x9f, 0xe0, 0x8a));
+    let ns = h.v("ns");
+    let red = h.tele.get(4).copied().unwrap_or(0.0);
+    // Lamp: lights with the suppression happening right now.
+    let lamp = Pos2::new(nsr.center().x, nsr.top() + 28.0);
+    let lit = (red / 20.0).clamp(0.0, 1.0);
+    p.circle_filled(lamp, 7.0, Color32::from_rgb(0x9f, 0xe0, 0x8a).gamma_multiply(0.12 * lit));
+    p.circle_filled(lamp, 4.0, Color32::from_rgb(0x9f, 0xe0, 0x8a).gamma_multiply(0.2 + 0.8 * lit));
+    p.rect_filled(track, 3.0, Color32::from_rgb(0x14, 0x17, 0x1c));
+    let fill = Rect::from_min_max(Pos2::new(track.left(), track.bottom() - track.height() * ns / 100.0), track.max);
+    p.rect_filled(fill, 3.0, Color32::from_rgb(0x9f, 0xe0, 0x8a).gamma_multiply(0.7));
+    for k in 0..=10 {
+        let y = track.bottom() - track.height() * k as f32 / 10.0;
+        let w = if k % 5 == 0 { 9.0 } else { 5.0 };
+        p.line_segment([Pos2::new(track.right() + 3.0, y), Pos2::new(track.right() + 3.0 + w, y)], Stroke::new(1.0_f32, Color32::from_white_alpha(70)));
+    }
+    let cap = Rect::from_center_size(Pos2::new(track.center().x, track.bottom() - track.height() * ns / 100.0), Vec2::new(30.0, 13.0));
+    p.rect_filled(cap, 3.0, Color32::from_gray(205));
+    p.line_segment([Pos2::new(cap.left() + 3.0, cap.center().y), Pos2::new(cap.right() - 3.0, cap.center().y)], Stroke::new(1.5_f32, Color32::from_gray(40)));
+    p.text(Pos2::new(nsr.center().x, nsr.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("{ns:.0} %"), egui::FontId::monospace(10.0), theme::TEXT);
+    let r = Rect::from_min_max(Pos2::new(nsr.right(), r.top()), r.max);
     let t = h.t();
     let (pin, gr, pout) = match h.tele {
         [a, b, c, ..] => (*a, *b, *c),
@@ -1976,6 +2147,84 @@ mod tests {
                 assert!(out.shapes.len() > 3, "{} draws something", def.id);
             }
         }
+    }
+
+    /// Dragon Orbit: a click on a shape or mode button selects it; dragging the field right moves the centre.
+    #[test]
+    fn orbit_display_is_a_control() {
+        let def = effects::find("orbit").unwrap();
+        let params = def.defaults();
+        let ctx = egui::Context::default();
+        let mut area = Rect::NOTHING;
+        let mut got: Vec<(String, f32)> = Vec::new();
+        let frame = |events: Vec<egui::Event>, area: &mut Rect, got: &mut Vec<(String, f32)>| {
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(700.0, 400.0))), events, ..Default::default() };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    *area = ui.available_rect_before_wrap();
+                    let (e, _) = hero(ui, &Hero { def, params: &params, gr: 0.0, enabled: true, color: theme::ACCENT, time: None, tele: &[], key: egui::Id::new("orbit") });
+                    got.extend(e);
+                });
+            });
+        };
+        frame(vec![], &mut area, &mut got);
+        let w = area.width().max(260.0);
+        let height = (220.0 * (w / 520.0).clamp(1.0, 2.2)).min(area.height().max(220.0));
+        let (field, shapes, modes) = orbit_layout(Rect::from_min_size(area.min, egui::vec2(w, height)));
+        let click = |at: Pos2, area: &mut Rect, got: &mut Vec<(String, f32)>| {
+            frame(vec![egui::Event::PointerMoved(at)], area, got);
+            frame(vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }], area, got);
+            frame(vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }], area, got);
+            frame(vec![], area, got);
+        };
+        click(shapes[5].center(), &mut area, &mut got);
+        assert!(got.contains(&("shape".into(), 5.0)), "{got:?}");
+        click(modes[2].center(), &mut area, &mut got);
+        assert!(got.contains(&("mode".into(), 2.0)), "{got:?}");
+        got.clear();
+        let from = field.center();
+        frame(vec![egui::Event::PointerMoved(from)], &mut area, &mut got);
+        frame(vec![egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }], &mut area, &mut got);
+        for k in 1..=5 {
+            frame(vec![egui::Event::PointerMoved(from + egui::vec2(16.0 * k as f32, 0.0))], &mut area, &mut got);
+        }
+        frame(vec![egui::Event::PointerButton { pos: from + egui::vec2(80.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }], &mut area, &mut got);
+        // The display reports relative moves (params stay fixed here): 16 px of a ~660 px field = ~4.8 %.
+        assert!(got.iter().filter(|(id, _)| id == "center").count() >= 4 && got.iter().all(|(_, v)| *v > 3.0), "{got:?}");
+    }
+
+    /// The Class-A strip's NS fader: dragging the cap to three quarters of the track sets ~75 %.
+    #[test]
+    fn strip_noise_suppressor_fader_drags() {
+        let def = effects::find("class_a_strip").unwrap();
+        let params = def.defaults();
+        let ctx = egui::Context::default();
+        let mut area = Rect::NOTHING;
+        let mut got: Vec<(String, f32)> = Vec::new();
+        let frame = |events: Vec<egui::Event>, area: &mut Rect, got: &mut Vec<(String, f32)>| {
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(700.0, 400.0))), events, ..Default::default() };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    *area = ui.available_rect_before_wrap();
+                    let (e, _) = hero(ui, &Hero { def, params: &params, gr: 0.0, enabled: true, color: theme::ACCENT, time: None, tele: &[], key: egui::Id::new("strip") });
+                    got.extend(e);
+                });
+            });
+        };
+        frame(vec![], &mut area, &mut got);
+        let w = area.width().max(260.0);
+        let height = (230.0 * (w / 520.0).clamp(1.0, 2.2)).min(area.height().max(230.0));
+        let (track, _) = ns_fader(Rect::from_min_size(area.min, egui::vec2(w, height)));
+        let from = Pos2::new(track.center().x, track.bottom());
+        let to = Pos2::new(track.center().x, track.bottom() - track.height() * 0.75);
+        frame(vec![egui::Event::PointerMoved(from)], &mut area, &mut got);
+        frame(vec![egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }], &mut area, &mut got);
+        for k in 1..=6 {
+            frame(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / 6.0))], &mut area, &mut got);
+        }
+        frame(vec![egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }], &mut area, &mut got);
+        let last = got.iter().rev().find(|(id, _)| id == "ns").map(|x| x.1);
+        assert!(last.is_some_and(|v| (v - 75.0).abs() <= 2.0), "ns = {last:?}");
     }
 
     /// Dragging an EQ node moves that band's frequency and gain.

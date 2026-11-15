@@ -1452,6 +1452,7 @@ impl Renderer {
                             }
                             let (mix, mix0) = mixes[base[si] + ii];
                             let mut e = ins.effect.lock().unwrap();
+                            e.set_position(b0, playing);
                             if mix >= 0.999 && mix0 >= 0.999 {
                                 e.process(bl, br, None);
                             } else {
@@ -1558,6 +1559,7 @@ impl Renderer {
                                 e.set_param(m.info.id, m.info.denormalize(nv));
                             }
                         }
+                        e.set_position(b0, playing);
                         if mix >= 0.999 && mix0 >= 0.999 {
                             e.process(bl, br, sc);
                         } else {
