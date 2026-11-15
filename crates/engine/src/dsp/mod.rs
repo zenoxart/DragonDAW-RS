@@ -3,6 +3,7 @@
 
 pub mod loudness;
 pub mod stretch;
+pub mod tube;
 
 use crate::model::Envelope;
 

@@ -13,6 +13,8 @@ const SAT_PARAMS: &[ParamInfo] = &[
     ParamInfo::log("tone", "Tone", 1000.0, 20000.0, 12000.0, "Hz"),
     ParamInfo::lin("output", "Output", -24.0, 12.0, -3.0, "dB"),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
+    ParamInfo::choice("tube", "Tube", crate::dsp::tube::TUBE_NAMES, 0.0),
+    ParamInfo::lin("bias", "Bias", -1.0, 1.0, 0.0, ""),
 ];
 
 pub struct Saturator {
@@ -23,6 +25,7 @@ pub struct Saturator {
     mix: f32,
     tone: [OnePole; 2],
     dc: [OnePole; 2],
+    tubes: [crate::dsp::tube::TubeStage; 2],
 }
 
 #[inline]
@@ -66,16 +69,23 @@ impl Effect for Saturator {
             "tone" => self.tone.iter_mut().for_each(|f| f.set(v, self.rate)),
             "output" => self.out = db_to_gain(v),
             "mix" => self.mix = v,
+            "tube" => {
+                let m = crate::dsp::tube::TUBES[(v.round() as usize).min(crate::dsp::tube::TUBES.len() - 1)];
+                self.tubes.iter_mut().for_each(|t| t.set_model(m));
+            }
+            "bias" => self.tubes.iter_mut().for_each(|t| t.bias = v.clamp(-1.0, 1.0)),
             _ => {}
         }
     }
     fn reset(&mut self) {
         self.tone.iter_mut().chain(self.dc.iter_mut()).for_each(OnePole::reset);
+        self.tubes.iter_mut().for_each(|t| t.reset());
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         for i in 0..l.len() {
             for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
-                let y = shape(self.mode, *x * self.drive);
+                // Tube mode runs the selected tube model (with bias shift, Miller roll-off and sag).
+                let y = if self.mode == 0 { self.tubes[ch].process(*x * self.drive) } else { shape(self.mode, *x * self.drive) };
                 let y = self.dc[ch].highpass(self.tone[ch].process(y)) * self.out;
                 *x = *x * (1.0 - self.mix) + y * self.mix;
             }
@@ -88,10 +98,13 @@ pub fn saturator_def() -> EffectDef {
         id: "saturator",
         name: "Saturator",
         category: "Distortion",
-        description: "Tube, tape, soft/hard clip, foldback and asymmetric waveshaping with tone and parallel mix.",
+        description: "Tube (12AX7, 12AT7, 12AU7, 6SN7, EF86, EL34, 6L6, KT88, 300B models with bias, blocking and sag), tape, soft/hard clip, foldback and asymmetric waveshaping with tone and parallel mix.",
         params: SAT_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(10.0, rate); 2] }),
+        create: |rate| {
+            let t = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], rate);
+            Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(10.0, rate); 2], tubes: [t; 2] })
+        },
     }
 }
 

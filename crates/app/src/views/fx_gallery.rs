@@ -52,7 +52,10 @@ pub fn body(ui: &mut egui::Ui, st: &mut State) {
                                     }
                                 });
                             });
-                            let _ = fx_ui::hero(ui, &Hero { def, params: &params, gr: if def.category == "Dynamics" { 4.5 } else { 0.0 }, enabled: true, color: ccol, time, tele: &[], key: egui::Id::new(("gallery", def.id)) });
+                            let _ = fx_ui::hero(
+                                ui,
+                                &Hero { def, params: &params, gr: if def.category == "Dynamics" { 4.5 } else { 0.0 }, enabled: true, color: ccol, time, tele: &[], key: egui::Id::new(("gallery", def.id)) },
+                            );
                             ui.label(RichText::new(def.description).small().color(theme::TEXT_DIM));
                         });
                     });

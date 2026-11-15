@@ -517,7 +517,13 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             (x * steps).round() / steps
         } else {
             let drive = dragon_engine::dsp::db_to_gain(h.v("drive"));
-            effects::saturation_curve(h.v("mode").round() as usize, x * drive).clamp(-1.2, 1.2)
+            let mode = h.v("mode").round() as usize;
+            if mode == 0 {
+                let t = dragon_engine::dsp::tube::TUBES[(h.v("tube").round() as usize).min(dragon_engine::dsp::tube::TUBES.len() - 1)];
+                dragon_engine::dsp::tube::tube_curve(&t, h.v("bias"), x * drive).clamp(-1.2, 1.2)
+            } else {
+                effects::saturation_curve(mode, x * drive).clamp(-1.2, 1.2)
+            }
         }
     };
     let c = sq.center();
@@ -551,7 +557,14 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         .collect();
     p.add(Shape::line(ins, Stroke::new(1.0_f32, Color32::from_white_alpha(40))));
     p.add(Shape::line(outs, Stroke::new(2.0_f32, col)));
-    let label = if crush { format!("{:.0} bit · ÷{:.0}", h.v("bits"), h.v("downsample")) } else { format!("{:+.1} dB drive", h.v("drive")) };
+    let label = if crush {
+        format!("{:.0} bit · ÷{:.0}", h.v("bits"), h.v("downsample"))
+    } else if h.v("mode").round() as usize == 0 {
+        let t = dragon_engine::dsp::tube::TUBES[(h.v("tube").round() as usize).min(dragon_engine::dsp::tube::TUBES.len() - 1)];
+        format!("{} · {:+.1} dB drive", t.name, h.v("drive"))
+    } else {
+        format!("{:+.1} dB drive", h.v("drive"))
+    };
     p.text(w.right_top(), egui::Align2::RIGHT_TOP, label, egui::FontId::proportional(10.5), theme::TEXT);
 }
 
@@ -733,7 +746,15 @@ fn phase_meter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     for (v, t) in [(-1.0f32, "−1"), (0.0, "0"), (1.0, "+1")] {
         p.text(Pos2::new(mr.left() + (v + 1.0) / 2.0 * mr.width(), mr.bottom() + 3.0), egui::Align2::CENTER_TOP, t, egui::FontId::proportional(9.0), theme::TEXT_DIM);
     }
-    let verdict = if corr < -0.1 { ("out of phase – mono will cancel", theme::REC) } else if corr < 0.3 { ("very wide", theme::WARN) } else if corr > 0.95 { ("mono", theme::TEXT_DIM) } else { ("healthy stereo", theme::OK) };
+    let verdict = if corr < -0.1 {
+        ("out of phase – mono will cancel", theme::REC)
+    } else if corr < 0.3 {
+        ("very wide", theme::WARN)
+    } else if corr > 0.95 {
+        ("mono", theme::TEXT_DIM)
+    } else {
+        ("healthy stereo", theme::OK)
+    };
     p.text(Pos2::new(mr.right(), mr.top() - 18.0), egui::Align2::RIGHT_TOP, format!("{corr:+.2}  {}", verdict.0), egui::FontId::proportional(10.0), verdict.1);
     // ---- balance and width
     let br = Rect::from_min_max(Pos2::new(x0, mr.bottom() + 40.0), Pos2::new(r.right() - 14.0, mr.bottom() + 52.0));
@@ -744,7 +765,13 @@ fn phase_meter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.line_segment([Pos2::new(br.center().x, br.top() - 2.0), Pos2::new(br.center().x, br.bottom() + 2.0)], Stroke::new(1.0_f32, Color32::WHITE));
     p.text(Pos2::new(br.left(), br.bottom() + 3.0), egui::Align2::LEFT_TOP, "L", egui::FontId::proportional(9.0), theme::TEXT_DIM);
     p.text(Pos2::new(br.right(), br.bottom() + 3.0), egui::Align2::RIGHT_TOP, "R", egui::FontId::proportional(9.0), theme::TEXT_DIM);
-    p.text(Pos2::new(x0, r.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, format!("width {:.0}% · side/mid {:.0}% · mono below {:.0} Hz", h.v("width") * 100.0, sm * 100.0, h.v("mono_below")), egui::FontId::proportional(10.5), theme::TEXT);
+    p.text(
+        Pos2::new(x0, r.bottom() - 10.0),
+        egui::Align2::LEFT_BOTTOM,
+        format!("width {:.0}% · side/mid {:.0}% · mono below {:.0} Hz", h.v("width") * 100.0, sm * 100.0, h.v("mono_below")),
+        egui::FontId::proportional(10.5),
+        theme::TEXT,
+    );
 }
 
 /// Dragon Tune, laid out like a modern vocal tuner: the detected note large with its cents offset, a
@@ -849,10 +876,38 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         let b = Rect::from_min_size(Pos2::new(kr.left() + i as f32 * kw + 1.0, kr.top()), Vec2::new(kw - 2.0, kr.height()));
         let on = in_scale(i);
         let lit = tgt == Some(i);
-        p.rect_filled(b, 5.0, if lit { col } else if on { col.gamma_multiply(0.22) } else { Color32::from_white_alpha(6) });
-        p.text(b.center(), egui::Align2::CENTER_CENTER, *nm, egui::FontId::proportional(10.0), if lit { Color32::BLACK } else if on { Color32::WHITE } else { theme::TEXT_DIM });
+        p.rect_filled(
+            b,
+            5.0,
+            if lit {
+                col
+            } else if on {
+                col.gamma_multiply(0.22)
+            } else {
+                Color32::from_white_alpha(6)
+            },
+        );
+        p.text(
+            b.center(),
+            egui::Align2::CENTER_CENTER,
+            *nm,
+            egui::FontId::proportional(10.0),
+            if lit {
+                Color32::BLACK
+            } else if on {
+                Color32::WHITE
+            } else {
+                theme::TEXT_DIM
+            },
+        );
     }
-    p.text(r.right_top() + Vec2::new(-12.0, 8.0), egui::Align2::RIGHT_TOP, format!("{} {} · retune {:.0} ms", KEYS[key], TUNE_SCALES.get(h.v("scale").round() as usize).map(|s| s.0).unwrap_or(""), h.v("speed")), egui::FontId::proportional(10.0), theme::TEXT_DIM);
+    p.text(
+        r.right_top() + Vec2::new(-12.0, 8.0),
+        egui::Align2::RIGHT_TOP,
+        format!("{} {} · retune {:.0} ms", KEYS[key], TUNE_SCALES.get(h.v("scale").round() as usize).map(|s| s.0).unwrap_or(""), h.v("speed")),
+        egui::FontId::proportional(10.0),
+        theme::TEXT_DIM,
+    );
 }
 
 fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
