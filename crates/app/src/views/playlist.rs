@@ -1,6 +1,7 @@
 //! Playlist: tracks with audio and pattern clips, takes / comping lanes, markers, loop and punch ranges,
 //! snap, zoom, tools (draw, paint, select, slice, erase, mute) and drag & drop from the browser.
 
+use super::nav::{self, AreaZoom, ViewTarget};
 use super::widgets::{self, snap, snap_floor};
 use crate::state::{State, Tool, WAVE_BUCKET};
 use crate::theme;
@@ -45,16 +46,67 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::BG);
 
-    let zoom = st.ui.playlist_zoom as f64;
     let timeline = Rect::from_min_max(Pos2::new(rect.left() + HEADER, rect.top() + RULER), rect.max);
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("pl.timeline"), timeline));
+    // ----- animated zoom (area zoom / zoom out ease in over a few frames)
+    if let Some(t) = st.ui.pl_anim {
+        let cur = ViewTarget { zoom: st.ui.playlist_zoom as f64, x: st.ui.pl_x, vscale: st.ui.pl_vzoom, y: st.ui.pl_y };
+        let (n, running) = nav::step(cur, t);
+        st.ui.playlist_zoom = n.zoom as f32;
+        st.ui.pl_x = n.x.max(0.0);
+        st.ui.pl_vzoom = n.vscale;
+        st.ui.pl_y = n.y.max(0.0);
+        if running {
+            ui.ctx().request_repaint();
+        } else {
+            st.ui.pl_anim = None;
+        }
+    }
+    let zoom = st.ui.playlist_zoom as f64;
     let x_of = |beat: f64, sx: f64| timeline.left() + ((beat - sx) * zoom) as f32;
     let beat_of = |x: f32, sx: f64| sx + ((x - timeline.left()) as f64 / zoom);
 
+    // ----- Ctrl + right-drag area zoom, Ctrl + right-click zoom out, middle-drag pan
+    match nav::area_zoom(ui, timeline, "playlist") {
+        Some(AreaZoom::To(r)) => {
+            let (b0, b1) = (beat_of(r.left(), st.ui.pl_x), beat_of(r.right(), st.ui.pl_x));
+            let nz = (timeline.width() as f64 / (b1 - b0).max(1e-3)).clamp(3.0, 400.0);
+            let vz = st.ui.pl_vzoom;
+            let vs = if r.height() > 24.0 { (vz * timeline.height() / r.height()).clamp(0.4, 4.0) } else { vz };
+            let content_y = r.top() - timeline.top() + st.ui.pl_y;
+            st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: b0.max(0.0), vscale: vs, y: (content_y * vs / vz).max(0.0) });
+        }
+        Some(AreaZoom::Out(at)) => {
+            let b = beat_of(at.x, st.ui.pl_x);
+            let nz = (zoom / 2.0).clamp(3.0, 400.0);
+            let vz = st.ui.pl_vzoom;
+            let vs = if vz > 1.0 { (vz / 2.0).max(1.0) } else { vz };
+            st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: vs, y: (st.ui.pl_y * vs / vz).max(0.0) });
+        }
+        None => {}
+    }
+    let pan = nav::middle_drag(ui, rect);
+    if pan != Vec2::ZERO {
+        st.ui.pl_anim = None;
+        st.ui.pl_x = (st.ui.pl_x - pan.x as f64 / zoom).max(0.0);
+        st.ui.pl_y = (st.ui.pl_y - pan.y).max(0.0);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     // ----- scrolling and zoom
     if resp.hovered() {
         // egui reports Ctrl+wheel (and pinch) as a zoom factor, not as scrolling.
-        let (scroll, zoom_d, shift) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift));
-        if zoom_d != 1.0 {
+        let (scroll, zoom_d, shift, alt) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift, i.modifiers.alt));
+        if zoom_d != 1.0 || scroll != Vec2::ZERO {
+            st.ui.pl_anim = None;
+        }
+        if alt && scroll.y != 0.0 {
+            // Alt + wheel: track height (vertical zoom) around the mouse.
+            let vz = st.ui.pl_vzoom;
+            let nv = (vz * (1.0 + scroll.y / 300.0)).clamp(0.4, 4.0);
+            let my = ui.input(|i| i.pointer.hover_pos()).map(|p| p.y - timeline.top()).unwrap_or(0.0);
+            st.ui.pl_y = ((st.ui.pl_y + my) * nv / vz - my).max(0.0);
+            st.ui.pl_vzoom = nv;
+        } else if zoom_d != 1.0 {
             let mouse_beat = ui.input(|i| i.pointer.hover_pos()).map(|p| beat_of(p.x, st.ui.pl_x)).unwrap_or(st.ui.pl_x);
             st.ui.playlist_zoom = (st.ui.playlist_zoom * zoom_d).clamp(3.0, 400.0);
             let nz = st.ui.playlist_zoom as f64;
@@ -88,7 +140,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let mut y = timeline.top() - st.ui.pl_y;
     for t in &p.tracks {
         let mut takes = Vec::new();
-        let h = t.height.clamp(28.0, 200.0);
+        let h = (t.height.clamp(28.0, 200.0) * st.ui.pl_vzoom).clamp(18.0, 600.0);
         let mut yy = y + h;
         if t.show_takes {
             for k in &t.takes {
@@ -230,7 +282,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 
     // Ruler: click to seek, drag to set loop (Shift: punch).
     if let Some(pos) = resp.interact_pointer_pos() {
-        if ruler.contains(pos) && resp.drag_started() {
+        if ruler.contains(pos) && resp.drag_started_by(egui::PointerButton::Primary) {
             let b0 = snap(beat_of(pos.x, sx), grid.max(0.25));
             let shift = ui.input(|i| i.modifiers.shift);
             st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: if shift { DragKind::Punch { from: b0 } } else { DragKind::Loop { from: b0 } } });
@@ -253,7 +305,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    if resp.drag_started() && st.ui.pl_drag.is_none() {
+    if resp.drag_started_by(egui::PointerButton::Primary) && st.ui.pl_drag.is_none() {
         if let Some(pos) = resp.interact_pointer_pos().filter(|p| timeline.contains(*p)) {
             if let Some((track, take)) = take_at(pos.y) {
                 st.ui.pl_drag = Some(Drag { clip: 0, track, kind: DragKind::Comp { take, from: snap(beat_of(pos.x, sx), grid) } });
@@ -395,7 +447,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             let beat = beat_of(pos.x, sx);
             let hit = clip_at(pos);
             if resp.secondary_clicked() {
-                if let Some((_, cid, _)) = hit {
+                if ui.input(|i| i.modifiers.ctrl) {
+                    // Ctrl + right-click is zoom out.
+                } else if let Some((_, cid, _)) = hit {
                     st.session.edit("Delete clip", |p| dragon_engine::edit::delete_clips(p, &[cid]));
                     st.ui.clips.retain(|c| *c != cid);
                 }
@@ -680,6 +734,8 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
         }
         ui.checkbox(&mut st.settings.follow_playhead, "Follow");
         ui.separator();
-        ui.label(RichText::new("Ctrl+wheel zoom · Shift+wheel scroll · drag ruler = loop (Shift = punch) · right-click deletes · double-click opens").small().color(theme::TEXT_DIM));
+        ui.label(
+            RichText::new("Ctrl+right-drag zoom to area · Ctrl+right-click zoom out · Ctrl+wheel zoom · Alt+wheel track height · middle-drag pan · drag ruler = loop · right-click deletes").small().color(theme::TEXT_DIM),
+        );
     });
 }

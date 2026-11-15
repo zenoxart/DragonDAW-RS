@@ -3,6 +3,7 @@
 //! humanize, chord progressions, velocity lane and ghost notes of the other channels.
 
 use super::keyboard::is_black;
+use super::nav::{self, AreaZoom, ViewTarget};
 use super::widgets::{self, snap_floor};
 use crate::state::{State, Tool};
 use crate::theme;
@@ -19,11 +20,26 @@ const RULER: f32 = 18.0;
 
 #[derive(Debug, Clone)]
 pub enum Drag {
-    Move { anchor_tick: i64, anchor_pitch: i32, orig: Vec<(usize, Note)> },
-    Resize { anchor_tick: i64, orig: Vec<(usize, Note)> },
-    Select { from: Pos2 },
+    /// Moving the selected notes: `grab` is the note under the pointer (its start snaps to the grid, the rest
+    /// keep their offsets), `last_dp` the last transposition (to audition pitch changes).
+    Move {
+        anchor_tick: i64,
+        anchor_pitch: i32,
+        grab: Note,
+        last_dp: i32,
+        orig: Vec<(usize, Note)>,
+    },
+    Resize {
+        anchor_tick: i64,
+        orig: Vec<(usize, Note)>,
+    },
+    Select {
+        from: Pos2,
+    },
     Velocity,
-    Paint { last_tick: u32 },
+    Paint {
+        last_tick: u32,
+    },
 }
 
 pub fn show(ui: &mut Ui, st: &mut State) {
@@ -72,23 +88,77 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     p.rect_filled(rect, 0.0, theme::BG);
     let grid = Rect::from_min_max(Pos2::new(rect.left() + KEYS_W, rect.top() + RULER), Pos2::new(rect.right(), rect.bottom() - VEL_H));
     let vel = Rect::from_min_max(Pos2::new(grid.left(), grid.bottom() + 4.0), rect.max);
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("pr.grid"), grid));
+    let max_y = |kh: f32| (128.0 * kh - grid.height()).max(0.0);
+    // Animated zoom.
+    if let Some(t) = st.ui.pr_anim {
+        let cur = ViewTarget { zoom: st.ui.piano_zoom as f64, x: st.ui.pr_x, vscale: st.ui.key_height, y: st.ui.pr_y };
+        let (n, running) = nav::step(cur, t);
+        st.ui.piano_zoom = n.zoom as f32;
+        st.ui.pr_x = n.x.max(0.0);
+        st.ui.key_height = n.vscale;
+        st.ui.pr_y = n.y.clamp(0.0, max_y(n.vscale));
+        if running {
+            ui.ctx().request_repaint();
+        } else {
+            st.ui.pr_anim = None;
+        }
+    }
     let kh = st.ui.key_height;
     let zoom = st.ui.piano_zoom as f64;
 
-    // scroll / zoom
+    // Ctrl + right-drag: zoom into the box (time and key height); Ctrl + right-click: zoom out.
+    match nav::area_zoom(ui, grid, "piano") {
+        Some(AreaZoom::To(r)) => {
+            let b0 = st.ui.pr_x + (r.left() - grid.left()) as f64 / zoom;
+            let b1 = st.ui.pr_x + (r.right() - grid.left()) as f64 / zoom;
+            let nz = (grid.width() as f64 / (b1 - b0).max(1e-3)).clamp(12.0, 800.0);
+            let nkh = if r.height() > kh * 2.0 { (kh * grid.height() / r.height()).clamp(6.0, 40.0) } else { kh };
+            let rows_top = (r.top() - grid.top() + st.ui.pr_y) / kh;
+            st.ui.pr_anim = Some(ViewTarget { zoom: nz, x: b0.max(0.0), vscale: nkh, y: (rows_top * nkh).clamp(0.0, max_y(nkh)) });
+        }
+        Some(AreaZoom::Out(at)) => {
+            let b = st.ui.pr_x + (at.x - grid.left()) as f64 / zoom;
+            let nz = (zoom / 2.0).clamp(12.0, 800.0);
+            let nkh = (kh / 1.5).max(10.0).min(kh);
+            let row = (at.y - grid.top() + st.ui.pr_y) / kh;
+            let ny = row * nkh - (at.y - grid.top());
+            st.ui.pr_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - grid.left()) as f64 / nz).max(0.0), vscale: nkh, y: ny.clamp(0.0, max_y(nkh)) });
+        }
+        None => {}
+    }
+    // Middle-drag pans.
+    let pan = nav::middle_drag(ui, rect);
+    if pan != Vec2::ZERO {
+        st.ui.pr_anim = None;
+        st.ui.pr_x = (st.ui.pr_x - pan.x as f64 / zoom).max(0.0);
+        st.ui.pr_y = (st.ui.pr_y - pan.y).clamp(0.0, max_y(kh));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    // Wheel: scroll; Shift = horizontal; Ctrl = zoom around the mouse; Alt = key height around the mouse.
     if resp.hovered() {
-        let (scroll, zoom_d, shift) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift));
-        if zoom_d != 1.0 {
+        let (scroll, zoom_d, shift, alt) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift, i.modifiers.alt));
+        if zoom_d != 1.0 || scroll != Vec2::ZERO {
+            st.ui.pr_anim = None;
+        }
+        let mouse = ui.input(|i| i.pointer.hover_pos()).unwrap_or(grid.center());
+        if alt && scroll.y != 0.0 {
+            let nkh = (kh * (1.0 + scroll.y / 300.0)).clamp(6.0, 40.0);
+            let my = mouse.y - grid.top();
+            st.ui.pr_y = ((st.ui.pr_y + my) * nkh / kh - my).clamp(0.0, max_y(nkh));
+            st.ui.key_height = nkh;
+        } else if zoom_d != 1.0 {
+            let b = st.ui.pr_x + (mouse.x - grid.left()) as f64 / zoom;
             st.ui.piano_zoom = (st.ui.piano_zoom * zoom_d).clamp(12.0, 800.0);
+            st.ui.pr_x = (b - (mouse.x - grid.left()) as f64 / st.ui.piano_zoom as f64).max(0.0);
         } else if shift || scroll.x != 0.0 {
             st.ui.pr_x = (st.ui.pr_x - (if shift { scroll.y } else { scroll.x }) as f64 / zoom).max(0.0);
         } else {
-            st.ui.pr_y = (st.ui.pr_y - scroll.y).clamp(0.0, 128.0 * kh - grid.height());
-        }
-        if ui.input(|i| i.modifiers.alt) && scroll.y != 0.0 {
-            st.ui.key_height = (kh + scroll.y / 60.0).clamp(6.0, 30.0);
+            st.ui.pr_y = (st.ui.pr_y - scroll.y).clamp(0.0, max_y(kh));
         }
     }
+    let kh = st.ui.key_height;
+    let zoom = st.ui.piano_zoom as f64;
     let (sx, sy) = (st.ui.pr_x, st.ui.pr_y);
     let x_of = |tick: f64| grid.left() + ((tick / PPQ as f64 - sx) * zoom) as f32;
     let tick_of = |x: f32| ((sx + (x - grid.left()) as f64 / zoom) * PPQ as f64).max(0.0);
@@ -104,9 +174,27 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     for pitch in bottom_pitch..=top_pitch {
         let y = y_of(pitch);
         let row = Rect::from_x_y_ranges(grid.x_range(), y..=y + kh);
-        let in_scale = scale.map(|s| edit::in_scale(pitch, root, s)).unwrap_or(true);
-        let col = if is_black(pitch) { Color32::from_gray(26) } else { Color32::from_gray(34) };
-        gp.rect_filled(row, 0.0, if in_scale { col } else { col.gamma_multiply(0.6) });
+        let col = match scale {
+            // With a scale, in-scale rows are lit (the root more) and the others stay dark.
+            Some(sc) => {
+                if (pitch as i32 - root as i32).rem_euclid(12) == 0 {
+                    theme::ACCENT.lerp_to_gamma(Color32::from_gray(34), 0.62)
+                } else if edit::in_scale(pitch, root, sc) {
+                    theme::ACCENT_2.lerp_to_gamma(Color32::from_gray(38), 0.82)
+                } else {
+                    Color32::from_gray(20)
+                }
+            }
+            None => {
+                if is_black(pitch) {
+                    Color32::from_gray(26)
+                } else {
+                    Color32::from_gray(34)
+                }
+            }
+        };
+        gp.rect_filled(row, 0.0, col);
+        gp.line_segment([row.left_bottom(), row.right_bottom()], Stroke::new(0.5_f32, Color32::from_black_alpha(90)));
         if pitch % 12 == 0 {
             gp.line_segment([row.left_bottom(), row.right_bottom()], Stroke::new(1.0_f32, theme::GRID_BAR));
         }
@@ -206,6 +294,12 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 Color32::from_gray(225)
             },
         );
+        if let Some(sc) = scale {
+            if edit::in_scale(pitch, root, sc) {
+                let is_root = (pitch as i32 - root as i32).rem_euclid(12) == 0;
+                kp.circle_filled(Pos2::new(r.left() + 6.0, r.center().y), if is_root { 3.5 } else { 2.5 }, if is_root { theme::ACCENT } else { theme::ACCENT_2 });
+            }
+        }
         if pitch % 12 == 0 || kh >= 13.0 && !black {
             kp.text(r.right_center() - Vec2::new(3.0, 0.0), egui::Align2::RIGHT_CENTER, note_name(pitch), egui::FontId::proportional(9.0), if black { Color32::WHITE } else { Color32::BLACK });
         }
@@ -240,23 +334,60 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    if resp.drag_started() && st.ui.pr_drag.is_none() {
-        if let Some(pos) = resp.interact_pointer_pos() {
+    if resp.drag_started_by(egui::PointerButton::Primary) && st.ui.pr_drag.is_none() {
+        // Hit-test where the button went down, not where the drag threshold was crossed.
+        if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()) {
+            let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.ctrl));
             if vel.contains(pos) {
                 st.ui.pr_drag = Some(Drag::Velocity);
             } else if grid.contains(pos) {
                 match note_at(pos) {
-                    Some((i, r)) if tool != Tool::Erase && tool != Tool::Slice => {
+                    Some((i, r)) if tool != Tool::Erase && tool != Tool::Slice && tool != Tool::Mute => {
                         if !st.ui.notes.contains(&i) {
                             st.ui.notes = vec![i];
                         }
-                        let orig: Vec<(usize, Note)> = st.ui.notes.iter().filter_map(|k| notes.get(*k).map(|n| (*k, *n))).collect();
                         let anchor_tick = tick_of(pos.x) as i64;
-                        st.ui.pr_drag = Some(if pos.x > r.right() - 5.0 { Drag::Resize { anchor_tick, orig } } else { Drag::Move { anchor_tick, anchor_pitch: pitch_of(pos.y) as i32, orig } });
+                        if pos.x > r.right() - 5.0 && !shift {
+                            let orig: Vec<(usize, Note)> = st.ui.notes.iter().filter_map(|k| notes.get(*k).map(|n| (*k, *n))).collect();
+                            st.ui.pr_drag = Some(Drag::Resize { anchor_tick, orig });
+                        } else {
+                            // Shift-drag moves copies and leaves the originals in place.
+                            let mut sel = st.ui.notes.clone();
+                            if shift {
+                                let copies: Vec<Note> = sel.iter().filter_map(|k| notes.get(*k).copied()).collect();
+                                let first = notes.len();
+                                st.session.gesture("Copy notes", |p| {
+                                    if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                                        c.notes.extend(copies.iter().copied());
+                                    }
+                                });
+                                sel = (first..first + copies.len()).collect();
+                                st.ui.notes = sel.clone();
+                            }
+                            let cur = st.session.project.pattern(pat).and_then(|pt| pt.channels.get(&ch));
+                            let orig: Vec<(usize, Note)> = sel.iter().filter_map(|k| cur.and_then(|c| c.notes.get(*k)).map(|n| (*k, *n))).collect();
+                            let grab = notes[i];
+                            st.ui.pr_drag = Some(Drag::Move { anchor_tick, anchor_pitch: pitch_of(pos.y) as i32, grab, last_dp: 0, orig });
+                        }
                         preview(st, notes[i].pitch, notes[i].velocity);
                     }
-                    None if tool == Tool::Select || ui.input(|i| i.modifiers.ctrl) => st.ui.pr_drag = Some(Drag::Select { from: pos }),
+                    None if tool == Tool::Select || ctrl => st.ui.pr_drag = Some(Drag::Select { from: pos }),
                     None if tool == Tool::Paint => st.ui.pr_drag = Some(Drag::Paint { last_tick: u32::MAX }),
+                    None if tool == Tool::Draw => {
+                        // FL style: press on empty space draws a note and keeps it on the pointer.
+                        let start = snap_tick_floor(tick_of(pos.x)) as u32;
+                        let pitch = snap_pitch(st, pitch_of(pos.y));
+                        let n = Note { pitch, start, length: st.ui.last_note_len, velocity: 0.78, ..Default::default() };
+                        let k = notes.len();
+                        st.session.gesture("Add note", |p| {
+                            if let Some(pt) = p.pattern_mut(pat) {
+                                pt.channels.entry(ch).or_default().notes.push(n);
+                            }
+                        });
+                        st.ui.notes = vec![k];
+                        preview(st, pitch, 0.78);
+                        st.ui.pr_drag = Some(Drag::Move { anchor_tick: tick_of(pos.x) as i64, anchor_pitch: pitch as i32, grab: n, last_dp: 0, orig: vec![(k, n)] });
+                    }
                     _ => {}
                 }
             }
@@ -264,11 +395,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
     if let (Some(d), Some(pos)) = (st.ui.pr_drag.clone(), ui.input(|i| i.pointer.interact_pos())) {
         match d {
-            Drag::Move { anchor_tick, anchor_pitch, orig } => {
-                let dt = snap_tick(tick_of(pos.x) - anchor_tick as f64) as i64;
-                let dp = pitch_of(pos.y) as i32 - anchor_pitch;
+            Drag::Move { anchor_tick, anchor_pitch, grab, last_dp, orig } => {
+                // The grabbed note's start lands on the grid; the others keep their offsets to it.
+                let raw = grab.start as f64 + (tick_of(pos.x) - anchor_tick as f64);
+                let dt = if ui.input(|i| i.modifiers.alt) { raw.round() as i64 - grab.start as i64 } else { snap_tick(raw) as i64 - grab.start as i64 };
+                let mut dp = pitch_of(pos.y) as i32 - anchor_pitch;
+                let (lo, hi) = orig.iter().fold((127i32, 0i32), |(lo, hi), (_, n)| (lo.min(n.pitch as i32), hi.max(n.pitch as i32)));
+                dp = dp.clamp(-lo, 127 - hi);
                 let min_start = orig.iter().map(|(_, n)| n.start as i64).min().unwrap_or(0);
                 let dt = dt.max(-min_start);
+                if dp != last_dp {
+                    preview(st, (grab.pitch as i32 + dp).clamp(0, 127) as u8, grab.velocity);
+                    if let Some(Drag::Move { last_dp, .. }) = &mut st.ui.pr_drag {
+                        *last_dp = dp;
+                    }
+                }
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 st.session.gesture("Move notes", |p| {
                     if let Some(v) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
                         for (i, n) in &orig {
@@ -344,7 +486,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if let Some(pos) = resp.interact_pointer_pos().filter(|p| grid.contains(*p)) {
             let hit = note_at(pos);
             let tick = tick_of(pos.x);
-            if resp.secondary_clicked() || (tool == Tool::Erase && hit.is_some()) {
+            if resp.secondary_clicked() && ui.input(|i| i.modifiers.ctrl) {
+                // Ctrl + right-click: zoom out (handled by the navigation).
+            } else if resp.secondary_clicked() || (tool == Tool::Erase && hit.is_some()) {
                 if let Some((i, _)) = hit {
                     st.session.edit("Delete note", |p| {
                         if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
@@ -407,6 +551,52 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if let Some((_, r)) = note_at(pos) {
             if pos.x > r.right() - 5.0 {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            } else if matches!(tool, Tool::Draw | Tool::Paint | Tool::Select) && st.ui.pr_drag.is_none() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+        }
+    }
+    // Arrow keys nudge the selection: ←/→ by the snap grid, ↑/↓ by a semitone (Shift: an octave).
+    if resp.hovered() && !st.ui.notes.is_empty() && !ui.ctx().wants_keyboard_input() {
+        let (l, r, u, d, shift, ctrl) = ui.input_mut(|i| {
+            let ctrl = i.modifiers.ctrl;
+            let take = |i: &mut egui::InputState, k: egui::Key| !ctrl && i.consume_key(i.modifiers, k);
+            (take(i, egui::Key::ArrowLeft), take(i, egui::Key::ArrowRight), take(i, egui::Key::ArrowUp), take(i, egui::Key::ArrowDown), i.modifiers.shift, ctrl)
+        });
+        if !ctrl && (l || r || u || d) {
+            let step = if grid_ticks > 0.0 { grid_ticks as i64 } else { (PPQ / 4) as i64 };
+            let dt = if l {
+                -step
+            } else if r {
+                step
+            } else {
+                0
+            };
+            let dp = (if u {
+                1
+            } else if d {
+                -1
+            } else {
+                0
+            }) * if shift { 12 } else { 1 };
+            let sel = st.ui.notes.clone();
+            let ok = sel.iter().filter_map(|i| notes.get(*i)).all(|n| n.start as i64 + dt >= 0 && (0..=127).contains(&(n.pitch as i32 + dp)));
+            if ok {
+                st.session.edit("Nudge notes", |p| {
+                    if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                        for i in &sel {
+                            if let Some(n) = c.notes.get_mut(*i) {
+                                n.start = (n.start as i64 + dt) as u32;
+                                n.pitch = (n.pitch as i32 + dp) as u8;
+                            }
+                        }
+                    }
+                });
+                if dp != 0 {
+                    if let Some(n) = sel.first().and_then(|i| notes.get(*i)) {
+                        preview(st, (n.pitch as i32 + dp) as u8, n.velocity);
+                    }
+                }
             }
         }
     }
@@ -443,19 +633,26 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 ui.selectable_value(&mut st.ui.snap, *v, *n);
             }
         });
-        let scale_name = st.ui.scale.map(|i| format!("{} {}", note_name(st.ui.scale_root).trim_end_matches(char::is_numeric), SCALES[i].0)).unwrap_or("No scale".into());
-        egui::ComboBox::from_id_salt("pr.scale").selected_text(scale_name).width(130.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut st.ui.scale, None, "No scale");
-            for (i, (n, _)) in SCALES.iter().enumerate() {
-                ui.selectable_value(&mut st.ui.scale, Some(i), *n);
+        // Key (root note) and scale are picked separately; the grid lights up the notes of the scale.
+        const KEYS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        ui.label(RichText::new("Key").small().color(theme::TEXT_DIM));
+        egui::ComboBox::from_id_salt("pr.key").selected_text(KEYS[st.ui.scale_root as usize % 12]).width(46.0).show_ui(ui, |ui| {
+            for (r, k) in KEYS.iter().enumerate() {
+                ui.selectable_value(&mut st.ui.scale_root, r as u8, *k);
             }
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                for r in 0..12u8 {
-                    ui.selectable_value(&mut st.ui.scale_root, r, note_name(r + 60).trim_end_matches(char::is_numeric).to_string());
-                }
-            });
         });
+        let scale_name = st.ui.scale.map(|i| SCALES[i].0).unwrap_or("No scale");
+        egui::ComboBox::from_id_salt("pr.scale").selected_text(scale_name).width(150.0).height(420.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut st.ui.scale, None, "No scale");
+            for (i, (n, iv)) in SCALES.iter().enumerate() {
+                let notes: Vec<&str> = iv.iter().map(|x| KEYS[(st.ui.scale_root + x) as usize % 12]).collect();
+                ui.selectable_value(&mut st.ui.scale, Some(i), *n).on_hover_text(notes.join(" "));
+            }
+        });
+        if let Some(i) = st.ui.scale {
+            let notes: Vec<&str> = SCALES[i].1.iter().map(|x| KEYS[(st.ui.scale_root + x) as usize % 12]).collect();
+            ui.label(RichText::new(notes.join(" ")).small().monospace().color(theme::ACCENT_2));
+        }
         let chord_name = if st.ui.chord == 0 { "Single notes".to_string() } else { CHORDS[st.ui.chord - 1].0.to_string() };
         egui::ComboBox::from_id_salt("pr.chord").selected_text(format!("Stamp: {chord_name}")).width(130.0).show_ui(ui, |ui| {
             ui.selectable_value(&mut st.ui.chord, 0, "Single notes");

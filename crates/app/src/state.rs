@@ -95,6 +95,11 @@ pub struct UiState {
     pub pl_y: f32,
     pub pr_x: f64,
     pub pr_y: f32,
+    /// Playlist vertical zoom (track heights are multiplied by it).
+    pub pl_vzoom: f32,
+    /// Running zoom animations: target (zoom, x, vertical zoom / key height, y).
+    pub pl_anim: Option<crate::views::nav::ViewTarget>,
+    pub pr_anim: Option<crate::views::nav::ViewTarget>,
     pub pl_drag: Option<crate::views::playlist::Drag>,
     pub pr_drag: Option<crate::views::piano_roll::Drag>,
     pub waveforms: std::collections::HashMap<PathBuf, std::sync::Arc<Vec<(f32, f32)>>>,
@@ -143,6 +148,9 @@ impl UiState {
             pl_y: 0.0,
             pr_x: 0.0,
             pr_y: 60.0 * 14.0,
+            pl_vzoom: 1.0,
+            pl_anim: None,
+            pr_anim: None,
             pl_drag: None,
             pr_drag: None,
             waveforms: Default::default(),

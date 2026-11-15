@@ -176,6 +176,22 @@ pub const SCALES: &[(&str, &[u8])] = &[
     ("Pentatonic minor", &[0, 3, 5, 7, 10]),
     ("Blues", &[0, 3, 5, 6, 7, 10]),
     ("Chromatic", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    ("Lydian", &[0, 2, 4, 6, 7, 9, 11]),
+    ("Locrian", &[0, 1, 3, 5, 6, 8, 10]),
+    ("Melodic minor", &[0, 2, 3, 5, 7, 9, 11]),
+    ("Harmonic major", &[0, 2, 4, 5, 7, 8, 11]),
+    ("Phrygian dominant", &[0, 1, 4, 5, 7, 8, 10]),
+    ("Hungarian minor", &[0, 2, 3, 6, 7, 8, 11]),
+    ("Double harmonic", &[0, 1, 4, 5, 7, 8, 11]),
+    ("Neapolitan minor", &[0, 1, 3, 5, 7, 8, 11]),
+    ("Whole tone", &[0, 2, 4, 6, 8, 10]),
+    ("Diminished (H-W)", &[0, 1, 3, 4, 6, 7, 9, 10]),
+    ("Diminished (W-H)", &[0, 2, 3, 5, 6, 8, 9, 11]),
+    ("Major blues", &[0, 2, 3, 4, 7, 9]),
+    ("Bebop dominant", &[0, 2, 4, 5, 7, 9, 10, 11]),
+    ("Hirajoshi", &[0, 2, 3, 7, 8]),
+    ("In (Japanese)", &[0, 1, 5, 7, 8]),
+    ("Egyptian", &[0, 2, 5, 7, 10]),
 ];
 
 pub fn in_scale(pitch: u8, root: u8, scale: &[u8]) -> bool {
