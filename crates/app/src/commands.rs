@@ -12,7 +12,10 @@ use redhive_contracts::{IconRef, TextKey};
 /// (id, label, menu path, section, shortcut)
 /// Shortcuts follow FL Studio's defaults: Ctrl+N saves a new version, Ctrl+R / Ctrl+Shift+R export WAV /
 /// MP3, Ctrl+Z undoes (pressed again it redoes, like FL), Ctrl+Alt+Z steps further back, Ctrl+B duplicates,
-/// Ctrl+D deselects, Ctrl+Q quick-quantizes, Ctrl+L makes legato, Alt+R randomizes, Alt+S strums, Alt+T adds
+/// Ctrl+D deselects, Alt+Q quantizes and Shift+Q quick-quantizes, Space plays / stops, Ctrl+Space pauses,
+/// Backspace toggles snap, Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Shift+I inverts,
+/// Ctrl+G glues, Ctrl+U chops, Alt+F flams, Ctrl+H stops all sound, Ctrl+P toggles precount, Alt+P the picker,
+/// Insert slices at the playhead, Ctrl+L makes legato, Alt+R randomizes, Alt+S strums, Alt+T adds
 /// a time marker, L switches pattern / song, Ctrl+M the metronome, Ctrl+T the typing keyboard, F4 the
 /// next empty pattern, F5–F11 the windows, Alt+F8 the browser, F12 closes the floating windows, and the
 /// editor tools are P (draw), B (paint), D (delete), T (mute), C (slice) and E (select).
@@ -42,11 +45,23 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("edit.duplicate", "Duplicate selection", "Edit", 1, "Ctrl+B"),
     ("edit.select_all", "Select all", "Edit", 1, "Ctrl+A"),
     ("edit.deselect", "Deselect all", "Edit", 1, "Ctrl+D"),
-    ("edit.split", "Split clips at playhead", "Edit", 2, ""),
-    ("edit.quantize", "Quick quantize", "Edit/Notes", 3, "Ctrl+Q"),
+    ("edit.split", "Slice clips at playhead", "Edit", 2, "Insert"),
+    ("edit.quantize", "Quantize", "Edit/Notes", 3, "Alt+Q"),
+    ("edit.quick_quantize", "Quick quantize (piano roll) / clip starts (playlist)", "Edit/Notes", 3, "Shift+Q"),
     ("edit.legato", "Legato", "Edit/Notes", 3, "Ctrl+L"),
     ("edit.humanize", "Randomize (humanize)", "Edit/Notes", 3, "Alt+R"),
     ("edit.strum", "Strum chords", "Edit/Notes", 3, "Alt+S"),
+    ("edit.flam", "Flam", "Edit/Notes", 3, "Alt+F"),
+    ("edit.glue", "Glue selected notes", "Edit/Notes", 3, "Ctrl+G"),
+    ("edit.chop", "Quick chop (at the snap)", "Edit/Notes", 3, "Ctrl+U"),
+    ("edit.mute_sel", "Mute selection", "Edit", 2, "Alt+M"),
+    ("edit.unmute_sel", "Unmute selection", "Edit", 2, "Shift+M"),
+    ("edit.invert_sel", "Invert selection", "Edit", 1, "Shift+I"),
+    ("edit.move_left", "Move selection left", "Edit/Move", 7, "Shift+Left"),
+    ("edit.move_right", "Move selection right", "Edit/Move", 7, "Shift+Right"),
+    ("edit.move_up", "Move selection up", "Edit/Move", 7, "Shift+Up"),
+    ("edit.move_down", "Move selection down", "Edit/Move", 7, "Shift+Down"),
+    ("edit.snap_toggle", "Toggle snap", "Edit", 2, "Backspace"),
     ("edit.transpose_up", "Transpose +1 octave", "Edit/Notes", 4, "Ctrl+Up"),
     ("edit.transpose_down", "Transpose −1 octave", "Edit/Notes", 4, "Ctrl+Down"),
     ("edit.capture_midi", "Dump score log (retro record)", "Edit/Notes", 5, ""),
@@ -57,6 +72,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tool.slice", "Slice tool", "Edit/Tools", 6, "C"),
     ("tool.select", "Select tool", "Edit/Tools", 6, "E"),
     ("transport.play", "Play / stop", "Transport", 0, "Space"),
+    ("transport.pause", "Play / pause", "Transport", 0, "Ctrl+Space"),
+    ("transport.panic", "Stop sound (panic)", "Transport", 0, "Ctrl+H"),
     ("transport.stop", "Stop", "Transport", 0, ""),
     ("transport.record", "Record", "Transport", 0, "R"),
     ("transport.home", "Go to start", "Transport", 1, "Home"),
@@ -65,6 +82,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("transport.punch", "Toggle punch in/out", "Transport", 2, ""),
     ("transport.metronome", "Toggle metronome", "Transport", 3, "Ctrl+M"),
     ("transport.tap", "Tap tempo", "Transport", 3, ""),
+    ("transport.precount", "Toggle recording precount", "Transport", 3, "Ctrl+P"),
     ("transport.typing_keyboard", "Typing keyboard to piano", "Transport", 4, "Ctrl+T"),
     ("add.track", "Audio track", "Add", 0, ""),
     ("add.pattern", "Next empty pattern", "Add", 0, "F4"),
@@ -80,6 +98,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("view.mixer", "Mixer", "View", 0, "F9"),
     ("view.launcher", "Performance (clip launcher)", "View", 0, ""),
     ("view.browser", "Browser", "View", 1, "Alt+F8"),
+    ("view.picker", "Picker panel", "View", 1, "Alt+P"),
     ("view.master", "Mastering & loudness", "View", 1, ""),
     ("view.video", "Video", "View", 1, ""),
     ("view.project", "Project info & tempo", "View", 1, "F11"),
@@ -363,7 +382,121 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 _ => st.toast("Nothing played recently", Severity::Info),
             }
         }
-        "transport.play" => st.toggle_play(),
+        "transport.play" => {
+            // FL: Space starts, and stops (back to the start); Ctrl+Space pauses.
+            if st.transport().playing && !st.audio.is_recording() {
+                st.stop();
+            } else {
+                st.toggle_play();
+            }
+        }
+        "transport.pause" => st.toggle_play(),
+        "transport.panic" => {
+            st.audio.send(Cmd::Live(dragon_engine::render::LiveEvent::AllNotesOff));
+            st.ui.status = "All sound stopped".into();
+        }
+        "transport.precount" => {
+            let on = st.session.project.metronome.count_in_bars == 0;
+            st.session.edit("Precount", |p| p.metronome.count_in_bars = if on { 1 } else { 0 });
+            st.ui.status = format!("Recording precount {}", if on { "on" } else { "off" });
+        }
+        "view.picker" => st.ui.pl_picker = !st.ui.pl_picker,
+        "edit.snap_toggle" => {
+            if st.ui.snap > 0.0 {
+                st.ui.snap_saved = st.ui.snap;
+                st.ui.snap = 0.0;
+            } else {
+                st.ui.snap = if st.ui.snap_saved > 0.0 { st.ui.snap_saved } else { 0.25 };
+            }
+            st.ui.status = if st.ui.snap > 0.0 { format!("Snap {} beat", st.ui.snap) } else { "Snap off".into() };
+        }
+        "edit.quick_quantize" if st.ui.editor == crate::state::Editor::Playlist => {
+            let (ids, grid) = (st.ui.clips.clone(), if st.ui.snap > 0.0 { st.ui.snap } else { 1.0 });
+            st.session.edit("Quantize clip starts", |p| {
+                for c in p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.is_empty() || ids.contains(&c.id)) {
+                    c.start = (c.start / grid).round() * grid;
+                }
+            });
+        }
+        "edit.quick_quantize" => {
+            let grid = (PPQ as f64 * st.ui.snap.max(0.25)) as u32;
+            notes_apply(st, "Quick quantize", |v| dragon_engine::edit::quantize(v, grid.max(1), 1.0, false));
+        }
+        "edit.flam" => notes_edit(st, "Flam", |n, sel| {
+            let v: Vec<Note> = sel.iter().map(|i| n[*i]).collect();
+            let extra: Vec<Note> = dragon_engine::edit::flam(&v, (PPQ / 16).max(1)).into_iter().skip(v.len()).collect();
+            n.extend(extra);
+            sel.to_vec()
+        }),
+        "edit.glue" => notes_edit(st, "Glue notes", |n, sel| {
+            // Joins selected notes of the same pitch that touch or overlap into one.
+            let mut idx: Vec<usize> = sel.to_vec();
+            idx.sort_by_key(|i| (n[*i].pitch, n[*i].start));
+            let mut drop = Vec::new();
+            let mut k = 0;
+            while k < idx.len() {
+                let a = idx[k];
+                let mut j = k + 1;
+                while j < idx.len() && n[idx[j]].pitch == n[a].pitch && n[idx[j]].start <= n[a].end() {
+                    let end = n[a].end().max(n[idx[j]].end());
+                    n[a].length = end - n[a].start;
+                    drop.push(idx[j]);
+                    j += 1;
+                }
+                k = j;
+            }
+            drop.sort_unstable();
+            for i in drop.iter().rev() {
+                n.remove(*i);
+            }
+            Vec::new()
+        }),
+        "edit.chop" => {
+            let step = ((PPQ as f64 * if st.ui.snap > 0.0 { st.ui.snap } else { 0.25 }) as u32).max(1);
+            notes_edit(st, "Chop notes", |n, sel| {
+                let mut out = Vec::new();
+                let mut keep: Vec<Note> = Vec::new();
+                for (i, note) in n.iter().enumerate() {
+                    if sel.contains(&i) {
+                        let mut t = note.start;
+                        while t < note.end() {
+                            let len = step.min(note.end() - t);
+                            out.push(Note { start: t, length: len, ..*note });
+                            t += len;
+                        }
+                    } else {
+                        keep.push(*note);
+                    }
+                }
+                let first = keep.len();
+                keep.extend(out);
+                *n = keep;
+                (first..n.len()).collect()
+            });
+        }
+        "edit.mute_sel" | "edit.unmute_sel" => {
+            let mute = id == "edit.mute_sel";
+            if !st.ui.clips.is_empty() {
+                let ids = st.ui.clips.clone();
+                st.session.edit(if mute { "Mute clips" } else { "Unmute clips" }, |p| {
+                    for c in p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)) {
+                        c.muted = mute;
+                    }
+                });
+            } else {
+                notes_apply(st, if mute { "Mute notes" } else { "Unmute notes" }, |v| v.iter_mut().for_each(|n| n.muted = mute));
+            }
+        }
+        "edit.invert_sel" if st.ui.editor == crate::state::Editor::Playlist => {
+            let sel = std::mem::take(&mut st.ui.clips);
+            st.ui.clips = st.session.project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.id)).filter(|c| !sel.contains(c)).collect();
+        }
+        "edit.invert_sel" => {
+            let n = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|x| x.notes.len()).unwrap_or(0);
+            let sel = std::mem::take(&mut st.ui.notes);
+            st.ui.notes = (0..n).filter(|i| !sel.contains(i)).collect();
+        }
+        "edit.move_left" | "edit.move_right" | "edit.move_up" | "edit.move_down" => move_selection(st, id),
         "transport.stop" => st.stop(),
         "transport.record" => {
             if st.transport().recording || st.audio.is_recording() {
@@ -665,6 +798,53 @@ fn notes_edit(st: &mut State, label: &str, f: impl FnOnce(&mut Vec<Note>, &[usiz
     });
     if let Some(s) = new_sel {
         st.ui.notes = s;
+    }
+}
+
+/// FL's Shift+arrows: clips move by the snap (left/right) or to the neighbouring track (up/down);
+/// notes move by the snap or a semitone.
+fn move_selection(st: &mut State, id: &str) {
+    let step = if st.ui.snap > 0.0 { st.ui.snap } else { 0.25 };
+    if st.ui.editor == crate::state::Editor::Playlist && !st.ui.clips.is_empty() {
+        let ids = st.ui.clips.clone();
+        st.session.edit("Move clips", |p| match id {
+            "edit.move_left" | "edit.move_right" => {
+                let d = if id == "edit.move_left" { -step } else { step };
+                for c in p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)) {
+                    c.start = (c.start + d).max(0.0);
+                }
+            }
+            _ => {
+                let n = p.tracks.len();
+                let up = id == "edit.move_up";
+                // Refuse when any selected clip would leave the track list.
+                let edge = p.tracks.iter().enumerate().any(|(k, t)| t.clips.iter().any(|c| ids.contains(&c.id)) && if up { k == 0 } else { k + 1 >= n });
+                if edge {
+                    return;
+                }
+                let mut moved: Vec<(usize, dragon_engine::model::Clip)> = Vec::new();
+                for (k, t) in p.tracks.iter_mut().enumerate() {
+                    let (go, stay): (Vec<_>, Vec<_>) = t.clips.drain(..).partition(|c| ids.contains(&c.id));
+                    t.clips = stay;
+                    moved.extend(go.into_iter().map(|c| (if up { k - 1 } else { k + 1 }, c)));
+                }
+                for (k, c) in moved {
+                    p.tracks[k].clips.push(c);
+                }
+            }
+        });
+    } else {
+        let ticks = ((PPQ as f64 * step) as i64).max(1);
+        notes_apply(st, "Move notes", |v| {
+            for n in v.iter_mut() {
+                match id {
+                    "edit.move_left" => n.start = (n.start as i64 - ticks).max(0) as u32,
+                    "edit.move_right" => n.start += ticks as u32,
+                    "edit.move_up" => n.pitch = (n.pitch + 1).min(127),
+                    _ => n.pitch = n.pitch.saturating_sub(1),
+                }
+            }
+        });
     }
 }
 

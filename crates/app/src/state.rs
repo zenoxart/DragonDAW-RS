@@ -94,6 +94,8 @@ pub struct UiState {
     pub notes: Vec<usize>,
     pub tool: Tool,
     pub snap: f64,
+    /// The snap restored when Backspace turns snapping back on.
+    pub snap_saved: f64,
     pub playlist_zoom: f32,
     pub piano_zoom: f32,
     pub key_height: f32,
@@ -166,6 +168,7 @@ impl UiState {
             notes: Vec::new(),
             tool: Tool::Draw,
             snap: 0.25,
+            snap_saved: 0.25,
             playlist_zoom: 28.0,
             piano_zoom: 96.0,
             key_height: 14.0,

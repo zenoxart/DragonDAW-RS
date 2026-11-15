@@ -166,9 +166,9 @@ fn arrow_keys_nudge_selected_notes() {
     h.frame(piano, vec![Event::PointerMoved(over)], Modifiers::NONE);
     let key = |k: egui::Key, m: Modifiers| vec![Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m }];
     h.frame(piano, key(egui::Key::ArrowRight, Modifiers::NONE), Modifiers::NONE);
-    h.frame(piano, key(egui::Key::ArrowUp, Modifiers::SHIFT), Modifiers::SHIFT);
+    h.frame(piano, key(egui::Key::ArrowUp, Modifiers::NONE), Modifiers::NONE);
     let n = h.notes();
-    assert_eq!((n[0].start, n[0].pitch), (PPQ + PPQ / 4, 72), "{n:?}");
+    assert_eq!((n[0].start, n[0].pitch), (PPQ + PPQ / 4, 61), "{n:?}");
 }
 
 #[test]
@@ -572,7 +572,33 @@ fn shortcuts_follow_fl_studio() {
         ("edit.duplicate", "Ctrl+B"),
         ("edit.deselect", "Ctrl+D"),
         ("edit.undo_toggle", "Ctrl+Z"),
-        ("edit.quantize", "Ctrl+Q"),
+        ("edit.quantize", "Alt+Q"),
+        ("edit.quick_quantize", "Shift+Q"),
+        ("transport.play", "Space"),
+        ("transport.pause", "Ctrl+Space"),
+        ("transport.panic", "Ctrl+H"),
+        ("transport.precount", "Ctrl+P"),
+        ("transport.record", "R"),
+        ("edit.snap_toggle", "Backspace"),
+        ("edit.split", "Insert"),
+        ("edit.mute_sel", "Alt+M"),
+        ("edit.unmute_sel", "Shift+M"),
+        ("edit.invert_sel", "Shift+I"),
+        ("edit.move_left", "Shift+Left"),
+        ("edit.move_up", "Shift+Up"),
+        ("edit.glue", "Ctrl+G"),
+        ("edit.chop", "Ctrl+U"),
+        ("edit.flam", "Alt+F"),
+        ("edit.humanize", "Alt+R"),
+        ("edit.strum", "Alt+S"),
+        ("edit.transpose_up", "Ctrl+Up"),
+        ("view.picker", "Alt+P"),
+        ("view.playlist", "F5"),
+        ("view.rack", "F6"),
+        ("view.piano", "F7"),
+        ("view.mixer", "F9"),
+        ("view.close_windows", "F12"),
+        ("file.export_midi", "Ctrl+Shift+M"),
         ("edit.legato", "Ctrl+L"),
         ("transport.metronome", "Ctrl+M"),
         ("transport.mode", "L"),
@@ -667,4 +693,47 @@ fn playlist_knife_cuts_across_tracks() {
         parts.sort_by(|a, b| a.0.total_cmp(&b.0));
         assert_eq!(parts, vec![(0.0, 4.0), (4.0, 4.0)], "track {tid}");
     }
+}
+
+/// FL note and clip commands: glue, chop, invert, mute, Shift+arrows, Backspace snap.
+#[test]
+fn fl_note_and_clip_commands() {
+    let a = Note { pitch: 60, start: 0, length: PPQ, velocity: 0.8, ..Default::default() };
+    let b = Note { pitch: 60, start: PPQ, length: PPQ, velocity: 0.8, ..Default::default() };
+    let c = Note { pitch: 64, start: 0, length: PPQ, velocity: 0.8, ..Default::default() };
+    let mut h = piano_with_notes(&[a, b, c]);
+    h.st.ui.editor = crate::state::Editor::PianoRoll;
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        assert!(crate::commands::execute(&mut h.st, &format!("dragon.{id}"), &ctx), "{id} handled");
+    };
+    h.st.ui.notes = vec![0, 1];
+    run(&mut h, "edit.glue");
+    let n = h.notes();
+    assert_eq!(n.len(), 2, "{n:?}");
+    assert!(n.iter().any(|x| x.pitch == 60 && x.start == 0 && x.length == 2 * PPQ), "{n:?}");
+    // Chop the long note into quarter-beat pieces.
+    h.st.ui.notes = vec![n.iter().position(|x| x.pitch == 60).unwrap()];
+    run(&mut h, "edit.chop");
+    assert_eq!(h.notes().iter().filter(|x| x.pitch == 60).count(), 8);
+    run(&mut h, "edit.invert_sel");
+    assert_eq!(h.st.ui.notes.len(), 1, "only the E is left after inverting");
+    run(&mut h, "edit.mute_sel");
+    assert!(h.notes().iter().filter(|x| x.pitch == 64).all(|x| x.muted));
+    run(&mut h, "edit.move_up");
+    assert!(h.notes().iter().any(|x| x.pitch == 65), "Shift+Up moves a semitone");
+    // Backspace toggles snap and restores it.
+    run(&mut h, "edit.snap_toggle");
+    assert_eq!(h.st.ui.snap, 0.0);
+    run(&mut h, "edit.snap_toggle");
+    assert_eq!(h.st.ui.snap, 0.25);
+    // Clips: Shift+Down moves the selected clip to the next track.
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    let (t0, clip) = h.st.session.project.tracks.iter().find_map(|t| t.clips.first().map(|c| (t.id, c.id))).expect("a clip");
+    h.st.ui.clips = vec![clip];
+    run(&mut h, "edit.move_down");
+    let k = h.st.session.project.tracks.iter().position(|t| t.clips.iter().any(|c| c.id == clip)).unwrap();
+    assert_ne!(h.st.session.project.tracks[k].id, t0);
+    run(&mut h, "edit.move_up");
+    assert_eq!(h.st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == clip)).unwrap().id, t0);
 }

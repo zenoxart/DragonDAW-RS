@@ -243,6 +243,11 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                             }
                         }
                     });
+                    let soloed = h.v("solo").round() as usize == b;
+                    if ui.selectable_label(soloed, "🎧 Solo (listen to this band)").clicked() {
+                        out.push(("solo".into(), if soloed { 0.0 } else { b as f32 }));
+                        ui.close_menu();
+                    }
                     if ui.button("Reset gain").clicked() {
                         out.push((format!("b{b}_gain"), 0.0));
                         ui.close_menu();
@@ -350,7 +355,9 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             (b - 1, Biquad::new(BiquadKind::from_index(h.v(&format!("b{b}_type"))), f, q, g, RATE), f, g)
         })
         .collect();
-    let out = h.v("output");
+    let auto = h.v("auto_gain") > 0.5;
+    let out = h.v("output") + if auto { dragon_engine::effects::eq::ParametricEq::auto_gain_for(h.params, RATE) } else { 0.0 };
+    let solo = h.v("solo").round() as usize;
     let p = p.with_clip_rect(pr.expand(8.0).intersect(r));
     if h.tele.is_empty() && h.time.is_some() {
         // Gallery: a moving, music-like demo spectrum, shaped by the curve for the output.
@@ -382,6 +389,19 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.circle_filled(c, 6.5, BAND_COLORS[*k]);
         p.circle_stroke(c, 6.5, Stroke::new(1.5_f32, Color32::from_white_alpha(200)));
         p.text(c, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(8.5), Color32::BLACK);
+        if solo == k + 1 {
+            p.circle_stroke(c, 11.0, Stroke::new(2.0_f32, Color32::WHITE));
+        }
+    }
+    let mut tags = Vec::new();
+    if solo > 0 {
+        tags.push(format!("SOLO {solo}"));
+    }
+    if auto {
+        tags.push(format!("AUTO GAIN {:+.1} dB", out - h.v("output")));
+    }
+    if !tags.is_empty() {
+        p.text(Pos2::new(pr.right() - 4.0, pr.top() + 2.0), egui::Align2::RIGHT_TOP, tags.join(" · "), egui::FontId::proportional(9.5), theme::WARN);
     }
 }
 

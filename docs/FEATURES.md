@@ -90,6 +90,40 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Native plugin editors resize with the plugin and can go full screen | ✅ Linux (X11) / Windows | `plugins/window.rs`, `clap.rs`, `vst3.rs` |
 | Clean Voice, Class-A Strip, Drum Bus, Alter, tube saturator, transient designer, phase meter | ✅ | `effects/voice.rs`, `strips.rs`, `alter.rs`, `dsp/tube.rs`, `dynamics.rs`, `color.rs` |
 
+## Comparison with FL Studio's shortcuts
+
+Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Shortcuts are rebindable in Options.
+
+| FL Studio | Dragon DAW |
+|---|---|
+| Space play / stop, Ctrl+Space play / pause, R record, L pattern / song, Ctrl+M metronome, Ctrl+P precount, Ctrl+H stop sound, Ctrl+T typing keyboard | ✅ same |
+| Ctrl+Z undo / redo last, Ctrl+Alt+Z undo step by step | ✅ same (plus Ctrl+Shift+Z redo) |
+| Ctrl+A / Ctrl+D select all / deselect, Shift+I invert, Ctrl+B duplicate, Ctrl+C / X / V, Del | ✅ same (playlist and piano roll) |
+| Tools P draw, B paint, D delete, T mute, C slice, E select; Alt bypasses snap; Backspace toggles snap | ✅ same |
+| Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Insert slices at the cursor | ✅ same |
+| Piano roll: Ctrl+↑/↓ octave, Ctrl+L legato, Ctrl+G glue, Ctrl+U chop, Alt+Q quantize, Alt+R randomize, Alt+S strum, Alt+F flam | ✅ same (Shift+Q quick quantize instead of Ctrl+Alt+Q) |
+| Playlist: Shift+Q quick-quantize clip starts, Alt+T time marker, Alt+P picker panel, Shift+drag clone, Ctrl+drag select | ✅ same |
+| F4 next empty pattern, F5 playlist, F6 channel rack, F7 piano roll, F8 plugin picker, F9 mixer, F10 settings, F11 song info, F12 close windows, Alt+F8 browser | ✅ same |
+| File: Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+N save new version, Ctrl+R export WAV, Ctrl+Shift+R MP3, Ctrl+Shift+M MIDI | ✅ same |
+| Y playback tool, Z zoom tool, S slip tool, 5/6 zoom keys, Shift+0…6 zoom levels, PgUp / PgDn zoom, 7/8 transpose and 9 reverse clips, Ctrl+Ins / Ctrl+Del insert / delete time, Alt+A arpeggiator / Alt+E riff machine / Alt+K… tool windows, channel-rack number keys (mute / solo) | ❌ not yet |
+
+## Comparison with the FabFilter bundle
+
+What the stock effects share with FabFilter's handling, and what is still missing.
+
+| FabFilter | Dragon DAW stock effects |
+|---|---|
+| Pro-Q: live pre / post analyzer behind the curve | ✅ (`dsp/spectrum.rs`, tilted 4.5 dB/oct) |
+| Pro-Q: double-click to add a band, drag nodes, wheel = Q, right-click shape menu, hover readout, remove a band | ✅ (Alt+click removes) |
+| Pro-Q: solo a band to listen to it, auto gain | ✅ (band menu → Solo; Auto gain parameter) |
+| Pro-Q: dynamic EQ, mid / side and L / R per band, linear / natural phase, EQ match, collision detection, piano scale, 24 bands | ❌ (7 bands, stereo, minimum phase) |
+| Pro-C: transfer curve, threshold drag, scrolling input / output / gain-reduction history, sidechain HPF and external sidechain, mix, auto makeup | ✅ |
+| Pro-C: styles (Clean, Punch, Opto, Vocal…), lookahead, sidechain EQ, hold | ❌ (the limiter has lookahead) |
+| Pro-L: true-peak limiting, loudness meters | ✅ (limiter true peak; LUFS in the Mastering view) |
+| Pro-L: limiting styles, oversampling choice, scrolling waveform | ❌ |
+| Pro-R / Pro-DS / Pro-MB / Saturn / Timeless / Volcano | partial: reverb with early / late EQ, de-esser, multiband, saturator with nine tubes, delay, filter – without FabFilter's modulation matrix, per-band saturation or decay-rate EQ |
+| Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ (no undo history inside a plugin; the project undo covers parameter edits) |
+
 ## P3 – advanced
 
 | Feature | Status | Where |

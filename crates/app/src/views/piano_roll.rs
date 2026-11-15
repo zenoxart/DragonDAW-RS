@@ -608,8 +608,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
         }
     }
-    // Arrow keys nudge the selection: ←/→ by the snap grid, ↑/↓ by a semitone (Shift: an octave).
-    if resp.hovered() && !st.ui.notes.is_empty() && !ui.ctx().wants_keyboard_input() {
+    // Arrow keys nudge the selection: ←/→ by the snap grid, ↑/↓ by a semitone. Shift+arrows (FL's
+    // "move selection") and Ctrl+↑/↓ (octave) are global shortcuts, so they are left alone here.
+    if resp.hovered() && !st.ui.notes.is_empty() && !ui.ctx().wants_keyboard_input() && !ui.input(|i| i.modifiers.shift) {
         let (l, r, u, d, shift, ctrl) = ui.input_mut(|i| {
             let ctrl = i.modifiers.ctrl;
             let take = |i: &mut egui::InputState, k: egui::Key| !ctrl && i.consume_key(i.modifiers, k);
@@ -630,7 +631,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 -1
             } else {
                 0
-            }) * if shift { 12 } else { 1 };
+            }) * if shift { 12 } else { 1 }; // (never shifted: see above)
             let sel = st.ui.notes.clone();
             let ok = sel.iter().filter_map(|i| notes.get(*i)).all(|n| n.start as i64 + dt >= 0 && (0..=127).contains(&(n.pitch as i32 + dp)));
             if ok {
