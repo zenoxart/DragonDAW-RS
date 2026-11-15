@@ -3,7 +3,7 @@
 //! `id → value` parameter maps.
 
 mod color;
-pub use color::DragonParticle;
+pub use color::{shape as saturation_curve, DragonParticle};
 mod dynamics;
 mod eq;
 mod modulation;

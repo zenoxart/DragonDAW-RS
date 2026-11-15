@@ -9,6 +9,7 @@ pub const PANEL_2: Color32 = Color32::from_rgb(0x26, 0x2a, 0x30);
 pub const GRID: Color32 = Color32::from_rgb(0x2e, 0x33, 0x3a);
 pub const GRID_BAR: Color32 = Color32::from_rgb(0x44, 0x4b, 0x55);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8a, 0x93, 0x9e);
+pub const TEXT: Color32 = Color32::from_rgb(0xe6, 0xe9, 0xee);
 pub const ACCENT: Color32 = Color32::from_rgb(0xe8, 0x4a, 0x2c);
 pub const ACCENT_2: Color32 = Color32::from_rgb(0xff, 0x9a, 0x3c);
 pub const PLAYHEAD: Color32 = Color32::from_rgb(0x5c, 0xe1, 0xe6);

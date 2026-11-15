@@ -18,6 +18,12 @@ pub fn apply(st: &mut State, r: &Response, label: &str, f: impl FnOnce(&mut Proj
 
 /// A rotary knob. Drag up/down (Shift = fine), double-click resets, scroll adjusts.
 pub fn knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32, label: &str, fmt: impl Fn(f32) -> String) -> Response {
+    knob_colored(ui, value, min, max, default, label, fmt, theme::ACCENT_2)
+}
+
+/// [`knob`] with its own arc colour (effect editors use their category colour).
+#[allow(clippy::too_many_arguments)]
+pub fn knob_colored(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32, label: &str, fmt: impl Fn(f32) -> String, color: Color32) -> Response {
     let size = 34.0;
     let (rect, mut r) = ui.allocate_exact_size(Vec2::new(size + 10.0, size + 14.0), Sense::click_and_drag());
     let range = max - min;
@@ -55,11 +61,52 @@ pub fn knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32, labe
     } else {
         (a0, a0 + sweep * n)
     };
-    p.add(egui::Shape::line(arc(fa, fb), Stroke::new(3.0_f32, theme::ACCENT_2)));
+    if r.hovered() || r.dragged() {
+        p.circle_filled(c, rad + 3.0, color.gamma_multiply(0.12));
+    }
+    p.add(egui::Shape::line(arc(fa, fb), Stroke::new(3.0_f32, color)));
     let a = a0 + sweep * n;
     p.line_segment([c, Pos2::new(c.x + (rad - 4.0) * a.cos(), c.y + (rad - 4.0) * a.sin())], Stroke::new(2.0_f32, Color32::WHITE));
     p.text(Pos2::new(rect.center().x, rect.bottom()), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(10.0), theme::TEXT_DIM);
     r.on_hover_text(format!("{label}: {}", fmt(*value)))
+}
+
+/// A small coloured knob without a label (effect-slot mix, compact rows). Same gestures as [`knob`].
+pub fn mini_knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32, color: Color32) -> Response {
+    let size = 24.0;
+    let (rect, mut r) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
+    let range = max - min;
+    let mut n = ((*value - min) / range).clamp(0.0, 1.0);
+    if r.dragged() {
+        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+        n = (n - r.drag_delta().y / 140.0 * fine).clamp(0.0, 1.0);
+        *value = min + n * range;
+        r.mark_changed();
+    }
+    if r.hovered() {
+        let s = ui.input(|i| i.smooth_scroll_delta.y);
+        if s != 0.0 {
+            n = (n + s / 600.0).clamp(0.0, 1.0);
+            *value = min + n * range;
+            r.mark_changed();
+        }
+    }
+    if r.double_clicked() {
+        *value = default;
+        r.mark_changed();
+    }
+    let c = rect.center();
+    let p = ui.painter();
+    let rad = size / 2.0 - 2.5;
+    p.circle_filled(c, rad - 2.0, if r.hovered() { theme::PANEL_2 } else { theme::PANEL });
+    let a0 = std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.5;
+    let arc = |from: f32, to: f32| -> Vec<Pos2> { (0..=18).map(|i| from + (to - from) * i as f32 / 18.0).map(|a| Pos2::new(c.x + rad * a.cos(), c.y + rad * a.sin())).collect() };
+    p.add(egui::Shape::line(arc(a0, a0 + sweep), Stroke::new(2.5_f32, theme::GRID)));
+    p.add(egui::Shape::line(arc(a0, a0 + sweep * n), Stroke::new(2.5_f32, color)));
+    let a = a0 + sweep * n;
+    p.line_segment([c, Pos2::new(c.x + (rad - 3.0) * a.cos(), c.y + (rad - 3.0) * a.sin())], Stroke::new(1.5_f32, Color32::WHITE));
+    r
 }
 
 /// A vertical fader 0 … max (linear gain), with a dB scale tooltip.

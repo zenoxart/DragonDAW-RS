@@ -198,6 +198,8 @@ pub struct Song {
     /// Events of each pattern for pattern mode, keyed by pattern id: (events, length in beats).
     pattern_events: HashMap<Id, (Vec<SEvent>, f64)>,
     automation: Vec<AutomationLane>,
+    /// Automation clips per lane: (start, end) in beats. Lanes listed here follow their clips.
+    automation_clips: HashMap<Id, Vec<(f64, f64)>>,
     strip_index: HashMap<Id, usize>,
     channel_index: HashMap<Id, usize>,
     insert_index: HashMap<Id, (usize, usize)>,
@@ -481,6 +483,8 @@ impl Song {
                             }
                         }
                     }
+                    // Automation clips drive their lane (see `automation_clips`); they make no sound.
+                    ClipKind::Automation { .. } => {}
                 }
             }
             clips.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
@@ -507,6 +511,17 @@ impl Song {
             events,
             pattern_events,
             automation: p.automation.iter().filter(|a| a.mode != AutomationMode::Off && !a.points.is_empty()).cloned().collect(),
+            automation_clips: {
+                let mut m: HashMap<Id, Vec<(f64, f64)>> = HashMap::new();
+                for t in p.tracks.iter().filter(|t| !t.muted) {
+                    for c in t.clips.iter().filter(|c| !c.muted) {
+                        if let ClipKind::Automation { lane } = c.kind {
+                            m.entry(lane).or_default().push((c.start, c.end()));
+                        }
+                    }
+                }
+                m
+            },
             strip_index,
             channel_index,
             insert_index,
@@ -1100,7 +1115,11 @@ impl Renderer {
         let mut insert_mix: HashMap<Id, f32> = HashMap::new();
         if playing {
             for lane in &song.automation {
-                let Some(v) = lane.value_at(auto_beat) else { continue };
+                let v = match song.automation_clips.get(&lane.id) {
+                    Some(clips) => lane.value_in_clips(clips, auto_beat),
+                    None => lane.value_at(auto_beat),
+                };
+                let Some(v) = v else { continue };
                 match &lane.target {
                     Target::MixerVolume(id) => {
                         if let Some(&i) = song.strip_index.get(id) {
@@ -1710,6 +1729,20 @@ mod tests {
         let ons: Vec<f64> = ev.iter().filter(|e| e.on).map(|e| e.beat).collect();
         assert_eq!(ons[0], 0.0);
         assert!((ons[1] - 0.375).abs() < 1e-9, "{:?}", ons);
+    }
+
+    /// An automation clip plays its lane relative to the clip start and holds the last value afterwards.
+    #[test]
+    fn automation_clips_drive_their_lane() {
+        let lane =
+            AutomationLane { id: 9, target: Target::Tempo, points: vec![AutoPoint { beat: 0.0, value: 0.0, tension: 0.0 }, AutoPoint { beat: 4.0, value: 1.0, tension: 0.0 }], mode: AutomationMode::Read, visible: true };
+        let clips = [(8.0, 12.0), (20.0, 22.0)];
+        assert_eq!(lane.value_in_clips(&clips, 4.0), None, "before the first clip");
+        assert!((lane.value_in_clips(&clips, 10.0).unwrap() - 0.5).abs() < 1e-6, "relative to the clip start");
+        assert!((lane.value_in_clips(&clips, 15.0).unwrap() - 1.0).abs() < 1e-3, "holds after the clip");
+        assert!((lane.value_in_clips(&clips, 21.0).unwrap() - 0.25).abs() < 1e-6, "second clip restarts the curve");
+        assert!((lane.value_in_clips(&clips, 30.0).unwrap() - 0.5).abs() < 1e-3, "holds the end of the (shorter) second clip");
+        assert_eq!(lane.length_beats(), 4.0);
     }
 
     /// Moving a fader while playing (a recompile with a new volume) must not step the output.

@@ -405,3 +405,69 @@ fn plugin_window_failure_shows_the_reason() {
     let shown = h.ctx.data(|d| d.get_temp::<String>(egui::Id::new(("plugin.window.error", (m, Some(iid)))))).unwrap();
     assert!(shown.contains("refused to attach"), "{shown}");
 }
+
+#[test]
+fn dragging_from_the_picker_places_patterns_and_automation_clips() {
+    let mut h = Harness::new();
+    // A second ("split") pattern and an automation lane to pick.
+    let lane = h.st.session.edit("setup", |p| {
+        let pid = p.add_pattern();
+        p.pattern_mut(pid).unwrap().name = "Split 2".into();
+        let id = p.next_id();
+        let master = p.mixer.master.id;
+        p.automation.push(AutomationLane {
+            id,
+            target: Target::MixerVolume(master),
+            points: vec![AutoPoint { beat: 0.0, value: 0.2, tension: 0.0 }, AutoPoint { beat: 8.0, value: 0.9, tension: 0.0 }],
+            mode: AutomationMode::Read,
+            visible: true,
+        });
+        id
+    });
+    let split = h.st.session.project.patterns.last().unwrap().id;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let picker = h.rect("pl.picker");
+    assert!(picker.right() <= t.left() + 1.0, "picker sits left of the timeline: {picker:?} {t:?}");
+    let rows: Vec<(String, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("pl.picker.rows"))).unwrap();
+    let row = |k: &str| rows.iter().find(|r| r.0 == k).unwrap_or_else(|| panic!("{k} listed in {rows:?}")).1;
+    let zoom = h.st.ui.playlist_zoom;
+    let sx = h.st.ui.pl_x as f32;
+    let x = |beat: f32| t.left() + (beat - sx) * zoom;
+    let track0 = h.st.session.project.tracks[0].id;
+    h.drag(playlist, row(&format!("pattern:{split}")).center(), Pos2::new(x(8.1), t.top() + 10.0), PointerButton::Primary, Modifiers::NONE);
+    let placed: Vec<&Clip> = h.st.session.project.tracks[0].clips.iter().filter(|c| matches!(c.kind, ClipKind::Pattern { pattern } if pattern == split)).collect();
+    assert_eq!(placed.len(), 1, "pattern placed on the first track: {:?}", h.st.session.project.tracks[0].clips);
+    assert!((placed[0].start - 8.0).abs() < 1e-6, "snapped to beat 8: {}", placed[0].start);
+    assert_eq!(h.st.session.project.tracks[0].id, track0);
+    // Automation clip onto the second track.
+    h.idle(playlist, 2);
+    let rows: Vec<(String, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("pl.picker.rows"))).unwrap();
+    let r = rows.iter().find(|r| r.0 == format!("automation:{lane}")).expect("automation listed").1;
+    let y2 = t.top() + h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom + 6.0;
+    h.drag(playlist, r.center(), Pos2::new(x(0.1), y2), PointerButton::Primary, Modifiers::NONE);
+    let auto: Vec<&Clip> = h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).filter(|c| matches!(c.kind, ClipKind::Automation { lane: l } if l == lane)).collect();
+    assert_eq!(auto.len(), 1, "automation clip placed");
+    assert!((auto[0].length - 8.0).abs() < 1e-6, "clip spans the curve: {}", auto[0].length);
+}
+
+fn mixer(ui: &mut egui::Ui, st: &mut State) {
+    super::mixer::show(ui, st);
+}
+
+#[test]
+fn pulling_a_cable_between_mixer_strips_routes_them() {
+    let mut h = Harness::new();
+    let (a, b) = (h.st.session.project.mixer.channels[0].id, h.st.session.project.mixer.channels[1].id);
+    assert!(h.st.session.project.mixer.channels[0].sends.iter().all(|s| s.target != b));
+    h.idle(mixer, 3);
+    let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.strips"))).expect("mixer drew its strips");
+    let ra = rects.iter().find(|r| r.0 == a).unwrap().1;
+    let rb = rects.iter().find(|r| r.0 == b).unwrap().1;
+    let jack = Pos2::new(ra.center().x + 14.0, ra.bottom() - 58.0);
+    h.drag(mixer, jack, rb.center(), PointerButton::Primary, Modifiers::NONE);
+    let ch = h.st.session.project.mixer.get(a).unwrap();
+    let routed = ch.output == Some(b) || ch.sends.iter().any(|s| s.target == b);
+    assert!(routed, "insert 1 now feeds insert 2: output {:?} sends {:?}", ch.output, ch.sends.len());
+    assert_eq!(h.st.ui.mixer, a, "the source insert is selected");
+}

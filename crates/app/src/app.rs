@@ -23,8 +23,8 @@ pub fn view_meta(key: &str) -> Option<(&'static str, ViewRole, DockSide)> {
         "dragon.playlist" => ("Playlist", ViewRole::Document, DockSide::Left),
         "dragon.rack" => ("Channel rack", ViewRole::Document, DockSide::Left),
         "dragon.piano" => ("Piano roll", ViewRole::Document, DockSide::Left),
-        "dragon.mixer" => ("Mixer", ViewRole::ToolWindow, DockSide::Bottom),
-        "dragon.master" => ("Mastering", ViewRole::ToolWindow, DockSide::Bottom),
+        "dragon.mixer" => ("Mixer", ViewRole::Document, DockSide::Left),
+        "dragon.master" => ("Mastering", ViewRole::Document, DockSide::Left),
         "dragon.launcher" => ("Performance", ViewRole::Document, DockSide::Left),
         "dragon.video" => ("Video", ViewRole::ToolWindow, DockSide::Right),
         "dragon.automation" => ("Automation", ViewRole::ToolWindow, DockSide::Bottom),
@@ -262,6 +262,7 @@ impl eframe::App for DragonApp {
         });
 
         views::windows::show(ctx, &mut self.st);
+        views::quests::show(ctx, &mut self.st);
         views::overlays::palette(ctx, &mut self.st);
         views::overlays::toasts(ctx, &mut self.st);
         views::overlays::recovery(ctx, &mut self.st);

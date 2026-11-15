@@ -97,6 +97,8 @@ pub struct UiState {
     pub pr_y: f32,
     /// Playlist vertical zoom (track heights are multiplied by it).
     pub pl_vzoom: f32,
+    /// The picker panel (patterns, audio and automation clips) left of the playlist is shown.
+    pub pl_picker: bool,
     /// Running zoom animations: target (zoom, x, vertical zoom / key height, y).
     pub pl_anim: Option<crate::views::nav::ViewTarget>,
     pub pr_anim: Option<crate::views::nav::ViewTarget>,
@@ -153,6 +155,7 @@ impl UiState {
             pr_x: 0.0,
             pr_y: 60.0 * 14.0,
             pl_vzoom: 1.0,
+            pl_picker: true,
             pl_anim: None,
             pr_anim: None,
             pl_drag: None,
@@ -192,6 +195,8 @@ pub struct State {
     pub mcu: Mcu,
     /// Mastering reference track: loaded audio, analyses and background jobs.
     pub reference: crate::views::reference::ReferenceState,
+    /// Dragon Quests (gamification).
+    pub quests: crate::views::quests::Quests,
 }
 
 /// Mackie Control state: bank offset, the output connection and what was last sent (feedback only on change).
@@ -293,8 +298,23 @@ impl State {
         let autosave = Autosave::new(ctx.paths.autosave.clone());
         let crashed = !autosave.begin_session();
         let ui = UiState::new(&session.project);
-        let mut st =
-            State { ctx, session, audio, ui, settings, midi, retro: RetroBuffer::new(120.0), autosave, last_autosave: Instant::now(), crashed_last_time: crashed, kit, mcu: Mcu::default(), reference: Default::default() };
+        let quests = crate::views::quests::Quests::load(&ctx.paths);
+        let mut st = State {
+            ctx,
+            session,
+            audio,
+            ui,
+            settings,
+            midi,
+            retro: RetroBuffer::new(120.0),
+            autosave,
+            last_autosave: Instant::now(),
+            crashed_last_time: crashed,
+            kit,
+            mcu: Mcu::default(),
+            reference: Default::default(),
+            quests,
+        };
         st.open_midi();
         st.session.force_recompile();
         if st.crashed_last_time {
@@ -392,6 +412,9 @@ impl State {
     pub fn stop_recording(&mut self) {
         self.ui.record_started = None;
         let takes = self.audio.stop_recording();
+        if !takes.is_empty() {
+            crate::views::quests::event(self, crate::views::quests::Event::Recorded);
+        }
         if takes.is_empty() {
             // Note recording: capture what was played into the selected pattern.
             let bpm = self.session.project.bpm;
@@ -484,19 +507,32 @@ impl State {
             _ => {
                 let name = format!("{}.dragon", if self.session.project.meta.name.is_empty() { "Untitled" } else { &self.session.project.meta.name });
                 match rfd::FileDialog::new().add_filter("Dragon project", &["dragon"]).set_directory(&self.ctx.paths.projects).set_file_name(name).save_file() {
-                    Some(p) => p.with_extension("dragon"),
+                    // Every project gets its own folder: <chosen dir>/<Name>/<Name>.dragon.
+                    Some(p) => project_io::project_folder_path(&p.with_extension("dragon")),
                     None => return false,
                 }
             }
         };
         self.session.end_gesture();
         self.capture_plugin_states();
-        match project_io::save(&self.session.project, &path, 5) {
-            Ok(()) => {
+        self.save_to(&path)
+    }
+
+    /// Saves into the project folder of `path` (creating `Samples`, `Recordings`, `Renders`, `Backup` and
+    /// copying outside files into `Samples`). The copies replace the originals in the project without an
+    /// undo step: saving is not an edit.
+    pub fn save_to(&mut self, path: &Path) -> bool {
+        let mut p = self.session.project.clone();
+        match project_io::save_in_folder(&mut p, path, 5) {
+            Ok(copied) => {
+                let path = path.to_path_buf();
+                self.session.project = p;
+                self.session.history.touch();
                 self.session.set_path(path.clone());
                 self.session.history.mark_saved();
                 self.add_recent(&path);
-                self.ui.status = format!("Saved {}", path.display());
+                self.ui.status = if copied > 0 { format!("Saved {} ({copied} file(s) copied into Samples)", path.display()) } else { format!("Saved {}", path.display()) };
+                crate::views::quests::event(self, crate::views::quests::Event::Saved);
                 true
             }
             Err(e) => {

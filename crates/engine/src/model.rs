@@ -186,6 +186,12 @@ pub enum ClipKind {
     Pattern {
         pattern: Id,
     },
+    /// An automation clip (FL Studio): plays the curve of an automation lane, relative to the clip's start.
+    /// A lane placed as clips is only driven by them (the last value holds between clips); a lane without
+    /// clips runs on the song timeline.
+    Automation {
+        lane: Id,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -802,6 +808,20 @@ pub struct AutomationLane {
 }
 
 impl AutomationLane {
+    /// Value at a song beat when the lane is placed as automation clips `(start, end)`: relative to the clip
+    /// playing at `beat`; after a clip the value it ended on holds; before the first clip `None`.
+    pub fn value_in_clips(&self, clips: &[(f64, f64)], beat: f64) -> Option<f32> {
+        if let Some((s, _)) = clips.iter().find(|(s, e)| beat >= *s && beat < *e) {
+            return self.value_at(beat - s);
+        }
+        clips.iter().filter(|(_, e)| *e <= beat).max_by(|a, b| a.1.total_cmp(&b.1)).and_then(|(s, e)| self.value_at((e - s - 1e-9).max(0.0)))
+    }
+
+    /// Length of the curve in beats (last point, at least one bar).
+    pub fn length_beats(&self) -> f64 {
+        self.points.iter().map(|p| p.beat).fold(0.0, f64::max).max(4.0)
+    }
+
     /// Value at a beat (`None` without points).
     pub fn value_at(&self, beat: f64) -> Option<f32> {
         let p = &self.points;
@@ -1073,6 +1093,9 @@ impl Project {
         let mut v = Vec::new();
         if let Some(vid) = &self.video {
             v.push(vid.path.clone());
+        }
+        if let Some(r) = &self.reference {
+            v.push(r.path.clone());
         }
         for t in &self.tracks {
             for c in t.clips.iter().chain(t.takes.iter().flat_map(|k| k.clips.iter())) {

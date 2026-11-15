@@ -33,9 +33,13 @@ enum Norm {
 }
 
 impl ExportDialog {
-    pub fn new(p: &Project, stems: bool) -> Self {
+    /// `project_path`: the saved project file; exports then go to its folder's `Renders`.
+    pub fn new(p: &Project, stems: bool, project_path: Option<&std::path::Path>) -> Self {
         let name = if p.meta.name.is_empty() { "Untitled".to_string() } else { p.meta.name.clone() };
-        let dir = dirs_documents().join("DragonDAW Exports");
+        let dir = match project_path.and_then(|f| f.parent()) {
+            Some(d) => d.join(dragon_engine::project_io::RENDERS_DIR),
+            None => dirs_documents().join("DragonDAW Exports"),
+        };
         let path = if stems { dir.join(format!("{name} stems")) } else { dir.join(format!("{name}.wav")) };
         ExportDialog {
             opts: ExportOptions { stems, ..Default::default() },
@@ -61,6 +65,9 @@ impl ExportDialog {
                 let pc = self.progress.load(Ordering::Relaxed) as f32 / 1000.0;
                 ui.add(egui::ProgressBar::new(pc).show_percentage().animate(true));
                 if let Ok(r) = rx.try_recv() {
+                    if r.is_ok() {
+                        crate::views::quests::event(st, crate::views::quests::Event::Exported);
+                    }
                     self.result = Some(r);
                     self.rx = None;
                 }

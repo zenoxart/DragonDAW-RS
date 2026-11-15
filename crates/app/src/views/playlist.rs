@@ -41,6 +41,9 @@ struct Row {
 
 pub fn show(ui: &mut Ui, st: &mut State) {
     toolbar(ui, st);
+    if st.ui.pl_picker {
+        egui::SidePanel::left("pl.picker.panel").resizable(true).default_width(super::picker::WIDTH).width_range(130.0..=320.0).frame(egui::Frame::NONE).show_inside(ui, |ui| super::picker::show(ui, st));
+    }
     let avail = ui.available_rect_before_wrap();
     let (rect, resp) = ui.allocate_exact_size(avail.size(), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
@@ -324,6 +327,27 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
+    // Drop from the picker: patterns, audio files and automation clips.
+    let dnd_pos = ui.ctx().pointer_latest_pos();
+    if let Some(item) = resp.dnd_hover_payload::<super::picker::PickItem>() {
+        if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
+            let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
+            let len = super::picker::length(st, &item);
+            let (y, h) = row_at(pos.y).map(|i| (rows[i].y, rows[i].h)).unwrap_or((pos.y - 12.0, 24.0));
+            let ghost = Rect::from_min_size(Pos2::new(x_of(beat, sx), y + 1.0), Vec2::new(((len * zoom) as f32).max(8.0), h - 2.0));
+            let p = ui.painter_at(timeline);
+            p.rect_filled(ghost, 3.0, theme::ACCENT.gamma_multiply(0.25));
+            p.rect_stroke(ghost, 3.0, Stroke::new(1.5_f32, theme::ACCENT), egui::StrokeKind::Inside);
+            ui.ctx().request_repaint();
+        }
+    }
+    if let Some(item) = resp.dnd_release_payload::<super::picker::PickItem>() {
+        if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
+            let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
+            let track = row_at(pos.y).map(|i| rows[i].track);
+            super::picker::place(st, &item, track, beat);
+        }
+    }
     // Drop from the browser.
     if let Some(path) = resp.dnd_release_payload::<PathBuf>() {
         if let Some(pos) = hover {
@@ -532,6 +556,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         st.ctx.open("dragon.piano", None);
                     }
                     Some(ClipKind::Audio(_)) => st.ui.clip_window = Some(cid),
+                    Some(ClipKind::Automation { .. }) => st.ctx.open("dragon.automation", None),
                     None => {}
                 }
             } else if ruler.contains(pos) {
@@ -550,7 +575,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let _ = content_bottom;
 }
 
-fn place_pattern(p: &mut Project, track: Id, pattern: Id, start: f64, len: f64) -> Id {
+pub fn place_pattern(p: &mut Project, track: Id, pattern: Id, start: f64, len: f64) -> Id {
     let id = p.next_id();
     let (name, color) = p.pattern(pattern).map(|x| (x.name.clone(), x.color)).unwrap_or_default();
     if let Some(t) = p.track_mut(track) {
@@ -570,6 +595,7 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
     let label = match &c.kind {
         ClipKind::Pattern { pattern } => names.iter().find(|n| n.0 == *pattern).map(|n| n.1.clone()).unwrap_or_else(|| c.name.clone()),
         ClipKind::Audio(_) => c.name.clone(),
+        ClipKind::Automation { lane } => st.session.project.automation.iter().find(|l| l.id == *lane).map(|l| crate::state::target_name(&st.session.project, &l.target)).unwrap_or_else(|| c.name.clone()),
     };
     let indent = if matches!(c.kind, ClipKind::Pattern { .. }) && r.width() > 18.0 { 15.0 } else { 3.0 };
     p.with_clip_rect(r.intersect(p.clip_rect())).text(title.left_center() + Vec2::new(indent, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(10.0), Color32::BLACK);
@@ -579,6 +605,40 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
         return;
     }
     match &c.kind {
+        ClipKind::Automation { lane } => {
+            let Some(l) = st.session.project.automation.iter().find(|l| l.id == *lane) else {
+                p.text(body.center(), egui::Align2::CENTER_CENTER, "lane deleted", egui::FontId::proportional(10.0), theme::REC);
+                return;
+            };
+            let (min, max) = dragon_engine::midi::target_range(&l.target);
+            let span = (max - min).max(1e-6);
+            let col = if muted { theme::TEXT_DIM } else { Color32::from_gray(240) };
+            let y_of = |v: f32| body.bottom() - 2.0 - ((v - min) / span).clamp(0.0, 1.0) * (body.height() - 4.0);
+            let mut pts = Vec::new();
+            let mut x = vis.left().floor();
+            while x <= vis.right() {
+                let b = ((x - r.left()) as f64) / (r.width() as f64) * c.length;
+                if let Some(v) = l.value_at(b) {
+                    pts.push(Pos2::new(x, y_of(v)));
+                }
+                x += 2.0;
+            }
+            if pts.len() > 1 {
+                for w in pts.windows(2) {
+                    p.add(egui::Shape::convex_polygon(vec![w[0], w[1], Pos2::new(w[1].x, body.bottom()), Pos2::new(w[0].x, body.bottom())], col.gamma_multiply(0.12), Stroke::NONE));
+                }
+                p.add(egui::Shape::line(pts, Stroke::new(1.5_f32, col)));
+            }
+            for pt in &l.points {
+                if pt.beat > c.length {
+                    break;
+                }
+                let px = r.left() + (pt.beat / c.length) as f32 * r.width();
+                if px >= vis.left() && px <= vis.right() {
+                    p.circle_filled(Pos2::new(px, y_of(pt.value)), 2.5, col);
+                }
+            }
+        }
         ClipKind::Audio(a) => {
             let Some(w) = st.waveform(&a.source) else {
                 p.text(body.center(), egui::Align2::CENTER_CENTER, "missing file", egui::FontId::proportional(10.0), theme::REC);
@@ -762,6 +822,7 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
             st.ui.pl_x = 0.0;
         }
         ui.checkbox(&mut st.settings.follow_playhead, "Follow");
+        ui.toggle_value(&mut st.ui.pl_picker, "Picker").on_hover_text("Show the patterns, audio and automation clips to drag into the playlist");
         ui.separator();
         ui.label(
             RichText::new("Ctrl+right-drag zoom to area · Ctrl+right-click zoom out · Ctrl+wheel zoom · Alt+wheel track height · middle-drag pan · drag ruler = loop · right-click deletes").small().color(theme::TEXT_DIM),

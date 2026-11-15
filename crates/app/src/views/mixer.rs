@@ -12,7 +12,9 @@ use crate::theme;
 use dragon_engine::model::*;
 use egui::{Color32, Pos2, RichText, Sense, Stroke, Ui, Vec2};
 
-const PANEL_W: f32 = 280.0;
+const PANEL_W: f32 = 330.0;
+/// Height of an effect slot row.
+const SLOT_H: f32 = 30.0;
 
 /// How the selected insert reaches another one.
 #[derive(Clone, Copy, PartialEq)]
@@ -93,12 +95,14 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             egui::ScrollArea::horizontal().id_salt("mixer.strips").auto_shrink([false, false]).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
+                    let mut rects = Vec::with_capacity(all.len());
                     for (k, m) in all.iter().enumerate() {
-                        strip(ui, st, m, k, &selected, &all, &meters, avail.y - 22.0);
+                        rects.push((m.id, strip(ui, st, m, k, &selected, &all, &meters, avail.y - 22.0)));
                         if k == 0 {
                             ui.add_space(6.0);
                         }
                     }
+                    cables(ui, st, &all, &rects, &meters);
                     ui.vertical(|ui| {
                         if ui.add(egui::Button::new(RichText::new("+\ninsert").small()).min_size(Vec2::new(46.0, 40.0))).on_hover_text("Add a mixer insert").clicked() {
                             st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
@@ -124,7 +128,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &MixerChannel, all: &[MixerChannel], meters: &dragon_engine::render::MeterValues, height: f32) {
+fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &MixerChannel, all: &[MixerChannel], meters: &dragon_engine::render::MeterValues, height: f32) -> egui::Rect {
     let id = m.id;
     let master = all[0].id;
     let is_master = id == master;
@@ -207,8 +211,123 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
         })
         .inner
     });
-    if !resp.inner && resp.response.contains_pointer() && ui.input(|i| i.pointer.primary_clicked()) {
+    if !resp.inner && resp.response.contains_pointer() && ui.input(|i| i.pointer.primary_clicked()) && !ui.ctx().is_being_dragged(egui::Id::new(("mixer.jack", id))) {
         st.ui.mixer = id;
+    }
+    resp.response.rect
+}
+
+/// Where a strip's cable plugs in: its output jack (right) and input jack (left), above the route arrow.
+fn jacks(r: egui::Rect) -> (Pos2, Pos2) {
+    let y = r.bottom() - 58.0;
+    (Pos2::new(r.center().x + 14.0, y), Pos2::new(r.center().x - 14.0, y))
+}
+
+/// A cable sagging between two jacks, FL style (cubic bezier with a soft shadow).
+fn cable(p: &egui::Painter, a: Pos2, b: Pos2, col: Color32, width: f32, floor: f32) -> [Pos2; 4] {
+    let sag = ((b.x - a.x).abs() * 0.35 + 24.0).min(floor - a.y.max(b.y)).max(8.0);
+    let pts = [a, a + Vec2::new((b.x - a.x) * 0.15, sag), b + Vec2::new((a.x - b.x) * 0.15, sag), b];
+    let shadow = pts.map(|q| q + Vec2::new(1.5, 3.0));
+    p.add(egui::epaint::CubicBezierShape::from_points_stroke(shadow, false, Color32::TRANSPARENT, Stroke::new(width + 1.5, Color32::from_black_alpha(110))));
+    p.add(egui::epaint::CubicBezierShape::from_points_stroke(pts, false, Color32::TRANSPARENT, Stroke::new(width, col)));
+    p.add(egui::epaint::CubicBezierShape::from_points_stroke(pts.map(|q| q + Vec2::new(0.0, -width * 0.3)), false, Color32::TRANSPARENT, Stroke::new((width * 0.3).max(0.6), Color32::from_white_alpha(45))));
+    pts
+}
+
+fn bezier(pts: &[Pos2; 4], t: f32) -> Pos2 {
+    let u = 1.0 - t;
+    let v = pts[0].to_vec2() * (u * u * u) + pts[1].to_vec2() * (3.0 * u * u * t) + pts[2].to_vec2() * (3.0 * u * t * t) + pts[3].to_vec2() * (t * t * t);
+    v.to_pos2()
+}
+
+/// Draws the routing as hanging cables (every route; the selected insert's in its own colour, the rest
+/// dimmed), animates signal flowing through them while audio passes, and lets a cable be pulled from a
+/// strip's output jack onto another strip to create a route.
+fn cables(ui: &mut Ui, st: &mut State, all: &[MixerChannel], rects: &[(Id, egui::Rect)], meters: &dragon_engine::render::MeterValues) {
+    let master = all[0].id;
+    let sel = st.ui.mixer;
+    let rect_of = |id: Id| rects.iter().find(|r| r.0 == id).map(|r| r.1);
+    let floor = rects.iter().map(|r| r.1.bottom()).fold(0.0f32, f32::max) - 4.0;
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.strips"), rects.to_vec()));
+    let p = ui.painter().clone();
+    let time = ui.input(|i| i.time) as f32;
+    let reduced = st.settings.reduced_motion;
+    let mut animate = false;
+    // Dim cables first, the selected insert's on top.
+    let mut list: Vec<(Id, Id, bool, f32)> = Vec::new();
+    for c in all.iter().filter(|c| c.kind == ChannelKind::Audio && c.id != master) {
+        if let Some(t) = main_target(c, master) {
+            list.push((c.id, t, true, 1.0));
+        }
+        for s in &c.sends {
+            list.push((c.id, s.target, false, s.level));
+        }
+    }
+    list.sort_by_key(|(a, b, _, _)| *a == sel || *b == sel);
+    for (src, dst, main, level) in list {
+        let (Some(ra), Some(rb)) = (rect_of(src), rect_of(dst)) else { continue };
+        let a = jacks(ra).0;
+        let b = jacks(rb).1;
+        let hot = src == sel || dst == sel;
+        let color = all.iter().find(|c| c.id == src).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT);
+        let col = if hot { color } else { color.gamma_multiply(0.35) };
+        let w = if main { 2.6 } else { 1.6 + 1.6 * level };
+        let pts = cable(&p, a, b, col, if hot { w } else { w * 0.8 }, floor);
+        // Signal dots ride along the cable, faster and brighter the louder the source.
+        let (l, r) = meters.strips.get(&src).copied().unwrap_or((0.0, 0.0));
+        let lvl = l.max(r);
+        if lvl > 0.01 && !reduced {
+            animate = true;
+            for k in 0..3 {
+                let t = ((time * (0.6 + lvl) + k as f32 / 3.0) % 1.0).clamp(0.0, 1.0);
+                p.circle_filled(bezier(&pts, t), (1.5 + 2.0 * lvl.min(1.0)) * if hot { 1.0 } else { 0.7 }, Color32::WHITE.gamma_multiply(0.5 + 0.5 * lvl.min(1.0)));
+            }
+        }
+        for (q, out) in [(a, true), (b, false)] {
+            p.circle_filled(q, 4.0, theme::BG);
+            p.circle_stroke(q, 4.0, Stroke::new(1.5_f32, if out { col } else { col.gamma_multiply(0.8) }));
+        }
+    }
+    // Jacks: pull a new cable from any strip's output.
+    for &(id, r) in rects {
+        let c = all.iter().find(|c| c.id == id);
+        if id == master || c.map(|c| c.kind != ChannelKind::Audio).unwrap_or(true) {
+            continue;
+        }
+        let a = jacks(r).0;
+        let jid = egui::Id::new(("mixer.jack", id));
+        let resp = ui.interact(egui::Rect::from_center_size(a, Vec2::splat(14.0)), jid, Sense::drag());
+        let hov = resp.hovered() || resp.dragged();
+        p.circle_filled(a, if hov { 5.5 } else { 3.0 }, if hov { theme::ACCENT_2 } else { theme::TEXT_DIM });
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        let resp = resp.on_hover_text("Drag a cable onto another insert to route this one into it");
+        if resp.dragged() {
+            if let Some(ptr) = ui.ctx().pointer_latest_pos() {
+                let target = rects.iter().find(|(t, rr)| *t != id && rr.contains(ptr)).map(|x| x.0);
+                let col = if target.is_some() { theme::OK } else { theme::ACCENT_2 };
+                cable(&p, a, ptr, col, 2.5, floor.max(ptr.y + 30.0));
+                if let Some(rr) = target.and_then(rect_of) {
+                    p.rect_stroke(rr, 3.0, Stroke::new(2.0_f32, theme::OK), egui::StrokeKind::Inside);
+                }
+                animate = true;
+            }
+        }
+        if resp.drag_stopped() {
+            if let Some(ptr) = ui.ctx().pointer_latest_pos() {
+                if let Some((t, _)) = rects.iter().find(|(t, rr)| *t != id && rr.contains(ptr)) {
+                    let target = all.iter().find(|c| c.id == *t);
+                    if target.map(|c| c.kind == ChannelKind::Audio).unwrap_or(false) && c.map(|c| route_of(c, *t, master) == Route::None).unwrap_or(false) {
+                        toggle_route(st, id, *t);
+                        st.ui.mixer = id;
+                    }
+                }
+            }
+        }
+    }
+    if animate {
+        ui.ctx().request_repaint();
     }
 }
 
@@ -282,6 +401,21 @@ fn route_arrow(ui: &mut Ui, st: &mut State, sel: &MixerChannel, target: &MixerCh
     on_arrow
 }
 
+/// Colour of an effect category (slot stripes, editor accents).
+pub fn category_color(cat: &str) -> Color32 {
+    match cat {
+        "Dynamics" => Color32::from_rgb(0xf0, 0x8a, 0x4b),
+        "EQ" | "Filter" => Color32::from_rgb(0x4b, 0xc0, 0xf0),
+        "Delay" | "Space" => Color32::from_rgb(0x9b, 0x7b, 0xf5),
+        "Modulation" => Color32::from_rgb(0x5d, 0xe0, 0xa8),
+        "Distortion" => Color32::from_rgb(0xf0, 0x52, 0x6a),
+        "Mastering" => Color32::from_rgb(0xf5, 0xc8, 0x42),
+        "Pitch" => Color32::from_rgb(0xe0, 0x6e, 0xd8),
+        "Utility" => Color32::from_rgb(0x9a, 0xa5, 0xb5),
+        _ => theme::ACCENT,
+    }
+}
+
 fn effect_name(ins: &Insert) -> String {
     ins.plugin.as_ref().map(|p| p.name.clone()).or_else(|| dragon_engine::effects::find(&ins.effect).map(|d| d.name.to_string())).unwrap_or_else(|| ins.effect.clone())
 }
@@ -317,45 +451,81 @@ fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChann
     let mut drop: Option<(usize, usize)> = None;
     for (k, ins) in m.inserts.iter().enumerate() {
         let iid = ins.id;
-        let row = egui::Frame::NONE.fill(theme::BG).corner_radius(3.0).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (hr, handle) = ui.allocate_exact_size(Vec2::new(10.0, 16.0), Sense::drag());
-                for dy in [-4.0, 0.0, 4.0] {
-                    ui.painter().line_segment(
-                        [Pos2::new(hr.left() + 1.0, hr.center().y + dy), Pos2::new(hr.right() - 1.0, hr.center().y + dy)],
-                        Stroke::new(1.5_f32, if handle.hovered() { theme::ACCENT_2 } else { theme::TEXT_DIM }),
+        let cat = dragon_engine::effects::find(&ins.effect).map(|d| d.category).unwrap_or("Plugin");
+        let ccol = category_color(cat);
+        let row = egui::Frame::NONE
+            .fill(if ins.enabled { theme::BG } else { theme::BG.gamma_multiply(0.6) })
+            .stroke(Stroke::new(1.0_f32, ccol.gamma_multiply(0.35)))
+            .corner_radius(5.0)
+            .inner_margin(egui::Margin { left: 8, right: 4, top: 2, bottom: 2 })
+            .show(ui, |ui| {
+                let full = ui.max_rect();
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(full.min - Vec2::new(8.0, 2.0), Vec2::new(4.0, SLOT_H + 4.0)),
+                    egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 },
+                    if ins.enabled { ccol } else { theme::GRID_BAR },
+                );
+                ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), SLOT_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    let (hr, handle) = ui.allocate_exact_size(Vec2::new(10.0, SLOT_H), Sense::drag());
+                    for dy in [-5.0, 0.0, 5.0] {
+                        ui.painter().line_segment(
+                            [Pos2::new(hr.left() + 1.0, hr.center().y + dy), Pos2::new(hr.right() - 1.0, hr.center().y + dy)],
+                            Stroke::new(1.5_f32, if handle.hovered() { theme::ACCENT_2 } else { theme::TEXT_DIM }),
+                        );
+                    }
+                    let handle = handle.on_hover_text("Drag to reorder");
+                    handle.dnd_set_drag_payload(SlotDrag { mixer: id, index: k });
+                    ui.label(RichText::new(format!("{}", k + 1)).monospace().color(theme::TEXT_DIM));
+                    let led = if ins.enabled { theme::OK } else { theme::GRID_BAR };
+                    let (lr, lresp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+                    if ins.enabled {
+                        ui.painter().circle_filled(lr.center(), 8.0, led.gamma_multiply(0.25));
+                    }
+                    ui.painter().circle_filled(lr.center(), 5.5, led);
+                    ui.painter().circle_stroke(lr.center(), 6.5, Stroke::new(1.0_f32, theme::BG));
+                    if lresp.on_hover_text(if ins.enabled { "On – click to bypass" } else { "Bypassed – click to enable" }).clicked() {
+                        st.session.edit("Bypass effect", |p| {
+                            if let Some(i) = p.mixer.get_mut(id).and_then(|c| c.inserts.iter_mut().find(|i| i.id == iid)) {
+                                i.enabled = !i.enabled;
+                            }
+                        });
+                    }
+                    let gr = meters.gain_reduction.get(&iid).copied().unwrap_or(0.0);
+                    let label = effect_name(ins);
+                    let name_w = (ui.available_width() - 40.0).max(80.0);
+                    let (br, b) = ui.allocate_exact_size(Vec2::new(name_w, SLOT_H - 4.0), Sense::click());
+                    let pnt = ui.painter();
+                    pnt.rect_filled(br, 4.0, if b.hovered() { theme::PANEL_2 } else { theme::PANEL });
+                    pnt.with_clip_rect(br.shrink(2.0)).text(
+                        br.left_center() + Vec2::new(7.0, -4.0),
+                        egui::Align2::LEFT_CENTER,
+                        &label,
+                        egui::FontId::proportional(13.0),
+                        if ins.enabled { theme::TEXT } else { theme::TEXT_DIM },
                     );
-                }
-                let handle = handle.on_hover_text("Drag to reorder");
-                handle.dnd_set_drag_payload(SlotDrag { mixer: id, index: k });
-                ui.label(RichText::new(format!("{}", k + 1)).small().monospace().color(theme::TEXT_DIM));
-                let led = if ins.enabled { theme::OK } else { theme::GRID_BAR };
-                let (lr, lresp) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::click());
-                ui.painter().circle_filled(lr.center(), 4.5, led);
-                if lresp.on_hover_text("Bypass").clicked() {
-                    st.session.edit("Bypass effect", |p| {
+                    pnt.text(br.left_center() + Vec2::new(7.0, 8.0), egui::Align2::LEFT_CENTER, cat, egui::FontId::proportional(9.0), ccol.gamma_multiply(0.9));
+                    if gr > 0.1 {
+                        // Gain-reduction bar along the slot's right edge.
+                        let gw = (gr / 24.0).min(1.0) * 50.0;
+                        let gb = egui::Rect::from_min_max(Pos2::new(br.right() - 4.0 - gw, br.bottom() - 6.0), Pos2::new(br.right() - 4.0, br.bottom() - 3.0));
+                        pnt.rect_filled(gb, 1.0, theme::WARN);
+                        pnt.text(Pos2::new(br.right() - 6.0, br.top() + 8.0), egui::Align2::RIGHT_CENTER, format!("−{gr:.1}"), egui::FontId::monospace(9.0), theme::WARN);
+                    }
+                    let b = b.on_hover_text("Click: open the editor · right-click: replace, sidechain, remove");
+                    if b.clicked() && !st.ui.effect_windows.contains(&(id, iid)) {
+                        st.ui.effect_windows.push((id, iid));
+                    }
+                    b.context_menu(|ui| slot_menu(ui, st, id, iid, k, m, all));
+                    let mut mix = ins.mix;
+                    let r = widgets::mini_knob(ui, &mut mix, 0.0, 1.0, 1.0, ccol).on_hover_text(format!("Mix (dry/wet) {:.0}% – double-click resets", mix * 100.0));
+                    widgets::apply(st, &r, "Effect mix", |p| {
                         if let Some(i) = p.mixer.get_mut(id).and_then(|c| c.inserts.iter_mut().find(|i| i.id == iid)) {
-                            i.enabled = !i.enabled;
+                            i.mix = mix;
                         }
                     });
-                }
-                let gr = meters.gain_reduction.get(&iid).copied().unwrap_or(0.0);
-                let label = effect_name(ins);
-                let text = if gr > 0.1 { format!("{label}  −{gr:.1}") } else { label };
-                let b = ui.add(egui::Button::new(RichText::new(text).small()).min_size(Vec2::new(130.0, 18.0)));
-                if b.clicked() && !st.ui.effect_windows.contains(&(id, iid)) {
-                    st.ui.effect_windows.push((id, iid));
-                }
-                b.context_menu(|ui| slot_menu(ui, st, id, iid, k, m, all));
-                let mut mix = ins.mix;
-                let r = ui.add(egui::DragValue::new(&mut mix).range(0.0..=1.0).speed(0.005).custom_formatter(|v, _| format!("{:.0}%", v * 100.0))).on_hover_text("Mix (dry/wet)");
-                widgets::apply(st, &r, "Effect mix", |p| {
-                    if let Some(i) = p.mixer.get_mut(id).and_then(|c| c.inserts.iter_mut().find(|i| i.id == iid)) {
-                        i.mix = mix;
-                    }
                 });
             });
-        });
         if let Some(payload) = row.response.dnd_release_payload::<SlotDrag>() {
             if payload.mixer == id && payload.index != k {
                 drop = Some((payload.index, k));
@@ -374,10 +544,11 @@ fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChann
         });
     }
     if m.inserts.len() < MAX_INSERTS {
-        egui::Frame::NONE.stroke(Stroke::new(1.0_f32, theme::GRID)).corner_radius(3.0).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
-            ui.horizontal(|ui| {
+        egui::Frame::NONE.stroke(Stroke::new(1.0_f32, theme::GRID)).corner_radius(5.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+            ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), SLOT_H - 4.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.label(RichText::new(format!("{}", m.inserts.len() + 1)).small().monospace().color(theme::TEXT_DIM));
-                add_effect_menu(ui, st, id, "(empty slot) +", None);
+                let w = ui.available_width() - 16.0;
+                add_effect_menu_sized(ui, st, id, "+  Add an effect to this empty slot", None, Vec2::new(w, SLOT_H - 6.0));
             });
         });
     } else {
@@ -643,6 +814,11 @@ fn learn_menu(ui: &mut Ui, st: &mut State, t: Target) {
 /// A menu of every effect: adds a new slot, or with `replace` swaps the effect in an existing slot (keeping
 /// its position, bypass and mix).
 pub fn add_effect_menu(ui: &mut Ui, st: &mut State, mixer: Id, label: &str, replace: Option<Id>) {
+    add_effect_menu_sized(ui, st, mixer, label, replace, Vec2::ZERO);
+}
+
+/// [`add_effect_menu`] with a button of at least `size` (the big empty effect slot).
+pub fn add_effect_menu_sized(ui: &mut Ui, st: &mut State, mixer: Id, label: &str, replace: Option<Id>, size: Vec2) {
     let put = |st: &mut State, effect: String, params: std::collections::BTreeMap<String, f32>, plugin: Option<PluginRef>| {
         let iid = st.session.edit(if replace.is_some() { "Replace effect" } else { "Add effect" }, |p| {
             let iid = p.next_id();
@@ -663,7 +839,9 @@ pub fn add_effect_menu(ui: &mut Ui, st: &mut State, mixer: Id, label: &str, repl
         }
         st.ui.effect_windows.push((mixer, iid));
     };
-    ui.menu_button(RichText::new(label).small().color(theme::ACCENT_2), |ui| {
+    let text = if size == Vec2::ZERO { RichText::new(label).small().color(theme::ACCENT_2) } else { RichText::new(label).color(theme::ACCENT_2) };
+    let button = egui::Button::new(text).min_size(size).fill(if size == Vec2::ZERO { theme::PANEL_2 } else { Color32::TRANSPARENT });
+    egui::menu::menu_custom_button(ui, button, |ui| {
         let mut cats: Vec<&str> = dragon_engine::effects::registry().iter().map(|d| d.category).collect();
         cats.sort();
         cats.dedup();

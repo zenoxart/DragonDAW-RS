@@ -95,6 +95,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            super::quests::badge(ui, st);
+            ui.add_space(8.0);
             let m = st.audio.meters().snapshot();
             ui.label(RichText::new(format!("CPU {:>3.0}%  ·  {} voices", m.cpu_load * 100.0, m.voices)).small().color(if m.cpu_load > 0.8 { theme::REC } else { theme::TEXT_DIM }));
             let (l, r) = m.strips.get(&st.session.project.mixer.master.id).copied().unwrap_or((0.0, 0.0));

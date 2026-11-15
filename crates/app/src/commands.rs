@@ -187,8 +187,8 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 st.import_video(&f);
             }
         }
-        "file.export" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, false)),
-        "file.export_stems" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, true)),
+        "file.export" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, false, st.session.path.as_deref())),
+        "file.export_stems" => st.ui.export = Some(crate::views::export::ExportDialog::new(&st.session.project, true, st.session.path.as_deref())),
         "file.export_midi" => {
             let pat = st.ui.pattern;
             if let Some(pt) = st.session.project.pattern(pat).cloned() {

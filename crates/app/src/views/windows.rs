@@ -16,7 +16,7 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     for (m, i) in effects_open {
         let mut open = true;
         let title = effect_title(st, m, i);
-        egui::Window::new(title).id(egui::Id::new(("fx", m, i))).open(&mut open).resizable(true).default_width(380.0).show(ctx, |ui| effect_editor(ui, st, m, i));
+        egui::Window::new(title).id(egui::Id::new(("fx", m, i))).open(&mut open).resizable(true).default_width(470.0).show(ctx, |ui| effect_editor(ui, st, m, i));
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
             st.ui.effect_windows.retain(|w| *w != (m, i));
         }
@@ -63,17 +63,35 @@ fn presets_dir(st: &State, effect: &str) -> PathBuf {
 fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let Some(ins) = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).cloned() else { return };
     let gr = st.audio.meters().snapshot().gain_reduction.get(&i).copied().unwrap_or(0.0);
-    ui.horizontal(|ui| {
-        let mut en = ins.enabled;
-        if ui.checkbox(&mut en, "Enabled").changed() {
-            st.session.edit("Bypass effect", |p| with_insert(p, m, i, |x| x.enabled = en));
-        }
-        let mut mix = ins.mix;
-        let r = ui.add(egui::Slider::new(&mut mix, 0.0..=1.0).text("dry/wet"));
-        widgets::apply(st, &r, "Effect mix", |p| with_insert(p, m, i, |x| x.mix = mix));
-        if gr > 0.05 {
-            ui.label(RichText::new(format!("GR −{gr:.1} dB")).color(theme::WARN).monospace());
-        }
+    let cat = effects::find(&ins.effect).map(|d| d.category).unwrap_or("Plugin");
+    let ccol = super::mixer::category_color(cat);
+    // Header: category stripe, power LED, mix and gain reduction.
+    egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let (lr, lresp) = ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
+            let led = if ins.enabled { theme::OK } else { theme::GRID_BAR };
+            if ins.enabled {
+                ui.painter().circle_filled(lr.center(), 10.0, led.gamma_multiply(0.25));
+            }
+            ui.painter().circle_filled(lr.center(), 6.5, led);
+            if lresp.on_hover_text(if ins.enabled { "On – click to bypass" } else { "Bypassed – click to enable" }).clicked() {
+                let en = !ins.enabled;
+                st.session.edit("Bypass effect", |p| with_insert(p, m, i, |x| x.enabled = en));
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(RichText::new(cat.to_uppercase()).size(9.5).color(ccol).strong());
+                ui.label(RichText::new(effect_title(st, m, i)).size(14.0).strong());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut mix = ins.mix;
+                let r = widgets::knob_colored(ui, &mut mix, 0.0, 1.0, 1.0, "mix", widgets::pct, ccol);
+                widgets::apply(st, &r, "Effect mix", |p| with_insert(p, m, i, |x| x.mix = mix));
+                if gr > 0.05 {
+                    ui.label(RichText::new(format!("GR −{gr:.1} dB")).color(theme::WARN).monospace());
+                }
+            });
+        });
     });
     let def = effects::find(&ins.effect);
     if def.map(|d| d.uses_sidechain).unwrap_or(ins.plugin.is_some()) {
@@ -100,10 +118,21 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         ui.label("Unknown effect");
         return;
     };
-    ui.label(RichText::new(def.description).small().color(theme::TEXT_DIM));
-    if def.id == "eq" {
-        eq_curve(ui, &ins.params);
+    let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
+    let (edits, _) = super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time });
+    if !edits.is_empty() {
+        st.session.gesture(def.name, |p| {
+            with_insert(p, m, i, |x| {
+                for (k, v) in edits {
+                    x.params.insert(k, v);
+                }
+            })
+        });
     }
+    if time.is_some() && ins.enabled {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    }
+    ui.label(RichText::new(def.description).small().color(theme::TEXT_DIM));
     // Group "Band 3 freq" / "Band 3 gain" … into one row per band, and parameters sharing a first word
     // ("Early …", "Late …") into a section; other parameters share a row.
     let first_word_count = |w: &str| def.params.iter().filter(|p| p.name.split(' ').next() == Some(w)).count();
@@ -132,63 +161,66 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                 reverb_part_curve(ui, &ins.params, if group == "Early" { "er" } else { "late" });
             });
         }
-        ui.horizontal_wrapped(|ui| {
-            if !group.is_empty() {
-                ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().color(theme::ACCENT_2)));
-            }
-            for prm in params {
-                let short = prm.name.strip_prefix(group.as_str()).map(str::trim).filter(|x| !x.is_empty()).unwrap_or(prm.name);
-                let mut v = effects::value(def, &ins.params, prm.id);
-                let key = prm.id.to_string();
-                match prm.kind {
-                    ParamKind::Choice(names) => {
-                        let mut idx = v.round() as usize;
-                        egui::ComboBox::from_id_salt(("fxc", i, prm.id)).selected_text(format!("{}: {}", short, names.get(idx).copied().unwrap_or("?"))).show_ui(ui, |ui| {
-                            for (k, n) in names.iter().enumerate() {
-                                ui.selectable_value(&mut idx, k, *n);
+        egui::Frame::NONE.fill(theme::PANEL).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                if !group.is_empty() {
+                    ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().strong().color(ccol)));
+                }
+                for prm in params {
+                    let short = prm.name.strip_prefix(group.as_str()).map(str::trim).filter(|x| !x.is_empty()).unwrap_or(prm.name);
+                    let mut v = effects::value(def, &ins.params, prm.id);
+                    let key = prm.id.to_string();
+                    match prm.kind {
+                        ParamKind::Choice(names) => {
+                            let mut idx = v.round() as usize;
+                            egui::ComboBox::from_id_salt(("fxc", i, prm.id)).selected_text(format!("{}: {}", short, names.get(idx).copied().unwrap_or("?"))).show_ui(ui, |ui| {
+                                for (k, n) in names.iter().enumerate() {
+                                    ui.selectable_value(&mut idx, k, *n);
+                                }
+                            });
+                            if idx != v.round() as usize {
+                                st.session.edit(prm.name, |p| {
+                                    with_insert(p, m, i, |x| {
+                                        x.params.insert(key, idx as f32);
+                                    })
+                                });
                             }
-                        });
-                        if idx != v.round() as usize {
-                            st.session.edit(prm.name, |p| {
+                        }
+                        ParamKind::Toggle => {
+                            let mut b = v > 0.5;
+                            if ui.checkbox(&mut b, short).changed() {
+                                st.session.edit(prm.name, |p| {
+                                    with_insert(p, m, i, |x| {
+                                        x.params.insert(key, if b { 1.0 } else { 0.0 });
+                                    })
+                                });
+                            }
+                        }
+                        _ => {
+                            let mut n = prm.normalize(v);
+                            let r = widgets::knob_colored(ui, &mut n, 0.0, 1.0, prm.normalize(prm.default), short, |x| prm.format(prm.denormalize(x)), ccol);
+                            v = prm.denormalize(n);
+                            widgets::apply(st, &r, prm.name, |p| {
                                 with_insert(p, m, i, |x| {
-                                    x.params.insert(key, idx as f32);
+                                    x.params.insert(key.clone(), v);
                                 })
                             });
-                        }
-                    }
-                    ParamKind::Toggle => {
-                        let mut b = v > 0.5;
-                        if ui.checkbox(&mut b, short).changed() {
-                            st.session.edit(prm.name, |p| {
-                                with_insert(p, m, i, |x| {
-                                    x.params.insert(key, if b { 1.0 } else { 0.0 });
-                                })
+                            let target = Target::InsertParam { channel: m, insert: i, param: key };
+                            r.context_menu(|ui| {
+                                if ui.button("MIDI learn").clicked() {
+                                    st.ui.midi_learn = Some(target.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Create automation lane").clicked() {
+                                    crate::views::automation::add_lane(st, target.clone());
+                                    ui.close_menu();
+                                }
                             });
                         }
-                    }
-                    _ => {
-                        let mut n = prm.normalize(v);
-                        let r = knob(ui, &mut n, 0.0, 1.0, prm.normalize(prm.default), short, |x| prm.format(prm.denormalize(x)));
-                        v = prm.denormalize(n);
-                        widgets::apply(st, &r, prm.name, |p| {
-                            with_insert(p, m, i, |x| {
-                                x.params.insert(key.clone(), v);
-                            })
-                        });
-                        let target = Target::InsertParam { channel: m, insert: i, param: key };
-                        r.context_menu(|ui| {
-                            if ui.button("MIDI learn").clicked() {
-                                st.ui.midi_learn = Some(target.clone());
-                                ui.close_menu();
-                            }
-                            if ui.button("Create automation lane").clicked() {
-                                crate::views::automation::add_lane(st, target.clone());
-                                ui.close_menu();
-                            }
-                        });
                     }
                 }
-            }
+            });
         });
     }
     ui.separator();
@@ -266,34 +298,6 @@ fn reverb_part_curve(ui: &mut Ui, params: &BTreeMap<String, f32>, prefix: &str) 
     p.add(egui::Shape::line(pts, egui::Stroke::new(1.5_f32, if prefix == "er" { theme::ACCENT_2 } else { theme::PLAYHEAD })));
 }
 
-fn eq_curve(ui: &mut Ui, params: &BTreeMap<String, f32>) {
-    // Approximate the parametric EQ's response from its bands for display.
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(360.0), 90.0), egui::Sense::hover());
-    let p = ui.painter_at(rect);
-    p.rect_filled(rect, 3.0, theme::BG);
-    let def = effects::find("eq").unwrap();
-    let mut e = (def.create)(48000.0);
-    for prm in def.params {
-        e.set_param(prm.id, effects::value(def, params, prm.id));
-    }
-    // Measure with a sine sweep through the actual effect (cheap: 48 points, short bursts).
-    let pts: Vec<egui::Pos2> = (0..48)
-        .map(|k| {
-            let f = 20.0 * (1000.0f32).powf(k as f32 / 47.0);
-            e.reset();
-            let n = 2048;
-            let mut l: Vec<f32> = (0..n).map(|t| (std::f32::consts::TAU * f * t as f32 / 48000.0).sin() * 0.25).collect();
-            let mut r = l.clone();
-            e.process(&mut l, &mut r, None);
-            let rms_out = (l[n / 2..].iter().map(|x| x * x).sum::<f32>() / (n / 2) as f32).sqrt();
-            let db = dragon_engine::dsp::gain_to_db(rms_out / (0.25 / 2f32.sqrt())).clamp(-24.0, 24.0);
-            egui::pos2(rect.left() + rect.width() * k as f32 / 47.0, rect.center().y - db / 24.0 * rect.height() * 0.48)
-        })
-        .collect();
-    p.line_segment([rect.left_center(), rect.right_center()], egui::Stroke::new(1.0_f32, theme::GRID));
-    p.add(egui::Shape::line(pts, egui::Stroke::new(2.0_f32, theme::ACCENT_2)));
-}
-
 #[derive(Clone, Copy)]
 enum PluginSlot {
     Insert(Id, Id),
@@ -353,6 +357,7 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
             if !st.ui.native_editors.contains(&key) {
                 st.ui.native_editors.push(key);
             }
+            crate::views::quests::event(st, crate::views::quests::Event::PluginGui);
             ui.data_mut(|d| d.remove::<String>(error_id));
         } else {
             ui.data_mut(|d| d.insert_temp(error_id, err.unwrap_or_else(|| "the plugin has no editor the host can open on this platform".into())));
@@ -489,24 +494,33 @@ fn env_editor(ui: &mut Ui, st: &mut State, label: &str, env: Envelope, set: impl
 
 fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
     let Some(ch) = st.session.project.channel(cid).cloned() else { return };
-    ui.horizontal(|ui| {
-        let mut name = ch.name.clone();
-        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0)).changed() {
-            st.session.gesture("Rename channel", |p| with_channel(p, cid, |c| c.name = name));
-        }
-        let mut col = [ch.color.0, ch.color.1, ch.color.2];
-        if ui.color_edit_button_srgb(&mut col).changed() {
-            st.session.gesture("Colour", |p| with_channel(p, cid, |c| c.color = Rgb(col[0], col[1], col[2])));
-        }
-        let mut pitch = ch.pitch;
-        let r = knob(ui, &mut pitch, -24.0, 24.0, 0.0, "pitch", |v| format!("{v:+.2} st"));
-        widgets::apply(st, &r, "Channel pitch", |p| with_channel(p, cid, |c| c.pitch = pitch));
-        let mut vol = ch.volume;
-        let r = knob(ui, &mut vol, 0.0, 1.25, 0.8, "volume", widgets::db_fmt);
-        widgets::apply(st, &r, "Channel volume", |p| with_channel(p, cid, |c| c.volume = vol));
-        let mut pan = ch.pan;
-        let r = knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", widgets::pan_fmt);
-        widgets::apply(st, &r, "Channel pan", |p| with_channel(p, cid, |c| c.pan = pan));
+    let ccol = theme::rgb(ch.color);
+    egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let (bar, _) = ui.allocate_exact_size(egui::vec2(5.0, 40.0), egui::Sense::hover());
+            ui.painter().rect_filled(bar, 2.0, ccol);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(RichText::new(ch.instrument.kind_name().to_uppercase()).size(9.5).color(ccol).strong());
+                let mut name = ch.name.clone();
+                if ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0).font(egui::TextStyle::Heading)).changed() {
+                    st.session.gesture("Rename channel", |p| with_channel(p, cid, |c| c.name = name));
+                }
+            });
+            let mut col = [ch.color.0, ch.color.1, ch.color.2];
+            if ui.color_edit_button_srgb(&mut col).changed() {
+                st.session.gesture("Colour", |p| with_channel(p, cid, |c| c.color = Rgb(col[0], col[1], col[2])));
+            }
+            let mut pitch = ch.pitch;
+            let r = knob(ui, &mut pitch, -24.0, 24.0, 0.0, "pitch", |v| format!("{v:+.2} st"));
+            widgets::apply(st, &r, "Channel pitch", |p| with_channel(p, cid, |c| c.pitch = pitch));
+            let mut vol = ch.volume;
+            let r = knob(ui, &mut vol, 0.0, 1.25, 0.8, "volume", widgets::db_fmt);
+            widgets::apply(st, &r, "Channel volume", |p| with_channel(p, cid, |c| c.volume = vol));
+            let mut pan = ch.pan;
+            let r = knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", widgets::pan_fmt);
+            widgets::apply(st, &r, "Channel pan", |p| with_channel(p, cid, |c| c.pan = pan));
+        });
     });
     ui.horizontal(|ui| {
         let (mut cg, mut cb, mut cs) = (ch.cut_group, ch.cut_by, ch.cut_self);
@@ -612,6 +626,12 @@ fn set_synth(p: &mut Project, cid: Id, f: impl FnOnce(&mut SynthParams)) {
 }
 
 fn synth_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SynthParams) {
+    let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
+    let color = st.session.project.channel(cid).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT);
+    super::fx_ui::synth_hero(ui, &s, color, time);
+    if time.is_some() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    }
     for k in 0..3 {
         let o = s.osc[k];
         ui.horizontal(|ui| {

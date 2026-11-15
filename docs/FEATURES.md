@@ -69,6 +69,13 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Command palette | ✅ | `Ctrl+Shift+P` |
 | Collect files, relink missing files, backups | ✅ | File menu, Project view |
 | Spectrum analyser | ✅ | Mastering view |
+| Picker panel: drag patterns (split ones too), audio files and automation clips into the playlist | ✅ | `views/picker.rs` |
+| Automation clips in the playlist (the lane plays relative to each clip) | ✅ | `ClipKind::Automation`, `AutomationLane::value_in_clips` |
+| Visual routing cables in the mixer, drag a cable to route | ✅ | `views/mixer.rs` (`cables`) |
+| Large effect slots, animated interactive effect / synth displays | ✅ | `views/mixer.rs`, `views/fx_ui.rs` |
+| FL-style project folder on save (Samples, Recordings, Renders, Backup) | ✅ | `project_io::save_in_folder` |
+| Mixer and Mastering as default tabs next to the playlist | ✅ | `docking::default_layout` (layout version 2) |
+| Quests, XP, levels, daily streak, celebrations | ✅ | `views/quests.rs` |
 
 ## P3 – advanced
 

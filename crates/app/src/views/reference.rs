@@ -92,7 +92,11 @@ impl ReferenceState {
 }
 
 pub fn show(ui: &mut Ui, st: &mut State) {
+    let had_mix = st.reference.mix_analysis.is_some();
     st.reference.poll();
+    if !had_mix && st.reference.mix_analysis.is_some() {
+        crate::views::quests::event(st, crate::views::quests::Event::MixAnalysed);
+    }
     let reference = st.session.project.reference.clone();
     // Load the reference file when the project names one that is not loaded yet.
     if let Some(r) = &reference {

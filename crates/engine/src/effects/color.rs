@@ -26,7 +26,8 @@ pub struct Saturator {
 }
 
 #[inline]
-fn shape(mode: usize, x: f32) -> f32 {
+/// The saturator's transfer curve for `mode` (also drawn by the editor).
+pub fn shape(mode: usize, x: f32) -> f32 {
     match mode {
         0 => {
             // Tube: asymmetric soft saturation (even harmonics).

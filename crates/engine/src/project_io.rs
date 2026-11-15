@@ -1,4 +1,4 @@
-//! Project files (`.dragon`, JSON), collect-and-save into a `Sounds` folder, rotating backups, autosave and
+//! Project files (`.dragon`, JSON), FL Studio-style project folders (`Samples`, `Recordings`, `Renders`, `Backup`), rotating backups, autosave and
 //! crash recovery.
 
 use crate::model::*;
@@ -31,9 +31,44 @@ pub fn save(p: &Project, path: &Path, backups: usize) -> Result<()> {
 }
 
 fn backup_path(path: &Path, i: usize) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
+    // Projects in a project folder keep their backups in its `Backup` subfolder.
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let base = if dir.join(BACKUP_DIR).is_dir() { dir.join(BACKUP_DIR).join(path.file_name().unwrap_or_default()) } else { path.to_path_buf() };
+    let mut s = base.into_os_string();
     s.push(format!(".bak{i}"));
     PathBuf::from(s)
+}
+
+/// Subfolders of a project folder (FL Studio style): collected samples, recordings, exports and backups.
+pub const SAMPLES_DIR: &str = "Samples";
+pub const RECORDINGS_DIR: &str = "Recordings";
+pub const RENDERS_DIR: &str = "Renders";
+pub const BACKUP_DIR: &str = "Backup";
+
+/// Where a project chosen as `.../Name.dragon` lives as a project folder: `.../Name/Name.dragon`, unless the
+/// file already sits in a folder of that name.
+pub fn project_folder_path(chosen: &Path) -> PathBuf {
+    let stem = chosen.file_stem().map(|s| s.to_os_string()).unwrap_or_else(|| "Untitled".into());
+    let parent = chosen.parent().map(Path::to_path_buf).unwrap_or_default();
+    let file = PathBuf::from(&stem).with_extension(EXTENSION);
+    if parent.file_name() == Some(stem.as_os_str()) {
+        parent.join(file)
+    } else {
+        parent.join(&stem).join(file)
+    }
+}
+
+/// Saves into a project folder: creates `Samples`, `Recordings`, `Renders` and `Backup` next to the project
+/// file, copies every file the project uses from outside the folder into `Samples` (pointing the project at
+/// the copies), then writes the project. Returns the number of files copied.
+pub fn save_in_folder(p: &mut Project, path: &Path, backups: usize) -> Result<usize> {
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    for sub in [SAMPLES_DIR, RECORDINGS_DIR, RENDERS_DIR, BACKUP_DIR] {
+        std::fs::create_dir_all(dir.join(sub)).map_err(|e| EngineError::Io(e.to_string()))?;
+    }
+    let copied = collect_files(p, path)?;
+    save(p, path, backups)?;
+    Ok(copied)
 }
 
 /// Loads a project; relative paths are resolved against the project folder.
@@ -55,6 +90,9 @@ pub fn missing_files(p: &Project) -> Vec<PathBuf> {
 pub fn rewrite_paths(p: &mut Project, mut f: impl FnMut(&Path) -> PathBuf) {
     if let Some(v) = &mut p.video {
         v.path = f(&v.path);
+    }
+    if let Some(r) = &mut p.reference {
+        r.path = f(&r.path);
     }
     for t in &mut p.tracks {
         for c in t.clips.iter_mut().chain(t.takes.iter_mut().flat_map(|k| k.clips.iter_mut())) {
@@ -80,11 +118,12 @@ fn relative_to(f: &Path, dir: &Path) -> PathBuf {
     f.strip_prefix(dir).map(Path::to_path_buf).unwrap_or_else(|_| f.to_path_buf())
 }
 
-/// Copies every referenced file into `<project dir>/Sounds` (renaming on clashes) and points the project
-/// at the copies – the project folder then contains everything it needs.
+/// Copies every referenced file into `<project dir>/Samples` (renaming on clashes) and points the project
+/// at the copies – the project folder then contains everything it needs. The reference track and the
+/// video are included.
 pub fn collect_files(p: &mut Project, project_path: &Path) -> Result<usize> {
     let dir = project_path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let sounds = dir.join("Sounds");
+    let sounds = dir.join(SAMPLES_DIR);
     std::fs::create_dir_all(&sounds).map_err(|e| EngineError::Io(e.to_string()))?;
     let mut map = std::collections::HashMap::new();
     let mut copied = 0;
@@ -195,6 +234,47 @@ impl RecentProjects {
 }
 
 #[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn saving_creates_an_fl_style_project_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A sample somewhere outside the project.
+        let lib = tmp.path().join("library");
+        std::fs::create_dir_all(&lib).unwrap();
+        let kick = lib.join("kick.wav");
+        crate::samples::write_wav(&kick, &[0.1; 100], &[0.1; 100], 44100, crate::samples::BitDepth::Float32, false, false).unwrap();
+        let mut p = Project::new_default();
+        p.add_channel("Kick", Instrument::Sampler(SamplerParams { path: kick.clone(), ..Default::default() }));
+        // The user picks ".../Songs/My Song.dragon".
+        let chosen = tmp.path().join("Songs").join("My Song.dragon");
+        let path = project_folder_path(&chosen);
+        assert_eq!(path, tmp.path().join("Songs").join("My Song").join("My Song.dragon"));
+        // Choosing the file inside its own folder again keeps it there.
+        assert_eq!(project_folder_path(&path), path);
+        assert_eq!(save_in_folder(&mut p, &path, 3).unwrap(), 1);
+        let dir = path.parent().unwrap();
+        for sub in [SAMPLES_DIR, RECORDINGS_DIR, RENDERS_DIR, BACKUP_DIR] {
+            assert!(dir.join(sub).is_dir(), "{sub}");
+        }
+        assert!(dir.join(SAMPLES_DIR).join("kick.wav").is_file());
+        // The project now points at the copy, stored relative to the folder.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("Samples/kick.wav") || text.contains("Samples\\kick.wav"), "{text}");
+        assert!(!text.contains(&lib.display().to_string()));
+        // Saving again: backups go to Backup/, nothing new to copy.
+        assert_eq!(save_in_folder(&mut p, &path, 3).unwrap(), 0);
+        assert!(dir.join(BACKUP_DIR).join("My Song.dragon.bak1").is_file());
+        // The folder is self-contained: move it and it still loads with its sample.
+        let moved = tmp.path().join("Elsewhere");
+        std::fs::rename(dir, &moved).unwrap();
+        let q = load(&moved.join("My Song.dragon")).unwrap();
+        assert!(missing_files(&q).is_empty(), "{:?}", missing_files(&q));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -214,7 +294,7 @@ mod tests {
         assert!(backup_path(&path, 1).exists());
         // Stored relative.
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("Sounds"));
+        assert!(text.contains("Samples"));
         assert!(!text.contains(&dir.path().display().to_string()));
         let back = load(&path).unwrap();
         assert!(missing_files(&back).is_empty());

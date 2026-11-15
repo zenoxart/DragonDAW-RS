@@ -27,19 +27,25 @@ pub struct DockManager {
     pub named: BTreeMap<String, DockState<Tab>>,
 }
 
-/// The default layout of Dragon DAW: browser left, playlist / channel rack / piano roll in the document
-/// well, mixer at the bottom.
+/// The default layout of Dragon DAW: browser left; playlist, mixer, mastering, channel rack and piano roll as
+/// tabs of the document well.
 pub fn default_layout() -> DockState<Tab> {
-    let mut state = DockState::new(vec![Tab::new("dragon.playlist"), Tab::new("dragon.rack"), Tab::new("dragon.piano")]);
+    let mut state = DockState::new(vec![Tab::new("dragon.playlist"), Tab::new("dragon.mixer"), Tab::new("dragon.master"), Tab::new("dragon.rack"), Tab::new("dragon.piano")]);
     let surface = state.main_surface_mut();
-    let [docs, _browser] = surface.split_left(NodeIndex::root(), 0.17, vec![Tab::new("dragon.browser")]);
-    let [_docs, _bottom] = surface.split_below(docs, 0.66, vec![Tab::new("dragon.mixer"), Tab::new("dragon.master")]);
+    let [_docs, _browser] = surface.split_left(NodeIndex::root(), 0.17, vec![Tab::new("dragon.browser")]);
     state
 }
 
+/// Bumped when the default layout changes; a saved layout from an older version is replaced once.
+pub const LAYOUT_VERSION: u32 = 2;
+
 impl DockManager {
     pub fn load(paths: &Paths) -> Self {
-        let state = paths.load_from(&paths.local.join("Layout").join("DockLayout.json")).unwrap_or_else(default_layout);
+        let dir = paths.local.join("Layout");
+        let version: u32 = paths.load_from(&dir.join("LayoutVersion.json")).unwrap_or(1);
+        let saved = if version >= LAYOUT_VERSION { paths.load_from(&dir.join("DockLayout.json")) } else { None };
+        let state = saved.unwrap_or_else(default_layout);
+        paths.save_to(&dir.join("LayoutVersion.json"), &LAYOUT_VERSION);
         let named = paths.load_from(&paths.local.join("Layout").join("NamedLayouts.json")).unwrap_or_default();
         DockManager { state, paths: paths.clone(), named }
     }
