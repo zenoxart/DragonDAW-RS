@@ -180,6 +180,10 @@ pub struct UiState {
     pub ghosts: bool,
     /// Piano roll: scale helpers (FL Alt+B).
     pub helpers: bool,
+    /// Clips can be resized from their left edge (FL Ctrl+Alt+Home).
+    pub resize_left: bool,
+    /// Piano roll: the song's audio drawn under the notes (FL Alt+N).
+    pub wave_helper: bool,
     /// FL's piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
     pub note_tools: crate::views::note_tools::NoteTools,
     /// The stock effect editor shown full screen (mixer insert, effect).
@@ -251,6 +255,8 @@ impl UiState {
             porta: false,
             ghosts: true,
             helpers: true,
+            resize_left: true,
+            wave_helper: false,
             note_tools: Default::default(),
             fx_fullscreen: None,
             midi_learn: None,

@@ -103,9 +103,13 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("ctx.shift_g", "Group selected notes / clips", "", 0, "Shift+G"),
     ("pr.helpers", "Piano roll: note helpers", "", 0, "Alt+B"),
     ("pr.ghosts", "Piano roll: ghost channels", "", 0, "Alt+V"),
+    ("pr.wave_helper", "Piano roll: waveform helper", "", 0, "Alt+N"),
     ("pl.consolidate", "Consolidate selected clips", "Edit/Clips", 9, "Ctrl+Alt+C"),
     ("pl.time_sig", "Set a time signature at the playhead", "Edit/Clips", 9, "Shift+Alt+T"),
     ("pl.picker", "Project picker", "", 0, "Ctrl+F8"),
+    ("pl.resize_left", "Allow resizing clips from the left", "", 0, "Ctrl+Alt+Home"),
+    ("pl.marker_prev", "Jump to the previous marker", "", 0, "Alt+Slash"),
+    ("pl.marker_next", "Jump to the next marker", "", 0, "Alt+Plus"),
     ("tool.slip", "Slip edit tool (playlist) / slide notes (piano roll)", "Edit/Tools", 6, "S"),
     ("tool.playback", "Playback tool", "Edit/Tools", 6, "Y"),
     ("tool.zoom", "Zoom tool", "Edit/Tools", 6, "Z"),
@@ -443,7 +447,21 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "pr.helpers" => st.ui.helpers = !st.ui.helpers,
         "pr.ghosts" => st.ui.ghosts = !st.ui.ghosts,
+        "pr.wave_helper" => st.ui.wave_helper = !st.ui.wave_helper,
         "pl.picker" => st.ui.pl_picker = !st.ui.pl_picker,
+        "pl.resize_left" => {
+            st.ui.resize_left = !st.ui.resize_left;
+            st.ui.status = format!("Resizing from the left {}", if st.ui.resize_left { "on" } else { "off" });
+        }
+        "pl.marker_prev" | "pl.marker_next" => {
+            let now = st.beat_now();
+            let mut beats: Vec<f64> = st.session.project.markers.iter().map(|m| m.beat).collect();
+            beats.sort_by(f64::total_cmp);
+            let to = if id == "pl.marker_next" { beats.iter().find(|b| **b > now + 1e-6).copied() } else { beats.iter().rev().find(|b| **b < now - 1e-6).copied() };
+            if let Some(b) = to {
+                st.seek(b);
+            }
+        }
         "pl.time_sig" => {
             let beat = st.beat_now().floor();
             let cur = st.session.project.time_signatures.iter().rfind(|t| t.beat <= beat).copied();

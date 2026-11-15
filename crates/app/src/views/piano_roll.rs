@@ -166,7 +166,24 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.ui.pr_anim = None;
         }
         let mouse = ui.input(|i| i.pointer.hover_pos()).unwrap_or(grid.center());
-        if alt && scroll.y != 0.0 {
+        let raw = ui.input(|i| i.raw_scroll_delta);
+        let notch = raw.y + raw.x;
+        if shift && alt {
+            // FL Shift+Alt+wheel: nudge the selected notes by a quarter of the snap.
+            if notch != 0.0 && !st.ui.notes.is_empty() {
+                let step = ((PPQ as f64 * st.ui.snap.max(0.0625) / 4.0) as i64).max(1) * notch.signum() as i64;
+                let sel = st.ui.notes.clone();
+                st.session.edit("Nudge notes", |p| {
+                    if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                        for i in &sel {
+                            if let Some(n) = c.notes.get_mut(*i) {
+                                n.start = (n.start as i64 + step).max(0) as u32;
+                            }
+                        }
+                    }
+                });
+            }
+        } else if alt && scroll.y != 0.0 {
             let nkh = (kh * (1.0 + scroll.y / 300.0)).clamp(6.0, 40.0);
             let my = mouse.y - grid.top();
             st.ui.pr_y = ((st.ui.pr_y + my) * nkh / kh - my).clamp(0.0, max_y(nkh));
@@ -257,6 +274,52 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let ex = grid.left() + ((pat_len - sx) * zoom) as f32;
     gp.rect_filled(Rect::from_x_y_ranges(ex..=grid.right().max(ex), grid.y_range()), 0.0, Color32::from_black_alpha(70));
 
+    // Waveform helper (FL Alt+N): the song's audio under this pattern's first playlist clip, faint, so notes
+    // can be lined up with a recording.
+    if st.ui.wave_helper {
+        let at = st
+            .session
+            .project
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| matches!(c.kind, ClipKind::Pattern { pattern } if pattern == pat))
+            .map(|c| c.start)
+            .fold(None, |a: Option<f64>, b| Some(a.map_or(b, |x| x.min(b))));
+        if let Some(p0) = at {
+            let bpm = st.session.project.bpm.max(1.0);
+            let rate = st.audio.rate() as f64;
+            let audio: Vec<(f64, f64, f64, std::path::PathBuf)> = st
+                .session
+                .project
+                .tracks
+                .iter()
+                .filter(|t| !t.muted)
+                .flat_map(|t| t.clips.iter())
+                .filter_map(|c| match &c.kind {
+                    ClipKind::Audio(a) if c.end() > p0 && c.start < p0 + pat_len => Some((c.start, c.end(), a.offset, a.source.clone())),
+                    _ => None,
+                })
+                .collect();
+            for (cs, ce, off, path) in audio {
+                let Some(w) = st.waveform(&path) else { continue };
+                let mid = grid.center().y;
+                let amp = grid.height() * 0.3;
+                let mut x = grid.left();
+                while x < grid.right() {
+                    let beat = p0 + st.ui.pr_x + (x - grid.left()) as f64 / zoom;
+                    if beat >= cs && beat < ce {
+                        let t = off + (beat - cs) * 60.0 / bpm;
+                        let k = (t * rate / crate::state::WAVE_BUCKET as f64) as usize;
+                        if let Some((lo, hi)) = w.get(k) {
+                            gp.line_segment([Pos2::new(x, mid - hi * amp), Pos2::new(x, mid - lo * amp)], Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(120, 200, 255, 40)));
+                        }
+                    }
+                    x += 1.0;
+                }
+            }
+        }
+    }
     // ghost notes
     for (c, n) in &ghosts {
         let r = Rect::from_min_max(Pos2::new(x_of(n.start as f64), y_of(n.pitch) + 1.0), Pos2::new(x_of(n.end() as f64), y_of(n.pitch) + kh - 1.0));

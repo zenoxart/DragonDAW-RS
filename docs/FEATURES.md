@@ -112,7 +112,8 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Channel rack: Ctrl+click multi-select, Alt+C clone, Alt+Del delete, Alt+G group, PgUp / PgDn group view, Alt+Z / Alt+U zip / unzip, Alt+↑/↓ move, Ctrl+L route to free mixer tracks, Alt+M mixer selectors, ↑/↓ select, Shift+↑/↓ extend, Ctrl+Enter focus playlist | ✅ |
 | Piano roll: G / K and H / J channel stepping, Shift+H / Shift+K, M note names, O portamento, F / Shift+F event lane (velocity, pan, release), Shift+D discard lengths, Shift+N chord off, Shift+R select at random, Shift+C select by colour, Alt+C colour, Shift+G / Alt+G groups, Alt+B helpers, Alt+V ghosts, Alt+arrows nudge, Ctrl+Alt+Q quick quantize, Ctrl+M import MIDI | ✅ |
 | Playlist: Shift+G / Alt+G clip groups, Shift+C select by source, Ctrl+Alt+C consolidate, Ctrl+P performance, 6 zoom, Ctrl+← / → / Enter time selection, Shift+Alt+T time signature, Ctrl+F8 project picker | ✅ (6 shows the whole song – there is no separate performance zone) |
-| Piano roll Alt+N waveform helper, Ctrl+I insert controller value, Shift+M random note groups, Alt+* / Alt+/ marker jumps (the numeric-pad keys), Ctrl+Alt+Home resize from the left, Shift+M stretch mode, Shift+Alt+wheel nudge | ❌ not yet (FL itself binds Shift+M twice) |
+| Piano roll Alt+N waveform helper (the song's audio under the notes), Shift+Alt+wheel nudge (playlist and piano roll), Ctrl+Alt+Home resizing from the left, marker jumps | ✅ (marker jumps on Alt+/ and Alt++ – egui has no separate numeric-pad * key) |
+| Ctrl+I insert controller value (FL's per-pattern event editor does not exist here – automation lives in lanes and clips), Shift+M random note groups (FL binds Shift+M to unmute as well) | ❌ |
 
 ## Comparison with the FabFilter bundle
 

@@ -899,3 +899,24 @@ fn fl_rack_piano_and_group_keys() {
     run(&mut h, "ctx.alt_g");
     assert!(h.st.session.project.clip_groups.is_empty());
 }
+
+/// Marker jumps and the resize-from-left switch.
+#[test]
+fn fl_marker_jumps_and_resize_left() {
+    let mut h = Harness::new();
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        assert!(crate::commands::execute(&mut h.st, &format!("dragon.{id}"), &ctx), "{id}");
+    };
+    h.st.session.edit("m", |p| {
+        let (a, b) = (p.next_id(), p.next_id());
+        p.markers.push(Marker { id: a, beat: 8.0, name: "A".into() });
+        p.markers.push(Marker { id: b, beat: 16.0, name: "B".into() });
+    });
+    let before = h.st.ui.resize_left;
+    run(&mut h, "pl.resize_left");
+    assert_ne!(h.st.ui.resize_left, before);
+    run(&mut h, "pl.marker_next");
+    run(&mut h, "pr.wave_helper");
+    assert!(h.st.ui.wave_helper);
+}

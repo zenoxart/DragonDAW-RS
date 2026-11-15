@@ -135,7 +135,19 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if zoom_d != 1.0 || scroll != Vec2::ZERO {
             st.ui.pl_anim = None;
         }
-        if alt && scroll.y != 0.0 {
+        let raw = ui.input(|i| i.raw_scroll_delta);
+        let notch = raw.y + raw.x;
+        if shift && alt && notch != 0.0 {
+            // FL Shift+Alt+wheel: nudge the selected clips by a quarter of the snap.
+            let step = st.ui.snap.max(0.0625) / 4.0 * notch.signum() as f64;
+            let ids = st.ui.clips.clone();
+            st.session.edit("Nudge clips", |p| {
+                for c in p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| ids.contains(&c.id)) {
+                    c.start = (c.start + step).max(0.0);
+                }
+            });
+        } else if shift && alt {
+        } else if alt && scroll.y != 0.0 {
             // Alt + wheel: track height (vertical zoom) around the mouse.
             let vz = st.ui.pl_vzoom;
             let nv = (vz * (1.0 + scroll.y / 300.0)).clamp(0.4, 4.0);
@@ -419,7 +431,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 let edge = 6.0;
                 let kind = if pos.x > r.right() - edge {
                     DragKind::ResizeRight
-                } else if pos.x < r.left() + edge {
+                } else if pos.x < r.left() + edge && st.ui.resize_left {
                     DragKind::ResizeLeft
                 } else {
                     let start = st.session.project.track(tid).and_then(|t| t.clips.iter().find(|c| c.id == cid)).map(|c| c.start).unwrap_or(0.0);
