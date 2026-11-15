@@ -254,7 +254,7 @@ impl Song {
         let any_solo = all.iter().any(|c| c.solo);
         let vca_gain = |c: &MixerChannel| -> f32 { c.vca.and_then(|v| p.mixer.get(v)).filter(|v| v.kind == ChannelKind::Vca).map(|v| if v.muted { 0.0 } else { v.volume }).unwrap_or(1.0) };
         let out_of = |c: &MixerChannel| -> Option<usize> {
-            if c.id == MASTER {
+            if c.id == MASTER || !c.main_out {
                 None
             } else {
                 Some(c.output.and_then(|o| strip_index.get(&o).copied()).unwrap_or(master))
@@ -802,6 +802,41 @@ pub struct Renderer {
     queued: Vec<(Id, Option<Id>, f64)>,
     /// When set, the renderer records which strips' signals to tap for recording (unused offline).
     pub last_block_beat: (f64, f64),
+    ramps: Ramps,
+}
+
+/// Gains applied in the last block, per processor (strip fader, channel, send, insert mix), so a changed value
+/// ramps linearly across the next block instead of stepping (a step is an audible click).
+#[derive(Default)]
+struct Ramps(HashMap<(u8, Id, Id), [f32; 2]>);
+
+impl Ramps {
+    const STRIP: u8 = 0;
+    const CHANNEL: u8 = 1;
+    const SEND: u8 = 2;
+    const MIX: u8 = 3;
+    const WIDTH: u8 = 4;
+
+    /// Returns the previous gains and stores `target` for the next block.
+    fn start(&mut self, key: (u8, Id, Id), target: [f32; 2]) -> [f32; 2] {
+        match self.0.get_mut(&key) {
+            Some(v) => std::mem::replace(v, target),
+            None => {
+                self.0.insert(key, target);
+                target
+            }
+        }
+    }
+}
+
+/// Linear interpolation from `a` to `b` at sample `k` of `n` (reaching `b` on the last sample).
+#[inline]
+fn ramp(a: f32, b: f32, k: usize, n: usize) -> f32 {
+    if a == b {
+        b
+    } else {
+        a + (b - a) * (k + 1) as f32 / n as f32
+    }
 }
 
 impl Renderer {
@@ -817,6 +852,7 @@ impl Renderer {
             pre_fader: Vec::new(),
             chan_buf: (vec![0.0; AUTOMATION_BLOCK], vec![0.0; AUTOMATION_BLOCK]),
             edge_lines: HashMap::new(),
+            ramps: Ramps::default(),
             loudness: LoudnessMeter::new(rate),
             meters: Meters::default(),
             live: Vec::new(),
@@ -1138,15 +1174,17 @@ impl Renderer {
                     }
                     let sc = ins.sidechain.map(|sc| (self.pre_fader[sc].0[..n].to_vec(), self.pre_fader[sc].1[..n].to_vec()));
                     let mix = insert_mix.get(&ins.id).copied().unwrap_or(ins.mix);
+                    let mix0 = self.ramps.start((Ramps::MIX, ins.id, 0), [mix, 0.0])[0];
                     let mut e = ins.effect.lock().unwrap();
-                    if mix >= 0.999 {
+                    if mix >= 0.999 && mix0 >= 0.999 {
                         e.process(bl, br, sc.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())));
                     } else {
                         let dry: (Vec<f32>, Vec<f32>) = (bl.to_vec(), br.to_vec());
                         e.process(bl, br, sc.as_ref().map(|(a, b)| (a.as_slice(), b.as_slice())));
                         for k in 0..n {
-                            bl[k] = dry.0[k] * (1.0 - mix) + bl[k] * mix;
-                            br[k] = dry.1[k] * (1.0 - mix) + br[k] * mix;
+                            let m = ramp(mix0, mix, k, n);
+                            bl[k] = dry.0[k] * (1.0 - m) + bl[k] * m;
+                            br[k] = dry.1[k] * (1.0 - m) + br[k] * m;
                         }
                     }
                     let g = e.gain_reduction();
@@ -1169,7 +1207,10 @@ impl Renderer {
                 let (bl, br) = &mut self.bufs[si];
                 let vol = if strip_mute[si] { 0.0 } else { strip_vol[si] };
                 let (gl, gr_) = balance(strip_pan[si]);
-                let w = strip_width[si];
+                let (gl, gr_) = (vol * gl, vol * gr_);
+                let [gl0, gr0] = self.ramps.start((Ramps::STRIP, s.id, 0), [gl, gr_]);
+                let w1 = strip_width[si];
+                let w0 = self.ramps.start((Ramps::WIDTH, s.id, 0), [w1, 0.0])[0];
                 let mut pl = 0.0f32;
                 let mut pr = 0.0f32;
                 for k in 0..n {
@@ -1181,14 +1222,15 @@ impl Renderer {
                         a = -a;
                         b = -b;
                     }
+                    let w = ramp(w0, w1, k, n);
                     if (w - 1.0).abs() > 1e-3 {
                         let m = (a + b) * 0.5;
                         let sd = (a - b) * 0.5 * w;
                         a = m + sd;
                         b = m - sd;
                     }
-                    a *= vol * gl;
-                    b *= vol * gr_;
+                    a *= ramp(gl0, gl, k, n);
+                    b *= ramp(gr0, gr_, k, n);
                     bl[k] = a;
                     br[k] = b;
                     pl = pl.max(a.abs());
@@ -1284,6 +1326,7 @@ impl Renderer {
         let src = if pre { &self.pre_fader[from] } else { &self.bufs[from] };
         let (a, b) = (src.0[..n].to_vec(), src.1[..n].to_vec());
         let key = (song.strips[from].id, song.strips[to].id, is_send);
+        let level0 = if is_send { self.ramps.start((Ramps::SEND, key.0, key.1), [level, 0.0])[0] } else { level };
         let (tl, tr) = &mut self.bufs[to];
         if delay > 0 {
             let lines = self.edge_lines.entry(key).or_insert_with(|| [DelayLine::new(delay + 1), DelayLine::new(delay + 1)]);
@@ -1293,13 +1336,15 @@ impl Renderer {
             for k in 0..n {
                 lines[0].write(a[k]);
                 lines[1].write(b[k]);
-                tl[k] += lines[0].read(delay as f32) * level;
-                tr[k] += lines[1].read(delay as f32) * level;
+                let g = ramp(level0, level, k, n);
+                tl[k] += lines[0].read(delay as f32) * g;
+                tr[k] += lines[1].read(delay as f32) * g;
             }
         } else {
             for k in 0..n {
-                tl[k] += a[k] * level;
-                tr[k] += b[k] * level;
+                let g = ramp(level0, level, k, n);
+                tl[k] += a[k] * g;
+                tr[k] += b[k] * g;
             }
         }
     }
@@ -1433,10 +1478,12 @@ impl Renderer {
                 g.process(cl, cr);
             }
             let (gl, gr) = balance(c.pan);
+            let (gl, gr) = (c.volume * gl, c.volume * gr);
+            let [gl0, gr0] = self.ramps.start((Ramps::CHANNEL, c.id, 0), [gl, gr]);
             let (bl, br) = &mut self.bufs[c.strip];
             for k in 0..n {
-                bl[f0 + k] += cl[k] * c.volume * gl;
-                br[f0 + k] += cr[k] * c.volume * gr;
+                bl[f0 + k] += cl[k] * ramp(gl0, gl, k, n);
+                br[f0 + k] += cr[k] * ramp(gr0, gr, k, n);
             }
         }
     }
@@ -1660,6 +1707,38 @@ mod tests {
         assert!((ons[1] - 0.375).abs() < 1e-9, "{:?}", ons);
     }
 
+    /// Moving a fader while playing (a recompile with a new volume) must not step the output.
+    #[test]
+    fn fader_moves_do_not_click() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = sine_file(dir.path(), "a.wav", 1.0);
+        let mut p = Project::new_default();
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "a".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: f, ..Default::default() }) });
+        let cache = SampleCache::default();
+        let stretch = StretchCache::default();
+        let mut pool = Pool::new();
+        let mut r = Renderer::new(Arc::new(Song::compile(&p, &mut CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate: 44100.0 })));
+        r.play(PlayMode::Song);
+        let mut out = Vec::new();
+        for k in 0..40 {
+            if k == 20 {
+                let ch = p.tracks[0].mixer;
+                let c = p.mixer.get_mut(ch).unwrap();
+                c.volume = 0.05;
+                c.pan = 1.0;
+                r.set_song(Arc::new(Song::compile(&p, &mut CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate: 44100.0 })));
+            }
+            let (mut l, mut rr) = (vec![0.0; 512], vec![0.0; 512]);
+            r.render(&mut l, &mut rr, &[]);
+            out.extend(l);
+        }
+        // A 440 Hz sine at this level moves < 0.05 per sample; a hard volume step would jump by ~0.3.
+        let step = out[512 * 19..512 * 22].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(step < 0.06, "step {step}");
+        assert!(out[512 * 30..].iter().fold(0.0f32, |m, x| m.max(x.abs())) < 0.05, "volume applied");
+    }
+
     #[test]
     fn mixer_routing_sends_and_solo() {
         let dir = tempfile::tempdir().unwrap();
@@ -1685,6 +1764,21 @@ mod tests {
         p.mixer.get_mut(bus).unwrap().solo = true;
         let s2 = render_secs(&p, 0.3).0.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!((s2 - bused).abs() < 1e-3);
+        p.mixer.get_mut(bus).unwrap().solo = false;
+        // FL-style: no main route, a send into a second bus only.
+        let b2 = p.add_mixer_channel("Bus 2");
+        {
+            let c = p.mixer.get_mut(ch).unwrap();
+            c.main_out = false;
+            c.output = None;
+            c.sends.push(MixerSend { target: b2, level: 1.0, pre_fader: false });
+        }
+        p.mixer.get_mut(b2).unwrap().volume = 0.5;
+        let routed = render_secs(&p, 0.3).0.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!((routed / base - 0.5).abs() < 0.02, "{routed} {base}");
+        p.mixer.get_mut(ch).unwrap().sends.clear();
+        let none = render_secs(&p, 0.3).0.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(none < 1e-6, "{none}");
     }
 
     #[test]

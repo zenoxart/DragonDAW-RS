@@ -631,8 +631,12 @@ pub struct MixerChannel {
     pub width: f32,
     pub inserts: Vec<Insert>,
     pub sends: Vec<MixerSend>,
-    /// Output target; `None` = master (ignored on the master).
+    /// Main output target; `None` = master (ignored on the master).
     pub output: Option<Id>,
+    /// Whether the main output is connected at all. Off, the channel only reaches other channels through its
+    /// sends (FL Studio's "route to this track only" without a master route).
+    #[serde(default = "yes")]
+    pub main_out: bool,
     /// VCA master controlling this channel.
     pub vca: Option<Id>,
     /// Audio input for monitoring / recording straight into the mixer.
@@ -642,6 +646,10 @@ pub struct MixerChannel {
     pub surround: SurroundPan,
     /// Mix group (linked faders).
     pub group: Option<Id>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl MixerChannel {
@@ -662,6 +670,7 @@ impl MixerChannel {
             inserts: Vec::new(),
             sends: Vec::new(),
             output: None,
+            main_out: true,
             vca: None,
             input: None,
             group: None,

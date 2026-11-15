@@ -44,11 +44,13 @@ pub struct Synth {
     counter: u64,
     cutoff_mod: f32,
     res_mod: Option<f32>,
+    /// Smoothed cutoff, resonance and gain (knob turns and automation glide over ~10 ms instead of stepping).
+    smooth: Option<[f32; 3]>,
 }
 
 impl Synth {
     pub fn new(rate: f32) -> Self {
-        Synth { rate, p: SynthParams::default(), voices: Vec::new(), lfo_phase: 0.0, rng: Rng::new(1234), counter: 0, cutoff_mod: 0.0, res_mod: None }
+        Synth { rate, p: SynthParams::default(), voices: Vec::new(), lfo_phase: 0.0, rng: Rng::new(1234), counter: 0, cutoff_mod: 0.0, res_mod: None, smooth: None }
     }
 
     #[inline]
@@ -123,7 +125,14 @@ impl InstrumentVoice for Synth {
         let detune_cents = p.detune as f64;
         let rng = &mut self.rng;
         let unison_norm = 1.0 / (p.voices_norm());
+        let targets = [(p.cutoff + self.cutoff_mod).max(1.0), self.res_mod.unwrap_or(p.resonance), p.gain];
+        let mut sm = self.smooth.unwrap_or(targets);
+        let k_smooth = 1.0 - (-1.0 / (0.01 * self.rate)).exp();
         for i in 0..l.len() {
+            for (c, t) in sm.iter_mut().zip(targets) {
+                *c += (t - *c) * k_smooth;
+            }
+            let [sm_cut, sm_res, sm_gain] = sm;
             self.lfo_phase = (self.lfo_phase + p.lfo_rate / self.rate).fract();
             let lfo = (self.lfo_phase * std::f32::consts::TAU).sin();
             let pitch_mod = 2f64.powf((lfo * p.lfo_pitch) as f64 / 12.0);
@@ -158,8 +167,8 @@ impl InstrumentVoice for Synth {
                     sl += s * (1.0 - pan * 0.6);
                     sr += s * (0.4 + pan * 0.6);
                 }
-                let cutoff = (p.cutoff + self.cutoff_mod) * 2f32.powf(p.filter_env * f_env + lfo * p.lfo_filter) * (0.6 + 0.4 * v.vel);
-                let res = self.res_mod.unwrap_or(p.resonance);
+                let cutoff = sm_cut * 2f32.powf(p.filter_env * f_env + lfo * p.lfo_filter) * (0.6 + 0.4 * v.vel);
+                let res = sm_res;
                 let mut out = [0.0f32; 2];
                 for (ch, x) in [sl as f32, sr as f32].into_iter().enumerate() {
                     let (lp, bp, hp) = v.filter[ch].process(x * unison_norm, cutoff, res, self.rate);
@@ -169,11 +178,12 @@ impl InstrumentVoice for Synth {
                         FilterMode::BandPass => bp,
                     };
                 }
-                let g = a * v.vel * p.gain;
+                let g = a * v.vel * sm_gain;
                 l[i] += out[0] * g * v.gl;
                 r[i] += out[1] * g * v.gr;
             }
         }
+        self.smooth = Some(sm);
         self.voices.retain(|v| !v.amp.is_idle());
     }
 
