@@ -28,7 +28,33 @@ const DELAY_PARAMS: &[ParamInfo] = &[
     ParamInfo::toggle("freeze", "Freeze", false),
     ParamInfo::lin("width", "Width", 0.0, 2.0, 1.0, ""),
     ParamInfo::lin("pitch", "Pitch of the repeats", -12.0, 12.0, 0.0, "st"),
+    // Timeless-style modulation matrix: two LFOs and an envelope follower, four routing slots.
+    ParamInfo::choice("lfo1_sync", "LFO 1 sync", SYNC, 0.0),
+    ParamInfo::log("lfo1_rate", "LFO 1 rate", 0.02, 20.0, 0.5, "Hz"),
+    ParamInfo::choice("lfo1_shape", "LFO 1 shape", DMOD_SHAPES, 0.0),
+    ParamInfo::choice("lfo2_sync", "LFO 2 sync", SYNC, 0.0),
+    ParamInfo::log("lfo2_rate", "LFO 2 rate", 0.02, 20.0, 2.0, "Hz"),
+    ParamInfo::choice("lfo2_shape", "LFO 2 shape", DMOD_SHAPES, 1.0),
+    ParamInfo::choice("m1_src", "Slot 1 source", DMOD_SOURCES, 0.0),
+    ParamInfo::choice("m1_dst", "Slot 1 target", DMOD_TARGETS, 0.0),
+    ParamInfo::lin("m1_amt", "Slot 1 amount", -100.0, 100.0, 0.0, "%"),
+    ParamInfo::choice("m2_src", "Slot 2 source", DMOD_SOURCES, 0.0),
+    ParamInfo::choice("m2_dst", "Slot 2 target", DMOD_TARGETS, 3.0),
+    ParamInfo::lin("m2_amt", "Slot 2 amount", -100.0, 100.0, 0.0, "%"),
+    ParamInfo::choice("m3_src", "Slot 3 source", DMOD_SOURCES, 0.0),
+    ParamInfo::choice("m3_dst", "Slot 3 target", DMOD_TARGETS, 1.0),
+    ParamInfo::lin("m3_amt", "Slot 3 amount", -100.0, 100.0, 0.0, "%"),
+    ParamInfo::choice("m4_src", "Slot 4 source", DMOD_SOURCES, 0.0),
+    ParamInfo::choice("m4_dst", "Slot 4 target", DMOD_TARGETS, 7.0),
+    ParamInfo::lin("m4_amt", "Slot 4 amount", -100.0, 100.0, 0.0, "%"),
 ];
+
+pub const DMOD_SHAPES: &[&str] = &["Sine", "Triangle", "Square", "Random"];
+pub const DMOD_SOURCES: &[&str] = &["Off", "LFO 1", "LFO 2", "Envelope"];
+/// What a slot modulates; at 100 %: time ±25 %, feedback ±0.5, filters ±3 octaves, drive +24 dB,
+/// pitch ±12 st, width ±1, mix ±0.5.
+pub const DMOD_TARGETS: &[&str] = &["Time", "Feedback", "Low cut", "High cut", "Drive", "Pitch", "Width", "Mix"];
+const DMOD_N: usize = 4;
 
 /// Two-stage allpass diffuser (smears each repeat, Timeless "diffusion").
 #[derive(Clone)]
@@ -82,6 +108,15 @@ pub struct Delay {
     pitch: f32,
     /// Pitch shift of the repeats: a rotating tap pair inside the loop.
     shift_phase: f32,
+    lowcut: f32,
+    /// Modulation matrix: LFO (sync, Hz, shape), slots (source, target, amount), the LFOs and the
+    /// input envelope.
+    mlfo: [(usize, f32, usize); 2],
+    slots: [(usize, usize, f32); DMOD_N],
+    mlfos: [Lfo; 2],
+    menv: f32,
+    /// Filter frequencies the last modulated retune used (to skip unchanged ones).
+    mod_freqs: (f32, f32),
 }
 
 impl Delay {
@@ -98,7 +133,10 @@ impl Effect for Delay {
             "time" => self.time_ms = v,
             "feedback" => self.feedback = v.min(0.95),
             "mode" => self.mode = v.round() as usize,
-            "lowcut" => self.lc.iter_mut().for_each(|f| f.set(v, self.rate)),
+            "lowcut" => {
+                self.lowcut = v;
+                self.lc.iter_mut().for_each(|f| f.set(v, self.rate));
+            }
             "highcut" => {
                 self.highcut = v;
                 self.hc.iter_mut().for_each(|f| f.set(v, self.rate));
@@ -122,6 +160,23 @@ impl Effect for Delay {
             "width" => self.width = v,
             "pitch" => self.pitch = v,
             "mod" => self.modulation = v,
+            "lfo1_sync" => self.mlfo[0].0 = (v.round() as usize).min(SYNC.len() - 1),
+            "lfo1_rate" => self.mlfo[0].1 = v,
+            "lfo1_shape" => self.mlfo[0].2 = (v.round() as usize).min(DMOD_SHAPES.len() - 1),
+            "lfo2_sync" => self.mlfo[1].0 = (v.round() as usize).min(SYNC.len() - 1),
+            "lfo2_rate" => self.mlfo[1].1 = v,
+            "lfo2_shape" => self.mlfo[1].2 = (v.round() as usize).min(DMOD_SHAPES.len() - 1),
+            id if id.starts_with('m') && id.len() > 4 && id.as_bytes()[2] == b'_' => {
+                let k = (id.as_bytes()[1].wrapping_sub(b'1')) as usize;
+                if k < DMOD_N {
+                    match &id[3..] {
+                        "src" => self.slots[k].0 = (v.round() as usize).min(DMOD_SOURCES.len() - 1),
+                        "dst" => self.slots[k].1 = (v.round() as usize).min(DMOD_TARGETS.len() - 1),
+                        "amt" => self.slots[k].2 = v / 100.0,
+                        _ => {}
+                    }
+                }
+            }
             "offset" => self.offset = v,
             "mix" => self.mix = v,
             _ => {}
@@ -140,14 +195,46 @@ impl Effect for Delay {
         let env_a = (-1.0 / (0.01 * self.rate)).exp();
         let env_r = (-1.0 / (0.25 * self.rate)).exp();
         // Repeats shifted in pitch: two taps sweeping a 50 ms window in opposite phase (crossfaded).
-        let ratio = 2f32.powf(self.pitch / 12.0);
+        let mut ratio = 2f32.powf(self.pitch / 12.0);
         let win = 0.05 * self.rate;
+        let active = self.slots.iter().any(|s| s.0 > 0 && s.2 != 0.0);
+        let lfo_hz = |(sync, hz, _): (usize, f32, usize)| if sync == 0 { hz } else { (self.bpm / 60.0 / SYNC_BEATS[sync]) as f32 };
+        let hz = [lfo_hz(self.mlfo[0]), lfo_hz(self.mlfo[1])];
+        let shape = |k: usize| [LfoShape::Sine, LfoShape::Triangle, LfoShape::Square, LfoShape::SampleHold][self.mlfo[k].2.min(3)];
+        let shapes = [shape(0), shape(1)];
         for i in 0..l.len() {
+            // ---- modulation matrix: the sum of the slots per target
+            let mut md = [0.0f32; 8];
+            if active {
+                let x = l[i].abs().max(r[i].abs());
+                self.menv = x + (self.menv - x) * if x > self.menv { env_a } else { env_r };
+                let src = [0.0, self.mlfos[0].next(hz[0], self.rate, shapes[0]), self.mlfos[1].next(hz[1], self.rate, shapes[1]), ((crate::dsp::gain_to_db(self.menv.max(1e-6)) + 48.0) / 48.0).clamp(0.0, 1.0)];
+                for &(s, t, a) in &self.slots {
+                    if s > 0 {
+                        md[t] += src[s] * a;
+                    }
+                }
+                // Pitch and the filters retune every 32 samples (keeping their state).
+                if i % 32 == 0 {
+                    ratio = 2f32.powf((self.pitch + md[5] * 12.0).clamp(-24.0, 24.0) / 12.0);
+                    let lc = (self.lowcut * 2f32.powf(md[2] * 3.0)).clamp(20.0, 2000.0);
+                    let hc = (self.highcut * 2f32.powf(md[3] * 3.0)).clamp(500.0, 20000.0).min(self.rate * 0.45);
+                    if (lc - self.mod_freqs.0).abs() > 0.5 {
+                        self.lc.iter_mut().for_each(|f| f.set(lc, self.rate));
+                        self.mod_freqs.0 = lc;
+                    }
+                    if (hc - self.mod_freqs.1).abs() > 1.0 {
+                        self.hc.iter_mut().for_each(|f| f.set(hc, self.rate));
+                        self.mod_freqs.1 = hc;
+                    }
+                }
+            }
             // Tape mode glides the delay time (pitch bends on changes), the others jump smoothly.
             self.smoothed += (target - self.smoothed) * if tape { 0.0002 } else { 0.01 };
             let m = self.lfo.next(0.6, self.rate, LfoShape::Sine) * self.modulation * 0.003 * self.rate;
-            let dl = self.smoothed + m;
-            let dr = (self.smoothed * (1.0 + self.offset) + m).clamp(1.0, self.lines[1].len() as f32 - 4.0);
+            let tm = 1.0 + (md[0] * 0.25).clamp(-0.9, 0.9);
+            let dl = (self.smoothed * tm + m).clamp(1.0, self.lines[0].len() as f32 - 4.0);
+            let dr = (self.smoothed * (1.0 + self.offset) * tm + m).clamp(1.0, self.lines[1].len() as f32 - 4.0);
             let read = |line: &DelayLine, d: f32, phase: f32| -> f32 {
                 if (ratio - 1.0).abs() < 1e-3 {
                     return line.read(d);
@@ -165,7 +252,8 @@ impl Effect for Delay {
             // Feedback path: filters (with a resonant peak at the high cut), drive, diffusion.
             let mut fl = self.peak[0].process(self.hc[0].process(self.lc[0].highpass(yl)));
             let mut fr = self.peak[1].process(self.hc[1].process(self.lc[1].highpass(yr)));
-            if self.drive > 0.01 {
+            let drive = if md[4] != 0.0 { crate::dsp::db_to_gain((self.drive + md[4] * 24.0).clamp(0.0, 36.0)) } else { drive };
+            if drive > 1.0012 {
                 fl = (fl * drive).tanh() / drive.sqrt();
                 fr = (fr * drive).tanh() / drive.sqrt();
             }
@@ -174,7 +262,7 @@ impl Effect for Delay {
                 fl = self.diff[0].process(fl, g);
                 fr = self.diff[1].process(fr, g);
             }
-            let (fb, cr) = if self.freeze { (1.0, 0.0) } else { (self.feedback, self.cross) };
+            let (fb, cr) = if self.freeze { (1.0, 0.0) } else { ((self.feedback + md[1] * 0.5).clamp(0.0, 0.98), self.cross) };
             let (mut fl2, mut fr2) = (fl * fb + fr * cr, fr * fb + fl * cr);
             if tape {
                 fl2 = (fl2 * 1.2).tanh() / 1.2;
@@ -198,10 +286,11 @@ impl Effect for Delay {
             self.env = x + (self.env - x) * if x > self.env { env_a } else { env_r };
             let duck = if self.duck > 0.0 { crate::dsp::db_to_gain(-self.duck * (crate::dsp::gain_to_db(self.env.max(1e-5)) + 40.0).clamp(0.0, 40.0) / 40.0) } else { 1.0 };
             // Width of the echoes (mid / side).
-            let (mid, side) = ((yl + yr) * 0.5, (yl - yr) * 0.5 * self.width);
+            let (mid, side) = ((yl + yr) * 0.5, (yl - yr) * 0.5 * (self.width + md[6]).clamp(0.0, 2.0));
             let (wl, wr) = ((mid + side) * duck, (mid - side) * duck);
-            l[i] = l[i] * (1.0 - self.mix) + wl * self.mix;
-            r[i] = r[i] * (1.0 - self.mix) + wr * self.mix;
+            let mix = (self.mix + md[7] * 0.5).clamp(0.0, 1.0);
+            l[i] = l[i] * (1.0 - mix) + wl * mix;
+            r[i] = r[i] * (1.0 - mix) + wr * mix;
         }
     }
 }
@@ -212,7 +301,7 @@ pub fn delay_def() -> EffectDef {
         name: "Delay",
         category: "Delay",
         description:
-            "Delay after Timeless: tempo-synced or free, stereo / ping-pong / tape, cross feedback, resonant filters, drive and diffusion in the loop, pitch-shifted repeats, ducking, freeze, width and modulation.",
+            "Delay after Timeless: tempo-synced or free, stereo / ping-pong / tape, cross feedback, resonant filters, drive and diffusion in the loop, pitch-shifted repeats, ducking, freeze, width, and a modulation matrix (two LFOs and an envelope follower routed through four slots to time, feedback, filters, drive, pitch, width or mix).",
         params: DELAY_PARAMS,
         uses_sidechain: false,
         create: |rate| {
@@ -244,6 +333,12 @@ pub fn delay_def() -> EffectDef {
                 width: 1.0,
                 pitch: 0.0,
                 shift_phase: 0.0,
+                lowcut: 150.0,
+                mlfo: [(0, 0.5, 0), (0, 2.0, 1)],
+                slots: [(0, 0, 0.0), (0, 3, 0.0), (0, 1, 0.0), (0, 7, 0.0)],
+                mlfos: [Lfo::default(), Lfo::default()],
+                menv: 0.0,
+                mod_freqs: (150.0, 8000.0),
             })
         },
     }
@@ -518,6 +613,42 @@ pub fn tremolo_def() -> EffectDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The delay's modulation matrix: a square LFO routed to the feedback changes how long the echoes of a
+    /// burst ring; a slot without a source does nothing.
+    #[test]
+    fn delay_matrix_moves_its_target() {
+        let rate = 48000.0;
+        let run = |slot: Option<(f32, f32, f32)>| {
+            let mut p = std::collections::BTreeMap::new();
+            p.insert("sync".into(), 0.0);
+            p.insert("time".into(), 50.0);
+            p.insert("feedback".into(), 0.6);
+            p.insert("mix".into(), 1.0);
+            p.insert("mod".into(), 0.0);
+            p.insert("lfo1_rate".into(), 0.02);
+            p.insert("lfo1_shape".into(), 2.0);
+            if let Some((src, dst, amt)) = slot {
+                p.insert("m1_src".into(), src);
+                p.insert("m1_dst".into(), dst);
+                p.insert("m1_amt".into(), amt);
+            }
+            let mut e = crate::effects::create("delay", rate, &p).unwrap();
+            let mut rng = crate::dsp::Rng::new(3);
+            let n = (rate * 2.0) as usize;
+            let mut l: Vec<f32> = (0..n).map(|i| if i < 4800 { rng.bipolar() * 0.3 } else { 0.0 }).collect();
+            let mut r = l.clone();
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                e.process(a, b, None);
+            }
+            l[24000..].iter().map(|x| x * x).sum::<f32>()
+        };
+        let off = run(None);
+        assert_eq!(off, run(Some((0.0, 1.0, 100.0))), "a slot without a source does nothing");
+        let moved = run(Some((1.0, 1.0, 100.0)));
+        let ratio = (moved / off.max(1e-12)).max(off / moved.max(1e-12));
+        assert!(ratio > 4.0, "LFO on feedback: tail energy {moved} vs {off}");
+    }
     #[test]
     fn synced_delay_echoes_on_the_beat() {
         let mut p = std::collections::BTreeMap::new();

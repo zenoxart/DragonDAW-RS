@@ -173,13 +173,16 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
         },
         "delay" => Panel {
             skin: MODERN,
-            bands: None,
+            bands: Some((4, "Slot")),
             sections: vec![
                 sec("Time", vec![p("sync", "Sync"), big("time", "Time"), k("offset", "L/R offset"), p("mode", "Mode")]),
                 sec("Feedback", vec![big("feedback", "Feedback"), k("cross", "Cross-feed"), k("diffusion", "Diffusion"), p("freeze", "Freeze")]),
                 sec("Colour", vec![k("lowcut", "Low cut"), k("highcut", "High cut"), k("reso", "Resonance"), k("drive", "Drive"), k("pitch", "Pitch")]),
                 sec("Motion", vec![k("mod", "Modulation"), k("duck", "Ducking"), k("width", "Width")]),
                 sec("Mix", vec![fad("mix", "Mix")]),
+                sec("LFO 1", vec![p("lfo1_sync", "Sync"), k("lfo1_rate", "Rate"), p("lfo1_shape", "Shape")]),
+                sec("LFO 2", vec![p("lfo2_sync", "Sync"), k("lfo2_rate", "Rate"), p("lfo2_shape", "Shape")]),
+                sec(format!("Modulation slot {b}"), vec![Ctl::Bands, p(format!("m{b}_src"), "Source"), p(format!("m{b}_dst"), "Target"), k(format!("m{b}_amt"), "Amount")]),
             ],
         },
         "chorus" => Panel { skin: MODERN, bands: None, sections: vec![sec("Chorus", vec![big("rate", "Rate"), big("depth", "Depth"), k("delay", "Delay")]), sec("Mix", vec![fad("mix", "Mix")])] },

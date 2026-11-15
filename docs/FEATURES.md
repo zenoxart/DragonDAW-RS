@@ -142,7 +142,7 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 
 ## Comparison with the FabFilter bundle
 
-What the stock effects share with FabFilter's handling. Every listed feature is there; the caveats are in the right column (styles are modelled after FabFilter's names, not measured against the originals).
+What the stock effects share with FabFilter's handling. Every listed feature is there; the one caveat: the compressor and limiter styles are modelled after FabFilter's names, not measured against the originals.
 
 | FabFilter | Dragon DAW stock effects |
 |---|---|
@@ -156,7 +156,7 @@ What the stock effects share with FabFilter's handling. Every listed feature is 
 | Modulation: LFOs (five shapes, free or tempo-synced), envelope followers and an XY pad on any stock-effect parameter, with depth; the XY pad is MIDI-learnable and automatable (MIDI as a source) | ✅ plus MIDI note and MIDI velocity sources (the last note played – patterns, piano roll or live MIDI) and slew per route |
 | Pro-DS: single-vocal (relative) / allround detection, split band (dynamic high shelf) / wide band, detection band high- and low-pass, threshold, range, look-ahead 0–15 ms, stereo link, listen | ✅ De-esser |
 | Pro-MB: up to four bands, three crossovers, per band compress / expand / upward compress / upward expand, threshold, range, ratio, knee, attack, release, gain, solo, bypass; mix, output | ✅ Multiband Dynamics (per-band external sidechain; two processing modes: crossover bands with all-pass compensation, or dynamic phase – each band a dynamic shelf / bell on the full signal, untouched while idle) |
-| Timeless: tempo-synced stereo delay with feedback, cross feedback, drive in the loop, filter with resonance, diffusion, ducking, freeze, width and pitch shift in the loop | ✅ Delay (no modulation matrix beyond the shared LFO / envelope / XY sources) |
+| Timeless: tempo-synced stereo delay with feedback, cross feedback, drive in the loop, filter with resonance, diffusion, ducking, freeze, width and pitch shift in the loop | ✅ Delay, with its own modulation matrix: two LFOs (free or synced, four shapes) and an envelope follower routed through four slots to time, feedback, low / high cut, drive, pitch, width or mix |
 | Volcano: two filters (LP, HP, BP, notch, peak, shelves) at 12 / 24 / 48 dB/oct, styles (Clean, Smooth, Ram, Hack), drive, serial / parallel routing, B following A, stereo spread | ✅ Filter |
 | Pro-G: threshold with hysteresis, range, ratio (gate … expander), knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix, listen | ✅ Gate |
 | Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ (stock editors: fitted window, never under 480 px, full screen in a window of its own; CLAP / VST3 editors: the window takes the editor's requested size, also under window managers, and full screen lifts the size lock – tested with openbox on Xvfb) |
