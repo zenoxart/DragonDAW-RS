@@ -172,6 +172,7 @@ struct CMod {
     /// The parameter's own value, normalized.
     base: f32,
     depth: f32,
+    slew: f32,
 }
 
 /// The XY pad parameter of an axis.
@@ -189,6 +190,9 @@ struct ModRun {
     phase: f32,
     env: f32,
     step: u64,
+    /// The slewed output of the route, and whether it has started.
+    out: f32,
+    started: bool,
 }
 
 struct CStrip {
@@ -364,7 +368,7 @@ impl Song {
                                 ModSource::Xy { axis } => ins.params.get(xy_param(axis)).copied().unwrap_or(0.5),
                                 _ => 0.0,
                             };
-                            Some(CMod { source: m.source, xy, info, base: info.normalize(effects::value(def, &ins.params, info.id)), depth: m.depth.clamp(-1.0, 1.0) })
+                            Some(CMod { source: m.source, xy, info, base: info.normalize(effects::value(def, &ins.params, info.id)), depth: m.depth.clamp(-1.0, 1.0), slew: m.slew.max(0.0) })
                         })
                         .collect(),
                     _ => Vec::new(),
@@ -862,6 +866,8 @@ pub struct Renderer {
     pub meters: Meters,
     live: Vec<LiveEvent>,
     live_notes: Vec<(usize, u8)>,
+    /// The last note triggered anywhere (pitch, velocity) – the MIDI note / velocity modulation sources.
+    last_note: (u8, f32),
     preview: Option<Preview>,
     click_phase: f32,
     click_left: usize,
@@ -929,6 +935,7 @@ impl Renderer {
             meters: Meters::default(),
             live: Vec::new(),
             live_notes: Vec::new(),
+            last_note: (60, 0.0),
             preview: None,
             click_phase: 0.0,
             click_left: 0,
@@ -1289,7 +1296,16 @@ impl Renderer {
                                     ((gain_to_db(run.env.max(1e-6)) + 60.0) / 60.0).clamp(0.0, 1.0)
                                 }
                                 crate::model::ModSource::Xy { axis } => self.xy.get(&(ins.id, axis)).copied().unwrap_or(m.xy).clamp(0.0, 1.0),
+                                crate::model::ModSource::MidiNote { lo, hi } => {
+                                    let (lo, hi) = (lo.min(hi) as f32, lo.max(hi).max(lo.min(hi) + 1) as f32);
+                                    ((self.last_note.0 as f32 - lo) / (hi - lo)).clamp(0.0, 1.0)
+                                }
+                                crate::model::ModSource::MidiVelocity => self.last_note.1.clamp(0.0, 1.0),
                             };
+                            // Slew: a one-pole glide toward the source value.
+                            let v = if m.slew > 0.0 && run.started { run.out + (v - run.out) * (1.0 - (-dt / (m.slew * 0.001)).exp()) } else { v };
+                            run.out = v;
+                            run.started = true;
                             let nv = (m.base + m.depth * v).clamp(0.0, 1.0);
                             e.set_param(m.info.id, m.info.denormalize(nv));
                         }
@@ -1475,6 +1491,7 @@ impl Renderer {
     }
 
     fn trigger(&mut self, song: &Song, ci: usize, on: NoteOn) {
+        self.last_note = (on.note, on.velocity);
         let c = &song.channels[ci];
         // Voice cutting: this channel's trigger chokes channels of its "by" group (and itself with cut-self).
         if c.cut_by > 0 {
@@ -2033,13 +2050,66 @@ mod tests {
             sidechain: None,
             plugin: None,
             preset: String::new(),
-            mods: vec![Modulation { source: ModSource::Lfo { rate: 4.0, shape: 3, sync: false }, target: "gain".into(), depth: 0.5 }],
+            mods: vec![Modulation { source: ModSource::Lfo { rate: 4.0, shape: 3, sync: false }, target: "gain".into(), depth: 0.5, slew: 0.0 }],
         });
         let (l, _) = render_secs(&p, 1.0);
         // RMS in 20 ms windows: two clearly different levels.
         let win: Vec<f32> = l.chunks(882).skip(2).map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt()).collect();
         let (lo, hi) = win.iter().fold((f32::MAX, 0.0f32), |(a, b), x| (a.min(*x), b.max(*x)));
         assert!(hi > lo * 3.0, "{lo} {hi}");
+    }
+
+    /// MIDI velocity as a modulation source (FabFilter's MIDI sources), with slew: a hard note pulls the
+    /// utility's gain down; with 300 ms slew the change glides in instead of jumping.
+    #[test]
+    fn midi_velocity_modulates_with_slew() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("t.wav");
+        let s: Vec<f32> = (0..48000 * 3).map(|i| (i as f32 * 0.06).sin() * 0.25).collect();
+        write_wav(&tone, &s, &s, 48000, BitDepth::Float32, false, false).unwrap();
+        let run = |slew: f32| {
+            let mut p = Project::new_default();
+            let id = p.next_id();
+            p.tracks[0].clips.push(Clip { id, name: "t".into(), start: 0.0, length: 6.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: tone.clone(), ..Default::default() }) });
+            let ch = p.add_channel("Key", Instrument::Synth(SynthParams::default()));
+            p.channel_mut(ch).unwrap().volume = 0.0;
+            let m1 = p.tracks[0].mixer;
+            let ins = p.next_id();
+            p.mixer.get_mut(m1).unwrap().inserts.push(Insert {
+                id: ins,
+                effect: "utility".into(),
+                enabled: true,
+                mix: 1.0,
+                params: Default::default(),
+                sidechain: None,
+                plugin: None,
+                preset: String::new(),
+                mods: vec![Modulation { source: ModSource::MidiVelocity, target: "gain".into(), depth: -0.3, slew }],
+            });
+            let cache = SampleCache::default();
+            let mut pool = Pool::new();
+            let mut r = offline_renderer(&p, &cache, 48000.0, &mut pool);
+            r.play(PlayMode::Song);
+            let block = |r: &mut Renderer, secs: f32| {
+                let n = (secs * 48000.0) as usize;
+                let (mut l, mut rr) = (vec![0.0f32; n], vec![0.0f32; n]);
+                for (a, b) in l.chunks_mut(256).zip(rr.chunks_mut(256)) {
+                    r.render(a, b, &[]);
+                }
+                (l.iter().map(|x| x * x).sum::<f32>() / n as f32).sqrt()
+            };
+            let before = block(&mut r, 0.3);
+            r.push_live(LiveEvent::NoteOn { channel: ch, note: 60, velocity: 1.0 });
+            let soon = block(&mut r, 0.03);
+            block(&mut r, 1.6);
+            let late = block(&mut r, 0.2);
+            (before, soon, late)
+        };
+        let (b, soon, late) = run(0.0);
+        assert!(late < b * 0.7 && soon < b * 0.75, "a hard note lowers the gain at once: {b} {soon} {late}");
+        let (b2, soon2, late2) = run(300.0);
+        assert!((late2 - late).abs() < late * 0.05, "same end point: {late} {late2}");
+        assert!(soon2 > b2 * 0.9, "slew glides in: {b2} {soon2}");
     }
 
     /// The XY pad as a modulation source: its X value moves the target.
@@ -2064,7 +2134,7 @@ mod tests {
                 sidechain: None,
                 plugin: None,
                 preset: String::new(),
-                mods: vec![Modulation { source: ModSource::Xy { axis: 0 }, target: "gain".into(), depth: 0.3 }],
+                mods: vec![Modulation { source: ModSource::Xy { axis: 0 }, target: "gain".into(), depth: 0.3, slew: 0.0 }],
             });
             let (l, _) = render_secs(&p, 0.5);
             l[4410..].iter().fold(0.0f32, |m, v| m.max(v.abs()))

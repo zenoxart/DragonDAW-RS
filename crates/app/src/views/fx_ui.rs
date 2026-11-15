@@ -320,10 +320,9 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
         }
         "reverb" => {
-            use dragon_engine::effects::reverb::DR_FREQS;
             let dr = decay_rect(r);
             let y_of = |m: f32| dr.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (dr.height() * 0.4);
-            let node = |k: usize| Pos2::new(fx(dr, DR_FREQS[k - 1]), y_of(h.v(&format!("dr_{k}"))));
+            let node = |k: usize| Pos2::new(fx(dr, h.v(&format!("dr_f{k}"))), y_of(h.v(&format!("dr_{k}"))));
             if resp.drag_started() {
                 let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
                 let hit = (1..=5).min_by(|a, b| node(*a).distance(origin).total_cmp(&node(*b).distance(origin))).filter(|k| node(*k).distance(origin) < 12.0);
@@ -333,14 +332,17 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             if resp.dragged() && held > 0 {
                 let u = ((dr.center().y - pos.y) / (dr.height() * 0.4)).clamp(-1.0, 1.0);
                 out.push((format!("dr_{held}"), 2f32.powf(u * DR_RANGE)));
+                // Free nodes: sideways moves the point's frequency.
+                out.push((format!("dr_f{held}"), freq_at(dr, pos.x).clamp(20.0, 20_000.0)));
             }
             if resp.double_clicked() {
                 if let Some(k) = (1..=5).find(|k| node(*k).distance(pos) < 12.0) {
                     out.push((format!("dr_{k}"), 1.0));
+                    out.push((format!("dr_f{k}"), dragon_engine::effects::reverb::DR_FREQS[k - 1]));
                 }
             }
             if (1..=5).any(|k| node(k).distance(pos) < 12.0) {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
             }
         }
         "multisat" => {
@@ -964,14 +966,14 @@ fn decay_rect(r: Rect) -> Rect {
 
 const DR_RANGE: f32 = 2.0; // log2: ×0.25 … ×4
 
-/// Pro-R style decay-rate curve: five draggable points (×0.25 … ×4 of the decay time per frequency).
+/// Pro-R style decay-rate curve: five free nodes (frequency and ×0.25 … ×4 of the decay time).
 fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    use dragon_engine::effects::reverb::DR_FREQS;
     p.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(12, 14, 18, 220));
     p.rect_stroke(r, 4.0, Stroke::new(1.0_f32, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
     let y_of = |m: f32| r.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (r.height() * 0.4);
     p.line_segment([Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
-    let pts: Vec<Pos2> = (1..=5).map(|k| Pos2::new(fx(r, DR_FREQS[k - 1]), y_of(h.v(&format!("dr_{k}"))))).collect();
+    let mut pts: Vec<Pos2> = (1..=5).map(|k| Pos2::new(fx(r, h.v(&format!("dr_f{k}"))), y_of(h.v(&format!("dr_{k}"))))).collect();
+    pts.sort_by(|a, b| a.x.total_cmp(&b.x));
     let mut line = vec![Pos2::new(r.left(), pts[0].y)];
     line.extend(pts.iter().copied());
     line.push(Pos2::new(r.right(), pts[4].y));

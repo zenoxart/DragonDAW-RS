@@ -17,8 +17,13 @@ struct LinearPhase {
     fwd: Arc<dyn Fft<f32>>,
     inv: Arc<dyn Fft<f32>>,
     scratch: Vec<Complex<f32>>,
-    kernel: Vec<Complex<f32>>,
-    buf: Vec<Complex<f32>>,
+    /// A 2×2 matrix of kernels: L←L, L←R, R←L, R←R. Stereo / left / right / mid / side bands all fold
+    /// into it (mid and side are sums and differences of the two channels), so placement works in linear
+    /// phase too. `cross` is off while no mid / side band is used.
+    kernels: [Vec<Complex<f32>>; 4],
+    cross: bool,
+    buf: [Vec<Complex<f32>>; 2],
+    out: Vec<Complex<f32>>,
     tmp: Vec<f32>,
     input: [Vec<f32>; 2],
     output: [Vec<f32>; 2],
@@ -33,12 +38,15 @@ impl LinearPhase {
         let inv = pl.plan_fft_inverse(LP_FFT);
         let n = fwd.get_inplace_scratch_len().max(inv.get_inplace_scratch_len());
         let z = || vec![0.0f32; LP_BLOCK];
+        let c = || vec![Complex::default(); LP_FFT];
         LinearPhase {
             fwd,
             inv,
             scratch: vec![Complex::default(); n],
-            kernel: vec![Complex::default(); LP_FFT],
-            buf: vec![Complex::default(); LP_FFT],
+            kernels: [c(), c(), c(), c()],
+            cross: false,
+            buf: [c(), c()],
+            out: c(),
             tmp: vec![0.0; LP_FFT],
             input: [z(), z()],
             output: [z(), z()],
@@ -47,14 +55,15 @@ impl LinearPhase {
         }
     }
 
-    /// Builds the kernel from a magnitude response in dB (`db(freq)`).
-    fn design(&mut self, rate: f32, db: impl Fn(f32) -> f32) {
-        for k in 0..LP_FFT {
+    /// Builds one kernel from a real, zero-phase gain response (`gain(freq)`, may be negative).
+    fn design_one(&mut self, k_out: usize, rate: f32, gain: &dyn Fn(f32) -> f32) {
+        let buf = &mut self.out;
+        for (k, c) in buf.iter_mut().enumerate() {
             let bin = if k <= LP_FFT / 2 { k } else { LP_FFT - k };
             let f = bin as f32 * rate / LP_FFT as f32;
-            self.buf[k] = Complex::new(db_to_gain(db(f.max(1.0))), 0.0);
+            *c = Complex::new(gain(f.max(1.0)), 0.0);
         }
-        self.inv.process_with_scratch(&mut self.buf, &mut self.scratch);
+        self.inv.process_with_scratch(buf, &mut self.scratch);
         // Zero-phase impulse → centre it at LP_KERNEL / 2, window it, zero the rest.
         let half = LP_KERNEL / 2;
         let h = &mut self.tmp;
@@ -62,12 +71,34 @@ impl LinearPhase {
         for (i, v) in h.iter_mut().enumerate().take(LP_KERNEL) {
             let src = (i + LP_FFT - half) % LP_FFT;
             let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / LP_KERNEL as f32).cos();
-            *v = self.buf[src].re / LP_FFT as f32 * w;
+            *v = buf[src].re / LP_FFT as f32 * w;
         }
-        for (k, c) in self.kernel.iter_mut().enumerate() {
+        let kern = &mut self.kernels[k_out];
+        for (k, c) in kern.iter_mut().enumerate() {
             *c = Complex::new(h[k], 0.0);
         }
-        self.fwd.process_with_scratch(&mut self.kernel, &mut self.scratch);
+        self.fwd.process_with_scratch(kern, &mut self.scratch);
+    }
+
+    /// Builds the kernels from the per-placement responses in dB: `db(place, freq)` for place 0 stereo,
+    /// 1 mid, 2 side, 3 left, 4 right.
+    fn design(&mut self, rate: f32, used: [bool; 5], db: impl Fn(usize, f32) -> f32) {
+        let g = |p: usize, f: f32| if used[p] { db_to_gain(db(p, f)) } else { 1.0 };
+        // Per channel: stereo × left / right; then mid / side: L'' = (Gm+Gs)/2·Kl·L + (Gm−Gs)/2·Kr·R.
+        let kl = |f: f32| g(0, f) * g(3, f);
+        let kr = |f: f32| g(0, f) * g(4, f);
+        self.cross = used[1] || used[2];
+        if self.cross {
+            let sum = |f: f32| 0.5 * (g(1, f) + g(2, f));
+            let dif = |f: f32| 0.5 * (g(1, f) - g(2, f));
+            self.design_one(0, rate, &|f| sum(f) * kl(f));
+            self.design_one(1, rate, &|f| dif(f) * kr(f));
+            self.design_one(2, rate, &|f| dif(f) * kl(f));
+            self.design_one(3, rate, &|f| sum(f) * kr(f));
+        } else {
+            self.design_one(0, rate, &kl);
+            self.design_one(3, rate, &kr);
+        }
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
@@ -82,17 +113,24 @@ impl LinearPhase {
                 self.pos = 0;
                 for ch in 0..2 {
                     for k in 0..LP_FFT {
-                        self.buf[k] = Complex::new(if k < LP_BLOCK { self.input[ch][k] } else { 0.0 }, 0.0);
+                        self.buf[ch][k] = Complex::new(if k < LP_BLOCK { self.input[ch][k] } else { 0.0 }, 0.0);
                     }
-                    self.fwd.process_with_scratch(&mut self.buf, &mut self.scratch);
-                    for (x, h) in self.buf.iter_mut().zip(&self.kernel) {
-                        *x *= *h;
+                    self.fwd.process_with_scratch(&mut self.buf[ch], &mut self.scratch);
+                }
+                let norm = 1.0 / LP_FFT as f32;
+                for ch in 0..2 {
+                    let (own, other) = if ch == 0 { (0, 1) } else { (3, 2) };
+                    for k in 0..LP_FFT {
+                        let mut y = self.buf[ch][k] * self.kernels[own][k];
+                        if self.cross {
+                            y += self.buf[1 - ch][k] * self.kernels[other][k];
+                        }
+                        self.out[k] = y;
                     }
-                    self.inv.process_with_scratch(&mut self.buf, &mut self.scratch);
-                    let norm = 1.0 / LP_FFT as f32;
+                    self.inv.process_with_scratch(&mut self.out, &mut self.scratch);
                     for k in 0..LP_BLOCK {
-                        self.output[ch][k] = self.buf[k].re * norm + self.overlap[ch][k];
-                        self.overlap[ch][k] = self.buf[k + LP_BLOCK].re * norm;
+                        self.output[ch][k] = self.out[k].re * norm + self.overlap[ch][k];
+                        self.overlap[ch][k] = self.out[k + LP_BLOCK].re * norm;
                     }
                 }
             }
@@ -112,7 +150,8 @@ const TYPES: &[&str] = &["Bell", "Low shelf", "High shelf", "Low pass", "High pa
 /// Where a band works (Pro-Q's stereo placement).
 pub const PLACEMENTS: &[&str] = &["Stereo", "Mid", "Side", "Left", "Right"];
 /// Pro-Q's processing modes: zero latency (minimum phase) or linear phase (no phase shift, ~64 ms
-/// latency; bands are stereo and static there).
+/// latency; stereo placement and dynamic bands work there too – dynamic bands re-design the kernels
+/// every block).
 /// Natural phase runs the filters at twice the rate (analog-like curves up to the top, small latency).
 pub const PHASE_MODES: &[&str] = &["Zero latency", "Linear phase", "Natural phase"];
 /// Parameters per band.
@@ -272,6 +311,8 @@ pub struct ParametricEq {
     ovs: [crate::dsp::oversample::Oversampler; 2],
     up: [Vec<f32>; 2],
     lp: Box<LinearPhase>,
+    lin_since: usize,
+    lin_pending: bool,
     solo: usize,
     solo_f: [Biquad; 2],
     pre: Analyzer,
@@ -299,6 +340,8 @@ impl ParametricEq {
             ovs: [crate::dsp::oversample::Oversampler::new(2), crate::dsp::oversample::Oversampler::new(2)],
             up: [Vec::new(), Vec::new()],
             lp: Box::new(LinearPhase::new()),
+            lin_since: 0,
+            lin_pending: false,
             solo: 0,
             solo_f: [Biquad::default(); 2],
             pre: Analyzer::new(rate),
@@ -317,9 +360,7 @@ impl ParametricEq {
             self.dyns[i].det.set(BiquadKind::BandPass, b.freq, b.q.max(0.5), 0.0, self.frate);
         }
         if self.linear {
-            let rate = self.rate;
-            let fl: Vec<Biquad> = self.bands.iter().filter(|b| b.on).map(|b| Biquad::new(b.kind, b.freq, b.q, b.gain, rate)).collect();
-            self.lp.design(rate, |f| fl.iter().map(|b| b.response_db(f, rate)).sum());
+            self.design_linear();
         }
         if self.solo > 0 {
             let b = self.bands[self.solo - 1];
@@ -328,6 +369,54 @@ impl ParametricEq {
             }
         }
         self.dirty = false;
+    }
+
+    /// Linear phase: the kernels from every band at its current (static + dynamic) gain, by placement.
+    fn design_linear(&mut self) {
+        let rate = self.rate;
+        let fl: Vec<(usize, Biquad)> = self.bands.iter().zip(&self.dyns).filter(|(b, _)| b.on).map(|(b, d)| (b.place.min(4), Biquad::new(b.kind, b.freq, b.q, b.gain + d.applied, rate))).collect();
+        let mut used = [false; 5];
+        for (p, _) in &fl {
+            used[*p] = true;
+        }
+        self.lp.design(rate, used, |p, f| fl.iter().filter(|(q, _)| *q == p).map(|(_, b)| b.response_db(f, rate)).sum());
+    }
+
+    /// Linear phase with dynamic bands: run the detectors on the input and re-design the kernels when a
+    /// band's dynamic gain moved (checked once per call, at most every 512 samples).
+    fn linear_dynamics(&mut self, l: &[f32], r: &[f32]) {
+        let att = (-1.0 / (0.005 * self.rate)).exp();
+        let rel = (-1.0 / (0.080 * self.rate)).exp();
+        let mut moved = false;
+        for i in 0..EQ_BANDS {
+            let b = self.bands[i];
+            if !b.on || b.dyn_range.abs() <= 0.05 {
+                if self.dyns[i].applied != 0.0 {
+                    self.dyns[i].applied = 0.0;
+                    moved = true;
+                }
+                continue;
+            }
+            let d = &mut self.dyns[i];
+            for k in 0..l.len() {
+                let x = d.det.process(0.5 * (l[k] + r[k])).abs();
+                let c = if x > d.env { att } else { rel };
+                d.env = x + (d.env - x) * c;
+            }
+            let over = (crate::dsp::gain_to_db(d.env.max(1e-6)) - b.thr) / 6.0;
+            let want = b.dyn_range * over.clamp(0.0, 1.0);
+            if (want - d.applied).abs() > 0.25 {
+                d.applied = want;
+                moved = true;
+            }
+        }
+        self.lin_since += l.len();
+        self.lin_pending |= moved;
+        if self.lin_pending && self.lin_since >= 512 {
+            self.lin_since = 0;
+            self.lin_pending = false;
+            self.design_linear();
+        }
     }
 
     fn auto_gain_db(&self) -> f32 {
@@ -501,6 +590,9 @@ impl Effect for ParametricEq {
         }
         self.pre.push(l, r);
         if self.linear {
+            if self.bands.iter().any(|b| b.on && b.dyn_range.abs() > 0.05) || self.dyns.iter().any(|d| d.applied != 0.0) {
+                self.linear_dynamics(l, r);
+            }
             self.lp.process(l, r);
         }
         if self.natural {
@@ -637,6 +729,48 @@ mod tests {
 
     /// Linear phase: same magnitude as the curve, the latency it reports, and no phase shift (a click
     /// comes out symmetric).
+    /// Linear phase keeps Pro-Q's stereo placement (mid / side / left / right) and dynamic bands.
+    #[test]
+    fn linear_phase_placement_and_dynamics() {
+        let run = |set: &[(&str, f32)], l: Vec<f32>, r: Vec<f32>| {
+            let mut e = ParametricEq::new(48000.0);
+            for (k, v) in &def().defaults() {
+                e.set_param(k, *v);
+            }
+            e.set_param("phase", 1.0);
+            for (k, v) in set {
+                e.set_param(k, *v);
+            }
+            let (mut l, mut r) = (l, r);
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                e.process(a, b, None);
+            }
+            let pk = |v: &[f32]| v[30000..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+            (pk(&l), pk(&r))
+        };
+        let t = tone(1000.0, 0.1, 48000);
+        let neg: Vec<f32> = t.iter().map(|x| -x).collect();
+        let side_cut = [("b4_gain", -12.0), ("b4_stereo", 2.0)];
+        // Side band: a mono tone passes, a side tone is cut by 12 dB.
+        let (ml, _) = run(&side_cut, t.clone(), t.clone());
+        assert!((ml / 0.1 - 1.0).abs() < 0.08, "mono passes: {ml}");
+        let (sl, sr) = run(&side_cut, t.clone(), neg.clone());
+        assert!((sl / 0.1 - db_to_gain(-12.0)).abs() < 0.05 && (sr / 0.1 - db_to_gain(-12.0)).abs() < 0.05, "side cut: {sl} {sr}");
+        // Mid band: the reverse.
+        let (ml, _) = run(&[("b4_gain", -12.0), ("b4_stereo", 1.0)], t.clone(), t.clone());
+        assert!((ml / 0.1 - db_to_gain(-12.0)).abs() < 0.05, "mid cut: {ml}");
+        // Left band: only the left channel changes.
+        let (ll, lr) = run(&[("b4_gain", 6.0), ("b4_stereo", 3.0)], t.clone(), t.clone());
+        assert!((ll / 0.1 - db_to_gain(6.0)).abs() < 0.12 && (lr / 0.1 - 1.0).abs() < 0.08, "left only: {ll} {lr}");
+        // Dynamic band: a loud tone is pulled down by the range, a quiet one is left alone.
+        let dynamic = [("b4_dyn", -9.0), ("b4_thr", -40.0)];
+        let (loud, _) = run(&dynamic, t.clone(), t.clone());
+        assert!(loud < 0.1 * db_to_gain(-6.0), "loud tone reduced: {loud}");
+        let q: Vec<f32> = t.iter().map(|x| x * 0.01).collect();
+        let (quiet, _) = run(&dynamic, q.clone(), q);
+        assert!((quiet / 0.001 - 1.0).abs() < 0.1, "quiet tone untouched: {quiet}");
+    }
+
     #[test]
     fn linear_phase_matches_the_curve() {
         let mut e = ParametricEq::new(48000.0);

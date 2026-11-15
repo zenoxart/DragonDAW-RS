@@ -197,6 +197,8 @@ fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDe
                         ModSource::Lfo { .. } => ("LFO", egui::Color32::from_rgb(0x4b, 0xc0, 0xf0)),
                         ModSource::Envelope { .. } => ("ENV", egui::Color32::from_rgb(0x5d, 0xe0, 0xa8)),
                         ModSource::Xy { .. } => ("XY", egui::Color32::from_rgb(0xf5, 0xc8, 0x42)),
+                        ModSource::MidiNote { .. } => ("NOTE", egui::Color32::from_rgb(0xc8, 0x7d, 0xf0)),
+                        ModSource::MidiVelocity => ("VEL", egui::Color32::from_rgb(0xf0, 0x7d, 0xb4)),
                     };
                     ui.label(RichText::new(format!("{name} {}", k + 1)).strong().color(color));
                     ui.label(">");
@@ -234,6 +236,16 @@ fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDe
                         changed |= ui.selectable_value(axis, 0, "X axis").changed();
                         changed |= ui.selectable_value(axis, 1, "Y axis").changed();
                     }
+                    ModSource::MidiNote { lo, hi } => {
+                        changed |= ui.add(egui::Slider::new(lo, 0..=126).text("low note")).changed();
+                        changed |= ui.add(egui::Slider::new(hi, 1..=127).text("high note")).changed();
+                    }
+                    ModSource::MidiVelocity => {
+                        ui.label(RichText::new("the last note's velocity").color(theme::TEXT_DIM));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    changed |= ui.add(egui::Slider::new(&mut md.slew, 0.0..=2000.0).logarithmic(true).suffix(" ms").text("slew")).on_hover_text("Glide on the source: smooths jumps (0 = instant)").changed();
                 });
             });
         }
@@ -244,15 +256,23 @@ fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDe
         ui.horizontal(|ui| {
             let first = targets.first().map(|p| p.id.to_string()).unwrap_or_default();
             if ui.button("+ LFO").clicked() {
-                mods.push(Modulation { source: ModSource::Lfo { rate: 1.0, shape: 0, sync: true }, target: first.clone(), depth: 0.3 });
+                mods.push(Modulation { source: ModSource::Lfo { rate: 1.0, shape: 0, sync: true }, target: first.clone(), depth: 0.3, slew: 0.0 });
                 changed = true;
             }
             if ui.button("+ Envelope follower").clicked() {
-                mods.push(Modulation { source: ModSource::Envelope { attack: 5.0, release: 150.0, gain: 0.0 }, target: first.clone(), depth: 0.5 });
+                mods.push(Modulation { source: ModSource::Envelope { attack: 5.0, release: 150.0, gain: 0.0 }, target: first.clone(), depth: 0.5, slew: 0.0 });
                 changed = true;
             }
             if ui.button("+ XY pad").on_hover_text("Moves the target with the XY pad; right-click the pad for MIDI learn or automation").clicked() {
-                mods.push(Modulation { source: ModSource::Xy { axis: 0 }, target: first, depth: 0.5 });
+                mods.push(Modulation { source: ModSource::Xy { axis: 0 }, target: first.clone(), depth: 0.5, slew: 0.0 });
+                changed = true;
+            }
+            if ui.button("+ MIDI note").on_hover_text("Follows the pitch of the last note played (patterns, piano roll, live MIDI)").clicked() {
+                mods.push(Modulation { source: ModSource::MidiNote { lo: 36, hi: 96 }, target: first.clone(), depth: 0.5, slew: 0.0 });
+                changed = true;
+            }
+            if ui.button("+ Velocity").on_hover_text("Follows the velocity of the last note played").clicked() {
+                mods.push(Modulation { source: ModSource::MidiVelocity, target: first, depth: 0.5, slew: 0.0 });
                 changed = true;
             }
         });

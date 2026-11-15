@@ -663,6 +663,11 @@ pub enum ModSource {
     /// One axis of the insert's XY pad (0 = X, 1 = Y), stored in its params as `__xy_x` / `__xy_y`
     /// (automatable and MIDI-learnable like any parameter). Unipolar 0 … 1.
     Xy { axis: u8 },
+    /// The pitch of the last note played anywhere in the project (pattern, piano roll or live MIDI),
+    /// 0 … 1 over `lo` … `hi` (MIDI note numbers).
+    MidiNote { lo: u8, hi: u8 },
+    /// The velocity of the last note played, 0 … 1.
+    MidiVelocity,
 }
 
 /// One modulation route: a source moving a parameter by `depth` (−1 … 1 of its range) around its value.
@@ -672,6 +677,9 @@ pub struct Modulation {
     /// Parameter id of the effect.
     pub target: String,
     pub depth: f32,
+    /// Slew (glide) on the source in ms: 0 follows instantly, higher values smooth jumps.
+    #[serde(default)]
+    pub slew: f32,
 }
 
 impl ModSource {
