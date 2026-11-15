@@ -257,8 +257,14 @@ pub struct Smoothed {
 const SMOOTH_SLICE: usize = 32;
 
 impl Smoothed {
-    pub fn new(def: &'static EffectDef, inner: Box<dyn Effect>, rate: f32) -> Self {
+    pub fn new(def: &'static EffectDef, mut inner: Box<dyn Effect>, rate: f32) -> Self {
         let d: Vec<f32> = def.params.iter().map(|p| p.default).collect();
+        // The wrapper skips values equal to what it believes is current, so the effect must really be at
+        // the declared defaults first (an effect's constructor may start elsewhere – the EQ's bands start
+        // switched off while bands 1–7 default to on).
+        for p in def.params {
+            inner.set_param(p.id, p.default);
+        }
         let coef = 1.0 - (-(SMOOTH_SLICE as f32) / (0.025 * rate.max(1.0))).exp();
         Smoothed { def, inner, current: d.clone(), target: d, coef, primed: false }
     }
@@ -397,6 +403,29 @@ pub fn value(def: &EffectDef, params: &BTreeMap<String, f32>, id: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every stock effect created with its default parameters behaves exactly like the bare effect with
+    /// every default set explicitly (the smoothing wrapper must not skip defaults the effect's constructor
+    /// does not start at – that left the EQ's default bands switched off).
+    #[test]
+    fn defaults_reach_every_effect() {
+        let mut rng = crate::dsp::Rng::new(7);
+        let x: Vec<f32> = (0..8192).map(|_| rng.bipolar() * 0.3).collect();
+        for def in registry() {
+            let mut a = create(def.id, 48000.0, &def.defaults()).unwrap();
+            let mut b = (def.create)(48000.0);
+            for p in def.params {
+                b.set_param(p.id, p.default);
+            }
+            let (mut al, mut ar, mut bl, mut br) = (x.clone(), x.clone(), x.clone(), x.clone());
+            for k in (0..x.len()).step_by(256) {
+                a.process(&mut al[k..k + 256], &mut ar[k..k + 256], None);
+                b.process(&mut bl[k..k + 256], &mut br[k..k + 256], None);
+            }
+            let diff = al.iter().zip(&bl).map(|(p, q)| (p - q).abs()).fold(0.0f32, f32::max);
+            assert!(diff < 1e-4, "{}: wrapped and explicit defaults differ by {diff}", def.id);
+        }
+    }
 
     fn noise(n: usize) -> (Vec<f32>, Vec<f32>) {
         let mut rng = crate::dsp::Rng::new(7);

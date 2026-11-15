@@ -2059,6 +2059,44 @@ mod tests {
         assert!(hi > lo * 3.0, "{lo} {hi}");
     }
 
+    /// The EQ is audible through the whole render path: +12 dB at 1 kHz on a 1 kHz tone, in every
+    /// processing mode, and the insert's mix knob blends it.
+    #[test]
+    fn eq_is_audible_in_a_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("t.wav");
+        let s: Vec<f32> = (0..44100 * 3).map(|i| (i as f32 * std::f32::consts::TAU * 1000.0 / 44100.0).sin() * 0.1).collect();
+        write_wav(&tone, &s, &s, 44100, BitDepth::Float32, false, false).unwrap();
+        let level = |eq: Option<(f32, f32)>| {
+            let mut p = Project::new_default();
+            let id = p.next_id();
+            p.tracks[0].clips.push(Clip { id, name: "t".into(), start: 0.0, length: 6.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: tone.clone(), ..Default::default() }) });
+            if let Some((phase, mix)) = eq {
+                let def = crate::effects::find("eq").unwrap();
+                let mut params = def.defaults();
+                params.insert("b4_on".into(), 1.0);
+                params.insert("b4_freq".into(), 1000.0);
+                params.insert("b4_gain".into(), 12.0);
+                params.insert("phase".into(), phase);
+                let m1 = p.tracks[0].mixer;
+                let ins = p.next_id();
+                p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "eq".into(), enabled: true, mix, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            }
+            let (l, _) = render_secs(&p, 2.0);
+            let seg = &l[44100..88200];
+            (seg.iter().map(|x| x * x).sum::<f32>() / seg.len() as f32).sqrt()
+        };
+        let dry = level(None);
+        assert!(dry > 0.01, "the tone plays: {dry}");
+        for phase in [0.0, 1.0, 2.0] {
+            let wet = level(Some((phase, 1.0)));
+            let db = 20.0 * (wet / dry).log10();
+            assert!((db - 12.0).abs() < 1.5, "phase mode {phase}: {db:.1} dB");
+        }
+        let half = level(Some((0.0, 0.5)));
+        assert!(half > dry * 1.5 && half < dry * 3.5, "mix 50 %: {}", half / dry);
+    }
+
     /// MIDI velocity as a modulation source (FabFilter's MIDI sources), with slew: a hard note pulls the
     /// utility's gain down; with 300 ms slew the change glides in instead of jumping.
     #[test]
