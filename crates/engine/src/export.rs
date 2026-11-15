@@ -457,6 +457,64 @@ mod tests {
         assert_eq!(rep.files.len(), 1, "only the channel with audio gets a stem");
     }
 
+    /// The export keeps the DAW's tempo: at 140 BPM a sampler note on every beat lands every 60/140 s, and
+    /// an audio clip of clicks every 0.5 s keeps that spacing, whatever the device and export rates (the
+    /// sample cache already holds the 44.1 kHz version the live engine used).
+    #[test]
+    fn export_keeps_the_tempo() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("click.wav");
+        let mut s = vec![0.0f32; 44100 * 4];
+        for k in 0..8 {
+            for j in 0..600 {
+                s[k * 22050 + j] = 0.9;
+            }
+        }
+        crate::samples::write_wav(&src, &s, &s, 44100, BitDepth::Float32, false, false).unwrap();
+        let onsets = |d: &crate::samples::AudioData| -> Vec<f64> {
+            let mut v = Vec::new();
+            let mut last = -1.0e9;
+            for (i, x) in d.l.iter().enumerate() {
+                let t = i as f64 / d.rate as f64;
+                if x.abs() > 0.3 && t - last > 0.1 {
+                    v.push(t);
+                    last = t;
+                }
+            }
+            v
+        };
+        let spacing = |v: &[f64]| (v[v.len() - 1] - v[0]) / (v.len() - 1) as f64;
+        // Pattern timing: a sampler playing the click on every beat.
+        let mut p = Project::new_default();
+        p.bpm = 140.0;
+        let ch = p.add_channel("Click", Instrument::Sampler(SamplerParams { path: src.clone(), root_note: 60, end: 0.02, ..Default::default() }));
+        let pat = p.patterns[0].id;
+        p.patterns[0].channels.insert(ch, PatternChannel { steps: vec![], notes: (0..8).map(|k| Note { pitch: 60, start: k * PPQ, length: PPQ / 4, ..Note::default() }).collect() });
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "p".into(), start: 0.0, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+        // Audio timing: the click file as a clip on another track.
+        let id = p.next_id();
+        p.tracks[1].clips.push(Clip { id, name: "a".into(), start: 16.0, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: src.clone(), ..Default::default() }) });
+        let cache = SampleCache::default();
+        let _ = cache.get(&src, 44100);
+        for (render, out_rate) in [(48000u32, 48000u32), (48000, 44100), (44100, 44100)] {
+            let opts = ExportOptions { format: ExportFormat::Wav(BitDepth::Float32), rate: out_rate, render_rate: render, tail: 0.0, ..Default::default() };
+            let path = dir.path().join(format!("t{render}_{out_rate}.wav"));
+            export(&p, &cache, &path, &opts, &mut |_| {}).unwrap();
+            let d = crate::samples::decode(&path).unwrap();
+            assert_eq!(d.rate, out_rate);
+            let on = onsets(&d);
+            let beats: Vec<f64> = on.iter().copied().filter(|t| *t < 16.0 * 60.0 / 140.0 - 0.1).collect();
+            let audio: Vec<f64> = on.iter().copied().filter(|t| *t >= 16.0 * 60.0 / 140.0 - 0.01).collect();
+            assert!(beats.len() >= 7 && audio.len() >= 6, "{render}/{out_rate}: onsets {on:?}");
+            let beat = 60.0 / 140.0;
+            assert!((beats[0]).abs() < 0.003, "{render}/{out_rate}: first beat at {}", beats[0]);
+            assert!((spacing(&beats) - beat).abs() < 0.0005, "{render}/{out_rate}: pattern beat {} s, want {beat}", spacing(&beats));
+            assert!((audio[0] - 16.0 * beat).abs() < 0.003, "{render}/{out_rate}: audio clip at {}", audio[0]);
+            assert!((spacing(&audio) - 0.5).abs() < 0.0005, "{render}/{out_rate}: audio clicks every {} s", spacing(&audio));
+        }
+    }
+
     #[test]
     fn export_includes_patterns() {
         let dir = tempfile::tempdir().unwrap();
