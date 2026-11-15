@@ -292,6 +292,47 @@ pub struct Envelope {
     pub release_tension: f32,
 }
 
+impl Envelope {
+    fn bend(x: f32, tension: f32) -> f32 {
+        if tension.abs() < 1e-3 {
+            x
+        } else {
+            let k = tension * 5.0;
+            ((k * x).exp() - 1.0) / (k.exp() - 1.0)
+        }
+    }
+
+    /// The gain the envelope generator produces `t` seconds after the note starts when the note is held for
+    /// `held` seconds (the same curve as [`crate::dsp::EnvelopeGen`]; for drawing).
+    pub fn level_at(&self, t: f32, held: f32) -> f32 {
+        let sustained = |t: f32| -> f32 {
+            let mut t = t - self.delay;
+            if t < 0.0 {
+                return 0.0;
+            }
+            if t < self.attack {
+                return Self::bend(t / self.attack.max(1e-6), -self.attack_tension);
+            }
+            t -= self.attack;
+            if t < self.hold {
+                return 1.0;
+            }
+            t -= self.hold;
+            if t < self.decay {
+                return 1.0 + (self.sustain - 1.0) * Self::bend(t / self.decay.max(1e-6), self.release_tension);
+            }
+            self.sustain
+        };
+        if t < held {
+            sustained(t)
+        } else {
+            let from = sustained(held);
+            let x = if self.release <= 0.0 { 1.0 } else { ((t - held) / self.release).min(1.0) };
+            from * (1.0 - Self::bend(x, self.release_tension))
+        }
+    }
+}
+
 impl Default for Envelope {
     fn default() -> Self {
         Envelope { enabled: false, delay: 0.0, attack: 0.001, hold: 0.0, decay: 0.3, sustain: 1.0, release: 0.05, attack_tension: 0.0, release_tension: 0.0 }

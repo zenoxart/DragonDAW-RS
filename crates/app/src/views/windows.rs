@@ -493,36 +493,7 @@ fn with_channel(p: &mut Project, c: Id, f: impl FnOnce(&mut RackChannel)) {
 }
 
 fn env_editor(ui: &mut Ui, st: &mut State, label: &str, env: Envelope, set: impl Fn(&mut Project, Envelope) + Copy) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).small().color(theme::TEXT_DIM));
-        let mut e = env;
-        if ui.checkbox(&mut e.enabled, "on").changed() {
-            st.session.edit(label, |p| set(p, e));
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        let secs = |v: f32| if v < 1.0 { format!("{:.0} ms", v * 1000.0) } else { format!("{v:.2} s") };
-        let fields: [(&str, f32, f32, f32); 6] =
-            [("delay", env.delay, 0.0, 2.0), ("attack", env.attack, 0.0, 4.0), ("hold", env.hold, 0.0, 2.0), ("decay", env.decay, 0.0, 4.0), ("sustain", env.sustain, 0.0, 1.0), ("release", env.release, 0.0, 8.0)];
-        for (k, (name, v, min, max)) in fields.into_iter().enumerate() {
-            let mut x = v;
-            let r = if name == "sustain" { knob(ui, &mut x, min, max, 1.0, name, widgets::pct) } else { knob(ui, &mut x, min, max, 0.0, name, secs) };
-            if r.changed() {
-                let mut e = env;
-                match k {
-                    0 => e.delay = x,
-                    1 => e.attack = x,
-                    2 => e.hold = x,
-                    3 => e.decay = x,
-                    4 => e.sustain = x,
-                    _ => e.release = x,
-                }
-                widgets::apply(st, &r, label, |p| set(p, e));
-            } else {
-                widgets::apply(st, &r, label, |_| {});
-            }
-        }
-    });
+    super::envelope::editor(ui, st, label, env, theme::ACCENT_2, set);
 }
 
 fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
@@ -613,6 +584,28 @@ fn sampler_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SamplerParams, env: E
         }
         let sx = rect.left() + s.start * rect.width();
         let ex = rect.left() + s.end * rect.width();
+        // FL style: the volume envelope drawn over the sample (as if the note is held for the whole
+        // sample), and the waveform dimmed where the envelope turns it down.
+        if env.enabled {
+            let rate = st.audio.rate() as f32;
+            let secs = (n * crate::state::WAVE_BUCKET) as f32 / rate.max(1.0);
+            let play = ((s.end - s.start).max(0.001)) * secs;
+            let held = play;
+            let mut pts = Vec::new();
+            let mut x = sx;
+            while x <= ex {
+                let t = (x - sx) / (ex - sx).max(1.0) * play;
+                let g = env.level_at(t, held);
+                pts.push(egui::pos2(x, rect.bottom() - 2.0 - g * (rect.height() - 4.0)));
+                // Shade the part of the waveform the envelope removes.
+                let cut = (1.0 - g).clamp(0.0, 1.0);
+                if cut > 0.02 {
+                    p.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0_f32, theme::BG.gamma_multiply(cut * 0.85)));
+                }
+                x += 1.0;
+            }
+            p.add(egui::Shape::line(pts, egui::Stroke::new(1.5_f32, theme::WARN)));
+        }
         p.rect_filled(egui::Rect::from_x_y_ranges(rect.left()..=sx, rect.y_range()), 0.0, egui::Color32::from_black_alpha(140));
         p.rect_filled(egui::Rect::from_x_y_ranges(ex..=rect.right(), rect.y_range()), 0.0, egui::Color32::from_black_alpha(140));
         for sl in &s.slices {

@@ -2,6 +2,7 @@
 
 pub mod automation;
 pub mod browser;
+pub mod envelope;
 pub mod export;
 pub mod fx_gallery;
 pub mod fx_ui;
