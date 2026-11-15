@@ -80,7 +80,16 @@ mod imp {
             let x = xlib::Xlib::open().map_err(|e| EngineError::Plugin(format!("libX11: {e}")))?;
             // SAFETY: plain Xlib calls on a connection we own.
             unsafe {
-                let display = (x.XOpenDisplay)(std::ptr::null());
+                // A busy X server (a CI Xvfb, a reconnecting session) can refuse a connection for a moment:
+                // try a few times before giving up.
+                let mut display = (x.XOpenDisplay)(std::ptr::null());
+                for _ in 0..20 {
+                    if !display.is_null() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    display = (x.XOpenDisplay)(std::ptr::null());
+                }
                 if display.is_null() {
                     return Err(EngineError::Plugin("cannot open the X display".into()));
                 }
