@@ -1311,3 +1311,34 @@ fn mixer_auto_balance() {
     assert_eq!(h.st.session.history.labels().last().map(|s| s.as_str()), Some("Auto-balance"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The effect editor's designed panel: dragging the compressor's Threshold knob up changes the insert's
+/// parameter in the project, as one undo step; the Style buttons / dropdown and the switches are there.
+#[test]
+fn effect_panel_knob_edits_the_project() {
+    let mut h = Harness::new();
+    h.st.open_effect_on_master("compressor");
+    let editor = |ui: &mut egui::Ui, st: &mut State| {
+        let (m, i) = st.ui.effect_windows[0];
+        super::windows::effect_editor(ui, st, m, i);
+    };
+    h.idle(editor, 3);
+    let (m, i) = h.st.ui.effect_windows[0];
+    let rects: Vec<(String, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new(("fx.panel", m, i)).with("rects"))).expect("the panel was drawn");
+    for id in ["threshold", "ratio", "attack", "style", "sidechain", "mix"] {
+        assert!(rects.iter().any(|(p, _)| p == id), "{id} on the panel");
+    }
+    let knob = rects.iter().find(|(p, _)| p == "threshold").unwrap().1;
+    // The default project's master already has a limiter: find the compressor by its id.
+    let ins = |h: &Harness| h.st.session.project.mixer.master.inserts.iter().find(|x| x.id == i).cloned().unwrap();
+    let thr = |h: &Harness| ins(h).params.get("threshold").copied().unwrap_or(-18.0);
+    let before = thr(&h);
+    let undo_before = h.st.session.history.labels().len();
+    h.drag(editor, knob.center(), knob.center() - egui::vec2(0.0, 60.0), PointerButton::Primary, Modifiers::NONE);
+    assert!(thr(&h) > before + 3.0, "threshold {before} -> {}", thr(&h));
+    assert_eq!(h.st.session.history.labels().len(), undo_before + 1, "one undo step");
+    // The sidechain LED switch toggles.
+    let sw = rects.iter().find(|(p, _)| p == "sidechain").unwrap().1;
+    h.click(editor, sw.center(), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(ins(&h).params.get("sidechain").copied(), Some(1.0));
+}

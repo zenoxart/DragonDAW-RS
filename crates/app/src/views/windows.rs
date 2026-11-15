@@ -21,7 +21,11 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
         // Full screen uses a window of its own, so the fitted window keeps its size and place for when you leave.
         let wid = if full { egui::Id::new(("fx.full", m, i)) } else { egui::Id::new(("fx", m, i)) };
         let mut w = egui::Window::new(title).id(wid).open(&mut open).resizable(true).vscroll(true);
-        w = if full { w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false) } else { w.default_width(520.0).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0) };
+        w = if full {
+            w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false)
+        } else {
+            w.default_width(600.0).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
+        };
         w.show(ctx, |ui| effect_editor(ui, st, m, i));
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
             st.ui.effect_windows.retain(|w| *w != (m, i));
@@ -329,7 +333,7 @@ fn presets_dir(st: &State, effect: &str) -> PathBuf {
     st.ctx.paths.config.join("Presets").join(effect)
 }
 
-fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
+pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let Some(ins) = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).cloned() else { return };
     let gr = st.audio.meters().snapshot().gain_reduction.get(&i).copied().unwrap_or(0.0);
     let cat = effects::find(&ins.effect).map(|d| d.category).unwrap_or("Plugin");
@@ -440,153 +444,165 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
     ui.label(RichText::new(def.description).small().color(theme::TEXT_DIM));
-    // Group "Band 3 freq" / "Band 3 gain" … into one row per band, and parameters sharing a first word
-    // ("Early …", "Late …") into a section; other parameters share a row.
-    let first_word_count = |w: &str| def.params.iter().filter(|p| p.name.split(' ').next() == Some(w)).count();
-    let group_of = |name: &str| -> String {
-        let mut it = name.split(' ');
-        match (it.next(), it.next()) {
-            (Some(a), Some(b)) if b.chars().all(|c| c.is_ascii_digit()) => format!("{a} {b}"),
-            (Some(a), Some(_)) if first_word_count(a) >= 3 => a.to_string(),
-            _ => String::new(),
-        }
-    };
-    // Pro-Q style: the EQ shows one band's controls at a time – the band last touched on the display, or the
-    // one picked in the band strip.
+    // The designed panel (fx_panel); the generic grid below only for an effect without one.
     let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");
-    let eq_band: Option<usize> = (def.id == "eq").then(|| {
-        let n = dragon_engine::effects::eq::EQ_BANDS;
-        let on = |b: usize| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5;
-        let mut sel: usize = ui.data(|d| d.get_temp(eq_sel_key)).unwrap_or_else(|| (1..=n).find(|b| on(*b)).unwrap_or(1));
+    let band_key = if def.id == "eq" { eq_sel_key } else { egui::Id::new(("fx.hero", m, i)).with("band") };
+    let mut band: usize =
+        ui.data(|d| d.get_temp(band_key)).unwrap_or_else(|| if def.id == "eq" { (1..=dragon_engine::effects::eq::EQ_BANDS).find(|b| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5).unwrap_or(1) } else { 1 });
+    if def.id == "eq" && super::fx_panel::panel("eq", 1).is_some() {
         eq_compare(ui, st, m, i, &ins);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Band").small());
-            for b in 1..=n {
-                let txt = RichText::new(format!("{b}")).small().color(if on(b) { theme::TEXT } else { theme::TEXT_DIM });
-                if ui.selectable_label(sel == b, txt).on_hover_text(if on(b) { "on" } else { "off – select it, then switch it on" }).clicked() {
-                    sel = b;
-                    ui.data_mut(|d| d.insert_temp(eq_sel_key, b));
-                }
-            }
-        });
-        sel
-    });
-    let mut groups: Vec<(String, Vec<&effects::ParamInfo>)> = Vec::new();
-    for prm in def.params {
-        if let Some(b) = eq_band {
-            let prefix = format!("b{b}_");
-            if prm.id.starts_with('b') && prm.id[1..2].chars().all(|c| c.is_ascii_digit()) && !prm.id.starts_with(&prefix) {
-                continue;
-            }
-        }
-        let g = group_of(prm.name);
-        match groups.iter_mut().find(|x| x.0 == g) {
-            Some(x) => x.1.push(prm),
-            None => groups.push((g, vec![prm])),
-        }
     }
-    for (group, params) in groups {
-        // The reverb's early and late parts: a heading and the response of the part's EQ.
-        if def.id == "reverb" && (group == "Early" || group == "Late") {
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(if group == "Early" { "Early reflections" } else { "Late reverb" }).strong());
-                reverb_part_curve(ui, &ins.params, if group == "Early" { "er" } else { "late" });
-            });
-        }
-        egui::Frame::NONE.fill(theme::PANEL).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                if !group.is_empty() {
-                    ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().strong().color(ccol)));
+    let params = ins.params.clone();
+    let shown = {
+        let mut touch = |_ui: &mut Ui, t: super::fx_panel::Touch| {
+            let prm = t.prm;
+            let key = prm.id.to_string();
+            let v = t.value;
+            match prm.kind {
+                ParamKind::Choice(_) | ParamKind::Toggle => {
+                    if t.resp.changed() {
+                        st.session.edit(prm.name, |p| {
+                            with_insert(p, m, i, |x| {
+                                x.params.insert(key.clone(), v);
+                            })
+                        });
+                    }
                 }
-                for prm in params {
-                    let short = prm.name.strip_prefix(group.as_str()).map(str::trim).filter(|x| !x.is_empty()).unwrap_or(prm.name);
-                    let mut v = effects::value(def, &ins.params, prm.id);
-                    let key = prm.id.to_string();
-                    match prm.kind {
-                        ParamKind::Choice(names) => {
-                            let mut idx = v.round() as usize;
-                            egui::ComboBox::from_id_salt(("fxc", i, prm.id)).selected_text(format!("{}: {}", short, names.get(idx).copied().unwrap_or("?"))).show_ui(ui, |ui| {
-                                for (k, n) in names.iter().enumerate() {
-                                    ui.selectable_value(&mut idx, k, *n);
-                                }
-                            });
-                            if idx != v.round() as usize {
-                                st.session.edit(prm.name, |p| {
-                                    with_insert(p, m, i, |x| {
-                                        x.params.insert(key, idx as f32);
-                                    })
-                                });
-                            }
-                        }
-                        ParamKind::Toggle => {
-                            let mut b = v > 0.5;
-                            if ui.checkbox(&mut b, short).changed() {
-                                st.session.edit(prm.name, |p| {
-                                    with_insert(p, m, i, |x| {
-                                        x.params.insert(key, if b { 1.0 } else { 0.0 });
-                                    })
-                                });
-                            }
-                        }
-                        _ => {
-                            let mut n = prm.normalize(v);
-                            let r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol)
-                                .on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
-                            v = prm.denormalize(n);
-                            widgets::apply(st, &r, prm.name, |p| {
-                                with_insert(p, m, i, |x| {
-                                    x.params.insert(key.clone(), v);
-                                })
-                            });
-                            let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
-                            if r.changed() || r.drag_started() {
-                                st.ui.last_target = Some(target.clone());
-                            }
-                            r.context_menu(|ui| {
-                                // Type an exact value (FabFilter style); units and a k suffix are accepted.
-                                let buf_id = ui.id().with(("fx.type", &target));
-                                let mut buf: String = ui.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| prm.format(v));
-                                let te = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(110.0).hint_text("value"));
-                                ui.data_mut(|d| d.insert_temp(buf_id, buf.clone()));
-                                if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    if let Some(x) = widgets::parse_value(&buf) {
-                                        let x = x.clamp(prm.min.min(prm.max), prm.max.max(prm.min));
-                                        let key = key.clone();
-                                        st.session.edit(prm.name, |p| {
-                                            with_insert(p, m, i, |ins| {
-                                                ins.params.insert(key, x);
-                                            })
-                                        });
-                                    }
-                                    ui.data_mut(|d| d.remove::<String>(buf_id));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Reset to default").clicked() {
-                                    let key = key.clone();
-                                    st.session.edit(prm.name, |p| {
-                                        with_insert(p, m, i, |ins| {
-                                            ins.params.insert(key, prm.default);
-                                        })
-                                    });
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui.button("MIDI learn").clicked() {
-                                    st.ui.midi_learn = Some(target.clone());
-                                    ui.close_menu();
-                                }
-                                if ui.button("Create automation lane").clicked() {
-                                    crate::views::automation::add_lane(st, target.clone());
-                                    ui.close_menu();
-                                }
-                            });
-                        }
+                _ => {
+                    let r = t.resp.on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
+                    widgets::apply(st, &r, prm.name, |p| {
+                        with_insert(p, m, i, |x| {
+                            x.params.insert(key.clone(), v);
+                        })
+                    });
+                    let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
+                    if r.changed() || r.drag_started() {
+                        st.ui.last_target = Some(target.clone());
+                    }
+                    param_menu(&r, st, m, i, prm, v, target);
+                }
+            }
+        };
+        let mut custom = |ui: &mut Ui, name: &str| match name {
+            "reverb.er" => reverb_part_curve(ui, &params, "er"),
+            "reverb.late" => reverb_part_curve(ui, &params, "late"),
+            _ => {}
+        };
+        super::fx_panel::show(ui, super::fx_panel::View { def, params: &params, accent: ccol, salt: egui::Id::new(("fx.panel", m, i)) }, &mut band, &mut touch, &mut custom)
+    };
+    ui.data_mut(|d| d.insert_temp(band_key, band));
+    if !shown {
+        // Group "Band 3 freq" / "Band 3 gain" … into one row per band, and parameters sharing a first word
+        // ("Early …", "Late …") into a section; other parameters share a row.
+        let first_word_count = |w: &str| def.params.iter().filter(|p| p.name.split(' ').next() == Some(w)).count();
+        let group_of = |name: &str| -> String {
+            let mut it = name.split(' ');
+            match (it.next(), it.next()) {
+                (Some(a), Some(b)) if b.chars().all(|c| c.is_ascii_digit()) => format!("{a} {b}"),
+                (Some(a), Some(_)) if first_word_count(a) >= 3 => a.to_string(),
+                _ => String::new(),
+            }
+        };
+        // Pro-Q style: the EQ shows one band's controls at a time – the band last touched on the display, or the
+        // one picked in the band strip.
+        let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");
+        let eq_band: Option<usize> = (def.id == "eq").then(|| {
+            let n = dragon_engine::effects::eq::EQ_BANDS;
+            let on = |b: usize| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5;
+            let mut sel: usize = ui.data(|d| d.get_temp(eq_sel_key)).unwrap_or_else(|| (1..=n).find(|b| on(*b)).unwrap_or(1));
+            eq_compare(ui, st, m, i, &ins);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Band").small());
+                for b in 1..=n {
+                    let txt = RichText::new(format!("{b}")).small().color(if on(b) { theme::TEXT } else { theme::TEXT_DIM });
+                    if ui.selectable_label(sel == b, txt).on_hover_text(if on(b) { "on" } else { "off – select it, then switch it on" }).clicked() {
+                        sel = b;
+                        ui.data_mut(|d| d.insert_temp(eq_sel_key, b));
                     }
                 }
             });
+            sel
         });
+        let mut groups: Vec<(String, Vec<&effects::ParamInfo>)> = Vec::new();
+        for prm in def.params {
+            if let Some(b) = eq_band {
+                let prefix = format!("b{b}_");
+                if prm.id.starts_with('b') && prm.id[1..2].chars().all(|c| c.is_ascii_digit()) && !prm.id.starts_with(&prefix) {
+                    continue;
+                }
+            }
+            let g = group_of(prm.name);
+            match groups.iter_mut().find(|x| x.0 == g) {
+                Some(x) => x.1.push(prm),
+                None => groups.push((g, vec![prm])),
+            }
+        }
+        for (group, params) in groups {
+            // The reverb's early and late parts: a heading and the response of the part's EQ.
+            if def.id == "reverb" && (group == "Early" || group == "Late") {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(if group == "Early" { "Early reflections" } else { "Late reverb" }).strong());
+                    reverb_part_curve(ui, &ins.params, if group == "Early" { "er" } else { "late" });
+                });
+            }
+            egui::Frame::NONE.fill(theme::PANEL).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    if !group.is_empty() {
+                        ui.add_sized([46.0, 20.0], egui::Label::new(RichText::new(&group).small().strong().color(ccol)));
+                    }
+                    for prm in params {
+                        let short = prm.name.strip_prefix(group.as_str()).map(str::trim).filter(|x| !x.is_empty()).unwrap_or(prm.name);
+                        let mut v = effects::value(def, &ins.params, prm.id);
+                        let key = prm.id.to_string();
+                        match prm.kind {
+                            ParamKind::Choice(names) => {
+                                let mut idx = v.round() as usize;
+                                egui::ComboBox::from_id_salt(("fxc", i, prm.id)).selected_text(format!("{}: {}", short, names.get(idx).copied().unwrap_or("?"))).show_ui(ui, |ui| {
+                                    for (k, n) in names.iter().enumerate() {
+                                        ui.selectable_value(&mut idx, k, *n);
+                                    }
+                                });
+                                if idx != v.round() as usize {
+                                    st.session.edit(prm.name, |p| {
+                                        with_insert(p, m, i, |x| {
+                                            x.params.insert(key, idx as f32);
+                                        })
+                                    });
+                                }
+                            }
+                            ParamKind::Toggle => {
+                                let mut b = v > 0.5;
+                                if ui.checkbox(&mut b, short).changed() {
+                                    st.session.edit(prm.name, |p| {
+                                        with_insert(p, m, i, |x| {
+                                            x.params.insert(key, if b { 1.0 } else { 0.0 });
+                                        })
+                                    });
+                                }
+                            }
+                            _ => {
+                                let mut n = prm.normalize(v);
+                                let r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol)
+                                    .on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
+                                v = prm.denormalize(n);
+                                widgets::apply(st, &r, prm.name, |p| {
+                                    with_insert(p, m, i, |x| {
+                                        x.params.insert(key.clone(), v);
+                                    })
+                                });
+                                let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
+                                if r.changed() || r.drag_started() {
+                                    st.ui.last_target = Some(target.clone());
+                                }
+                                param_menu(&r, st, m, i, prm, v, target);
+                            }
+                        }
+                    }
+                });
+            });
+        }
     }
     ui.separator();
     modulation(ui, st, m, i, def, &ins);
@@ -631,6 +647,49 @@ fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             name.clear();
         }
         ui.data_mut(|d| d.insert_temp(id, name));
+    });
+}
+
+/// The right-click menu of an effect parameter: type an exact value, reset, MIDI learn, automation lane.
+fn param_menu(r: &egui::Response, st: &mut State, m: Id, i: Id, prm: &effects::ParamInfo, v: f32, target: Target) {
+    let key = prm.id.to_string();
+    r.context_menu(|ui| {
+        // Type an exact value (FabFilter style); units and a k suffix are accepted.
+        let buf_id = ui.id().with(("fx.type", &target));
+        let mut buf: String = ui.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| prm.format(v));
+        let te = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(110.0).hint_text("value"));
+        ui.data_mut(|d| d.insert_temp(buf_id, buf.clone()));
+        if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if let Some(x) = widgets::parse_value(&buf) {
+                let x = x.clamp(prm.min.min(prm.max), prm.max.max(prm.min));
+                let key = key.clone();
+                st.session.edit(prm.name, |p| {
+                    with_insert(p, m, i, |ins| {
+                        ins.params.insert(key, x);
+                    })
+                });
+            }
+            ui.data_mut(|d| d.remove::<String>(buf_id));
+            ui.close_menu();
+        }
+        if ui.button("Reset to default").clicked() {
+            let key = key.clone();
+            st.session.edit(prm.name, |p| {
+                with_insert(p, m, i, |ins| {
+                    ins.params.insert(key, prm.default);
+                })
+            });
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui.button("MIDI learn").clicked() {
+            st.ui.midi_learn = Some(target.clone());
+            ui.close_menu();
+        }
+        if ui.button("Create automation lane").clicked() {
+            crate::views::automation::add_lane(st, target.clone());
+            ui.close_menu();
+        }
     });
 }
 

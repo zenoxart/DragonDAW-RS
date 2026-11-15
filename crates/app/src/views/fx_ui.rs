@@ -122,6 +122,12 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let height = (base * (w / 520.0).clamp(1.0, 2.2)).min(ui.available_height().max(base));
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, height), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
+    if let Some((x, y)) = xy_params(h.def.id) {
+        let name = |id: Option<&str>| id.and_then(|id| h.def.params.iter().find(|p| p.id == id)).map(|p| p.name).unwrap_or("-");
+        let _ = resp.clone().on_hover_text(format!("Drag: left / right = {}, up / down = {} (Shift = fine, double-click resets)", name(x), name(y)));
+    } else if !hit_regions(h.def.id, r).is_empty() {
+        let _ = resp.clone().on_hover_text("Drag a control up / down (Shift = fine), wheel, double-click resets");
+    }
     let p = ui.painter_at(r);
     let col = if h.enabled { h.color } else { theme::TEXT_DIM };
     match h.def.id {
@@ -331,6 +337,17 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 ui.data_mut(|d| d.insert_temp(grab, hit.unwrap_or(0)));
             }
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            if resp.dragged() && held == 0 && !dr.contains(origin) {
+                // The decay plot: left / right is the decay time, up / down the size.
+                let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+                let d = resp.drag_delta() * fine;
+                for (id, delta) in [("decay", d.x / r.width()), ("size", -d.y / r.height())] {
+                    if let (Some(prm), true) = (h.def.params.iter().find(|p| p.id == id), delta != 0.0) {
+                        out.push((id.to_string(), prm.denormalize((prm.normalize(h.v(id)) + delta).clamp(0.0, 1.0))));
+                    }
+                }
+            }
             if resp.dragged() && held > 0 {
                 let u = ((dr.center().y - pos.y) / (dr.height() * 0.4)).clamp(-1.0, 1.0);
                 out.push((format!("dr_{held}"), 2f32.powf(u * DR_RANGE)));
@@ -393,6 +410,18 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
             if resp.dragged() && held > 0 {
                 out.push((xs[held - 1].to_string(), freq_at(r, pos.x).clamp(30.0, 16_000.0)));
+            } else if resp.dragged() {
+                // A band itself (Saturn): up / down is its drive.
+                let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+                if r.contains(origin) {
+                    let band = 1 + (0..n.saturating_sub(1)).filter(|k| fx(r, h.v(xs[*k])) < origin.x).count();
+                    let id = format!("b{band}_drive");
+                    if let Some(prm) = h.def.params.iter().find(|p| p.id == id) {
+                        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+                        let nv = (prm.normalize(h.v(&id)) - resp.drag_delta().y / r.height() * fine).clamp(0.0, 1.0);
+                        out.push((id, prm.denormalize(nv)));
+                    }
+                }
             }
             if (0..n.saturating_sub(1)).any(|k| (fx(r, h.v(xs[k])) - pos.x).abs() < 10.0) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -464,6 +493,8 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 if resp.double_clicked() {
                     out.push(("ns".into(), 0.0));
                 }
+            } else if !zone.contains(origin) || !resp.dragged() {
+                region_drag(ui, resp, h, pos, &hit_regions("class_a_strip", r), &mut out);
             }
         }
         "filter" => {
@@ -488,9 +519,131 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
         }
-        _ => {}
+        id => {
+            // Drawn controls (Drum Bus tiles and bars, the strip's sections, AlterBoy's sliders): drag one
+            // up / down, wheel, double-click resets.
+            let hits = hit_regions(id, r);
+            if !hits.is_empty() {
+                region_drag(ui, resp, h, pos, &hits, &mut out);
+            } else if let Some((x, y)) = xy_params(id) {
+                // The display as an XY pad over the effect's two main controls.
+                let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+                if r.contains(pos) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+                }
+                if resp.dragged() && r.contains(origin) {
+                    let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+                    let d = resp.drag_delta() * fine;
+                    for (id, delta) in [(x, d.x / r.width()), (y, -d.y / r.height())] {
+                        if let (Some(id), true) = (id, delta != 0.0) {
+                            if let Some(prm) = h.def.params.iter().find(|p| p.id == id) {
+                                let n = (prm.normalize(h.v(id)) + delta).clamp(0.0, 1.0);
+                                out.push((id.to_string(), prm.denormalize(n)));
+                            }
+                        }
+                    }
+                }
+                if resp.double_clicked() {
+                    for id in [x, y].into_iter().flatten() {
+                        if let Some(prm) = h.def.params.iter().find(|p| p.id == id) {
+                            out.push((id.to_string(), prm.default));
+                        }
+                    }
+                }
+            }
+        }
     }
     out
+}
+
+/// The two parameters a display moves when dragged (x, y): its effect's main controls.
+pub fn xy_params(id: &str) -> Option<(Option<&'static str>, Option<&'static str>)> {
+    Some(match id {
+        "limiter" => (Some("ceiling"), Some("gain")),
+        "delay" => (Some("time"), Some("feedback")),
+        "chorus" | "flanger" | "tremolo" => (Some("rate"), Some("depth")),
+        "phaser" => (Some("center"), Some("depth")),
+        "saturator" => (Some("tone"), Some("drive")),
+        "bitcrusher" => (Some("downsample"), Some("bits")),
+        "utility" => (Some("pan"), Some("gain")),
+        "imager" => (Some("width"), Some("mono_below")),
+        "tune" => (Some("amount"), Some("speed")),
+        "clean_voice" => (Some("presence"), Some("comp")),
+        _ => return None,
+    })
+}
+
+/// Controls drawn on a display, as (area, parameter): dragged up / down like a fader.
+pub fn hit_regions(id: &str, r: Rect) -> Vec<(Rect, &'static str)> {
+    match id {
+        "drum_bus" => {
+            let mut v = vec![
+                (Rect::from_min_max(Pos2::new(r.left() + 8.0, r.top() + 14.0), Pos2::new(r.left() + 36.0, r.bottom() - 14.0)), "input"),
+                (Rect::from_min_max(Pos2::new(r.right() - 36.0, r.top() + 14.0), Pos2::new(r.right() - 8.0, r.bottom() - 14.0)), "output"),
+            ];
+            let body = Rect::from_min_max(Pos2::new(r.left() + 46.0, r.top() + 8.0), Pos2::new(r.right() - 46.0, r.bottom() - 8.0));
+            let top = Rect::from_min_max(body.min, Pos2::new(body.right(), body.top() + body.height() * 0.45));
+            let tw = top.width() / 4.0;
+            for (k, id) in ["drive", "harmonics", "comp_mix", "lift"].into_iter().enumerate() {
+                v.push((Rect::from_min_size(Pos2::new(top.left() + k as f32 * tw + 3.0, top.top()), Vec2::new(tw - 6.0, top.height())), id));
+            }
+            let bottom = Rect::from_min_max(Pos2::new(body.left(), top.bottom() + 8.0), body.max);
+            let half = bottom.width() / 2.0;
+            for (x0, ids) in [(bottom.left(), &["heq1", "heq2", "heq3", "heq4", "heq5"][..]), (bottom.left() + half, &["sub", "low", "loud", "grit"][..])] {
+                let area = Rect::from_min_max(Pos2::new(x0 + 3.0, bottom.top()), Pos2::new(x0 + half - 3.0, bottom.bottom()));
+                let bw = (area.width() - 12.0) / ids.len() as f32;
+                for (k, id) in ids.iter().enumerate() {
+                    v.push((Rect::from_min_max(Pos2::new(area.left() + 6.0 + k as f32 * bw, area.top() + 12.0), Pos2::new(area.left() + 6.0 + (k + 1) as f32 * bw, area.bottom())), id));
+                }
+            }
+            v
+        }
+        "class_a_strip" => {
+            // After the NS column: preamp (drive), EQ (mid gain), opto comp (threshold: drag down = more).
+            let (_, nsr) = ns_fader(r);
+            let r = Rect::from_min_max(Pos2::new(nsr.right(), r.top()), r.max);
+            let w3 = (r.width() - 40.0) / 3.0;
+            let sec = |k: usize| Rect::from_min_size(Pos2::new(r.left() + 10.0 + k as f32 * (w3 + 10.0), r.top() + 10.0), Vec2::new(w3, r.height() - 20.0));
+            vec![(sec(0), "drive"), (sec(1), "mid_gain"), (sec(2), "threshold")]
+        }
+        "alter" => {
+            let s = |x: f32| Rect::from_min_max(Pos2::new(x - 18.0, r.top() + 20.0), Pos2::new(x + 18.0, r.bottom() - 18.0));
+            vec![(s(r.left() + 34.0), "pitch"), (s(r.right() - 34.0), "formant")]
+        }
+        "transient" => {
+            let half = r.width() / 2.0;
+            vec![(Rect::from_min_size(r.min, Vec2::new(half, r.height())), "attack"), (Rect::from_min_size(r.min + Vec2::new(half, 0.0), Vec2::new(half, r.height())), "sustain")]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn region_drag(ui: &Ui, resp: &egui::Response, h: &Hero, pos: Pos2, hits: &[(Rect, &'static str)], out: &mut Vec<(String, f32)>) {
+    let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+    let param = |id: &str| h.def.params.iter().find(|p| p.id == id);
+    if let Some((rect, id)) = hits.iter().find(|(r, _)| r.contains(pos)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        let _ = rect;
+        if let Some(prm) = param(id) {
+            let s = ui.input(|i| i.smooth_scroll_delta.y);
+            if s != 0.0 {
+                out.push((id.to_string(), prm.denormalize((prm.normalize(h.v(id)) + s / 600.0).clamp(0.0, 1.0))));
+            }
+            if resp.double_clicked() {
+                out.push((id.to_string(), prm.default));
+            }
+        }
+    }
+    if resp.dragged() {
+        if let Some((rect, id)) = hits.iter().find(|(r, _)| r.contains(origin)) {
+            if let Some(prm) = param(id) {
+                let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+                // A full sweep over the control's height (at least 120 px).
+                let n = prm.normalize(h.v(id)) - resp.drag_delta().y / rect.height().max(120.0) * fine;
+                out.push((id.to_string(), prm.denormalize(n.clamp(0.0, 1.0))));
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------- EQ
@@ -2147,6 +2300,51 @@ mod tests {
                 assert!(out.shapes.len() > 3, "{} draws something", def.id);
             }
         }
+    }
+
+    /// Every effect's display is a control: dragging on it changes a parameter (tried from a grid of
+    /// starting points; the EQ's node dragging has its own test).
+    #[test]
+    fn every_display_responds_to_a_drag() {
+        let mut dead = Vec::new();
+        for def in effects::registry().iter().filter(|d| d.id != "eq") {
+            let params = def.defaults();
+            let mut moved = false;
+            'points: for gy in [0.5f32, 0.3, 0.7] {
+                for gx in [0.5f32, 0.05, 0.12, 0.3, 0.7, 0.88, 0.95] {
+                    let ctx = egui::Context::default();
+                    let mut area = Rect::NOTHING;
+                    let mut got: Vec<(String, f32)> = Vec::new();
+                    let frame = |events: Vec<egui::Event>, area: &mut Rect, got: &mut Vec<(String, f32)>| {
+                        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 520.0))), events, ..Default::default() };
+                        let _ = ctx.run(raw, |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                *area = ui.available_rect_before_wrap();
+                                let (e, _) = hero(ui, &Hero { def, params: &params, gr: 0.0, enabled: true, color: theme::ACCENT, time: None, tele: &[], key: egui::Id::new(def.id) });
+                                got.extend(e);
+                            });
+                        });
+                    };
+                    frame(vec![], &mut area, &mut got);
+                    let w = area.width().max(260.0);
+                    let from = Pos2::new(area.left() + w * gx, area.top() + 120.0 * gy * 1.4);
+                    frame(vec![egui::Event::PointerMoved(from)], &mut area, &mut got);
+                    frame(vec![egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }], &mut area, &mut got);
+                    for k in 1..=5 {
+                        frame(vec![egui::Event::PointerMoved(from + egui::vec2(6.0 * k as f32, -8.0 * k as f32))], &mut area, &mut got);
+                    }
+                    frame(vec![egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }], &mut area, &mut got);
+                    if !got.is_empty() {
+                        moved = true;
+                        break 'points;
+                    }
+                }
+            }
+            if !moved {
+                dead.push(def.id);
+            }
+        }
+        assert!(dead.is_empty(), "displays that ignore the mouse: {dead:?}");
     }
 
     /// Dragon Orbit: a click on a shape or mode button selects it; dragging the field right moves the centre.
