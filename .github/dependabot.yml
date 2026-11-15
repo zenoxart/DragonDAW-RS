@@ -1,5 +1,7 @@
 version: 2
 updates:
+  # Minor and patch updates only, grouped into one weekly PR. Major versions change APIs
+  # (symphonia, rubato, cpal, egui …) and are upgraded by hand.
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -7,7 +9,14 @@ updates:
     groups:
       cargo:
         patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # `@stable` / `@1.89` select the Rust toolchain (the 1.89 one is the MSRV check), not an action version.
+      - dependency-name: dtolnay/rust-toolchain

@@ -7,11 +7,10 @@ use dragon_engine::plugins::{clap::ClapPlugin, scan_file, vst3::Vst3Plugin};
 use std::path::{Path, PathBuf};
 
 fn built_library() -> PathBuf {
-    // tests/ binary lives in target/<profile>/deps; the cdylib is in target/<profile>.
-    // `cargo test` rebuilds the cdylib in target/<profile>/deps (the copy one level up is only refreshed by
-    // `cargo build`), so prefer the deps copy.
-    let exe = std::env::current_exe().unwrap();
-    let deps = exe.parent().unwrap();
+    // The cdylib lives in target/<profile>/deps (rebuilt by `cargo test`) and target/<profile> (refreshed only by
+    // `cargo build`). Where the test binary itself sits depends on the Cargo version (target/<profile>/deps, or
+    // target/<profile>/build/<pkg>/<hash>/out with the newer build-dir layout), so walk up from it and prefer
+    // the deps copy at each level. DRAGON_TEST_PLUGIN overrides the lookup.
     let name = if cfg!(target_os = "windows") {
         "dragon_test_plugins.dll"
     } else if cfg!(target_os = "macos") {
@@ -19,8 +18,12 @@ fn built_library() -> PathBuf {
     } else {
         "libdragon_test_plugins.so"
     };
-    let p = [deps.join(name), deps.parent().unwrap().join(name)].into_iter().find(|p| p.exists());
-    p.unwrap_or_else(|| panic!("cdylib {name} not built in {}", deps.display()))
+    if let Some(p) = std::env::var_os("DRAGON_TEST_PLUGIN").map(PathBuf::from).filter(|p| p.exists()) {
+        return p;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let found = exe.ancestors().skip(1).flat_map(|a| [a.join("deps").join(name), a.join(name)]).find(|p| p.exists());
+    found.unwrap_or_else(|| panic!("cdylib {name} not found above {}", exe.display()))
 }
 
 /// Installs the library as a `.clap` file and a `.vst3` bundle in a temp folder.

@@ -57,8 +57,9 @@ pub fn default_paths() -> Vec<PathBuf> {
         v.push(common.join("CLAP"));
         v.push(common.join("VST3"));
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            v.push(PathBuf::from(local).join("Programs").join("Common").join("CLAP"));
-            v.push(PathBuf::from(local).join("Programs").join("Common").join("VST3"));
+            let common = PathBuf::from(local).join("Programs").join("Common");
+            v.push(common.join("CLAP"));
+            v.push(common.join("VST3"));
         }
         let _ = &home;
     }
