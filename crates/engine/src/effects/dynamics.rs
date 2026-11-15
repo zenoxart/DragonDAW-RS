@@ -309,10 +309,11 @@ macro_rules! mb_band {
             ParamInfo::lin(concat!("b", $n, "_gain"), concat!("Band ", $n, " gain"), -18.0, 18.0, 0.0, "dB"),
             ParamInfo::toggle(concat!("b", $n, "_solo"), concat!("Band ", $n, " solo"), false),
             ParamInfo::toggle(concat!("b", $n, "_bypass"), concat!("Band ", $n, " bypass"), false),
+            ParamInfo::toggle(concat!("b", $n, "_sc"), concat!("Band ", $n, " external sidechain"), false),
         ]
     };
 }
-const MB_PB: usize = 10;
+const MB_PB: usize = 11;
 
 const fn mb_params() -> [ParamInfo; 6 + MB_BANDS * MB_PB] {
     let bands: [[ParamInfo; MB_PB]; MB_BANDS] = [mb_band!("1", -24.0), mb_band!("2", -24.0), mb_band!("3", -24.0), mb_band!("4", -24.0)];
@@ -348,6 +349,8 @@ struct MbBand {
     gain: f32,
     solo: bool,
     bypass: bool,
+    /// Detect on the external sidechain's same band instead of the band itself.
+    sc: bool,
     env: f32,
     /// Gain change now (dB; negative = cut).
     change: f32,
@@ -398,6 +401,8 @@ pub struct Multiband {
     x: [[Crossover; 3]; 2],
     /// All-pass compensation: band k is passed through the crossovers above it, so the bands sum flat.
     ap: [[[Crossover; 3]; MB_BANDS]; 2],
+    /// The external sidechain's own band split (for per-band sidechain detection).
+    xs: [[Crossover; 3]; 2],
     bands: [MbBand; MB_BANDS],
     /// Telemetry: per band the detector level (dB) and the gain change (dB).
     tele: [f32; MB_BANDS * 2],
@@ -412,6 +417,7 @@ impl Multiband {
         for ch in 0..2 {
             for k in 0..3 {
                 self.x[ch][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
+                self.xs[ch][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
                 for b in 0..MB_BANDS {
                     self.ap[ch][b][k] = Crossover::new(f[k].min(self.rate * 0.45), self.rate);
                 }
@@ -429,6 +435,7 @@ impl Multiband {
             band.gain = g(7);
             band.solo = g(8) >= 0.5;
             band.bypass = g(9) >= 0.5;
+            band.sc = g(10) >= 0.5;
         }
     }
 }
@@ -447,7 +454,7 @@ impl Effect for Multiband {
             b.change = 0.0;
         }
     }
-    fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
         let n = (self.v("bands").round() as usize + 1).clamp(1, MB_BANDS);
         let mix = self.v("mix") / 100.0;
         let out_g = db_to_gain(self.v("output"));
@@ -455,9 +462,23 @@ impl Effect for Multiband {
         let coefs: Vec<(f32, f32)> = self.bands.iter().map(|b| ((-1.0 / (b.attack.max(0.05) * 0.001 * self.rate)).exp(), (-1.0 / (b.release.max(1.0) * 0.001 * self.rate)).exp())).collect();
         let mut lvl = [-120.0f32; MB_BANDS];
         let mut chg = [0.0f32; MB_BANDS];
+        let use_sc = sc.is_some() && self.bands[..n].iter().any(|b| b.sc);
         for i in 0..l.len() {
             let x = [l[i], r[i]];
             let mut parts = [[0.0f32; MB_BANDS]; 2];
+            // The sidechain's bands (detection only, so no all-pass compensation needed).
+            let mut sparts = [[0.0f32; MB_BANDS]; 2];
+            if let (true, Some((sa, sb))) = (use_sc, sc) {
+                for (ch, src) in [sa[i], sb[i]].into_iter().enumerate() {
+                    let mut rest = src;
+                    for k in 0..n - 1 {
+                        let (lo, hi) = self.xs[ch][k].split(rest);
+                        sparts[ch][k] = lo;
+                        rest = hi;
+                    }
+                    sparts[ch][n - 1] = rest;
+                }
+            }
             for ch in 0..2 {
                 let mut rest = x[ch];
                 for k in 0..n - 1 {
@@ -477,7 +498,7 @@ impl Effect for Multiband {
             let mut y = [0.0f32; 2];
             for b in 0..n {
                 let band = &mut self.bands[b];
-                let peak = parts[0][b].abs().max(parts[1][b].abs());
+                let peak = if use_sc && band.sc { sparts[0][b].abs().max(sparts[1][b].abs()) } else { parts[0][b].abs().max(parts[1][b].abs()) };
                 let db = gain_to_db(peak.max(1e-6));
                 // Peak detector with the band's attack / release, then the static curve.
                 let want = band.target(db);
@@ -515,15 +536,17 @@ pub fn multiband_def() -> EffectDef {
         id: "multiband",
         name: "Multiband Dynamics",
         category: "Dynamics",
-        description: "Multiband dynamics after Pro-MB: up to four bands, each compressing or expanding (downward or upward) with threshold, range, ratio, knee, attack, release, gain, solo and bypass.",
+        description:
+            "Multiband dynamics after Pro-MB: up to four bands, each compressing or expanding (downward or upward) with threshold, range, ratio, knee, attack, release, gain, solo, bypass and per-band external sidechain.",
         params: &MB_PARAMS,
-        uses_sidechain: false,
+        uses_sidechain: true,
         create: |rate| {
             let mut m = Multiband {
                 rate,
                 p: std::array::from_fn(|k| MB_PARAMS[k].default),
                 x: [[Crossover::new(1000.0, rate); 3]; 2],
                 ap: [[[Crossover::new(1000.0, rate); 3]; MB_BANDS]; 2],
+                xs: [[Crossover::new(1000.0, rate); 3]; 2],
                 bands: [MbBand::default(); MB_BANDS],
                 tele: [0.0; MB_BANDS * 2],
             };
@@ -1419,6 +1442,15 @@ mod tests {
         let quiet = sine(100.0, 0.01, n);
         let (y, _, _) = run_fx(multiband_def(), &[("b1_mode", 2.0), ("b1_thr", -20.0), ("b1_ratio", 4.0), ("b1_range", 12.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &quiet, &quiet, None);
         assert!(rms_of(&y[24000..]) > rms_of(&quiet[24000..]) * 2.0);
+        // Per-band sidechain: band 1 ducks the bass when the sidechain's low band is loud (a kick
+        // ducking the bass), and does nothing on a quiet sidechain.
+        let set = [("b1_sc", 1.0), ("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0)];
+        let kick = sine(60.0, 0.8, n);
+        let (y, _, _) = run_fx(multiband_def(), &set, &quiet, &quiet, Some((&kick, &kick)));
+        assert!(rms_of(&y[24000..]) < rms_of(&quiet[24000..]) * 0.3, "ducked by the sidechain");
+        let silent = vec![0.0f32; n];
+        let (y, _, _) = run_fx(multiband_def(), &set, &quiet, &quiet, Some((&silent, &silent)));
+        assert!(rms_of(&y[24000..]) > rms_of(&quiet[24000..]) * 0.9, "left alone");
     }
 
     /// Pro-G: closes on quiet input down to the range, opens on loud; flip ducks instead; the external

@@ -23,19 +23,21 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mod", "Modulation", 0.0, 1.0, 0.3, ""),
     ParamInfo::lin("width", "Width", 0.0, 1.5, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.25, ""),
-    // Decay-rate EQ (Pro-R): a curve of five points; each part of the tail decays that many times longer
+    // Decay-rate EQ (Pro-R): a curve of six points (Pro-R has six bands); each part of the tail decays that many times longer
     // (or shorter) than the decay time. Drag the points on the display.
     ParamInfo::log("dr_1", "Decay rate 80 Hz ×", 0.25, 4.0, 1.0, ""),
     ParamInfo::log("dr_2", "Decay rate 300 Hz ×", 0.25, 4.0, 1.0, ""),
     ParamInfo::log("dr_3", "Decay rate 1.2 kHz ×", 0.25, 4.0, 1.0, ""),
     ParamInfo::log("dr_4", "Decay rate 4.8 kHz ×", 0.25, 4.0, 1.0, ""),
     ParamInfo::log("dr_5", "Decay rate 12 kHz ×", 0.25, 4.0, 1.0, ""),
+    ParamInfo::log("dr_6", "Decay rate 18 kHz ×", 0.25, 4.0, 1.0, ""),
     // The points' frequencies: free nodes, drag them sideways (kept in order, a third of an octave apart).
     ParamInfo::log("dr_f1", "Decay point 1 frequency", 20.0, 20000.0, 80.0, "Hz"),
     ParamInfo::log("dr_f2", "Decay point 2 frequency", 20.0, 20000.0, 300.0, "Hz"),
     ParamInfo::log("dr_f3", "Decay point 3 frequency", 20.0, 20000.0, 1200.0, "Hz"),
     ParamInfo::log("dr_f4", "Decay point 4 frequency", 20.0, 20000.0, 4800.0, "Hz"),
     ParamInfo::log("dr_f5", "Decay point 5 frequency", 20.0, 20000.0, 12000.0, "Hz"),
+    ParamInfo::log("dr_f6", "Decay point 6 frequency", 20.0, 20000.0, 18000.0, "Hz"),
     // Early reflections.
     ParamInfo::lin("early", "Early level", 0.0, 1.0, 0.4, ""),
     ParamInfo::lin("er_size", "Early size", 0.2, 2.0, 1.0, ""),
@@ -103,8 +105,9 @@ impl PartEq {
 }
 
 /// The decay-rate curve's default points (Hz); each point can be moved (`dr_f1` … `dr_f5`).
-pub const DR_FREQS: [f32; 5] = [80.0, 300.0, 1200.0, 4800.0, 12000.0];
-const DR_BANDS: usize = 5;
+pub const DR_FREQS: [f32; 6] = [80.0, 300.0, 1200.0, 4800.0, 12000.0, 18000.0];
+/// Six points, like Pro-R's six-band decay-rate EQ.
+pub const DR_BANDS: usize = 6;
 
 /// The points in order, at least a third of an octave apart, and the crossovers between them
 /// (geometric means of neighbouring points).
@@ -123,7 +126,7 @@ pub struct Reverb {
     early: [DelayLine; 2],
     lines: Vec<DelayLine>,
     damp: [OnePole; LINES],
-    /// Four crossovers per line split the tail into the five decay-rate bands.
+    /// Five crossovers per line split the tail into the six decay-rate bands.
     splits: [[OnePole; DR_BANDS - 1]; LINES],
     /// Feedback gain of each decay-rate band per line.
     gains_dr: [[f32; DR_BANDS]; LINES],
@@ -249,11 +252,13 @@ impl Effect for Reverb {
             "dr_3" => self.decay_mul[2] = v,
             "dr_4" => self.decay_mul[3] = v,
             "dr_5" => self.decay_mul[4] = v,
+            "dr_6" => self.decay_mul[5] = v,
             "dr_f1" => self.dr_freqs[0] = v,
             "dr_f2" => self.dr_freqs[1] = v,
             "dr_f3" => self.dr_freqs[2] = v,
             "dr_f4" => self.dr_freqs[3] = v,
             "dr_f5" => self.dr_freqs[4] = v,
+            "dr_f6" => self.dr_freqs[5] = v,
             _ => return,
         }
         self.update();
@@ -293,7 +298,7 @@ impl Effect for Reverb {
             for k in 0..LINES {
                 let m = self.lfos[k].next(0.3 + k as f32 * 0.07, self.rate, LfoShape::Sine) * mod_depth;
                 let x = self.damp[k].process(self.lines[k].read(self.lengths[k] + m));
-                // Decay-rate EQ: each of the five bands gets its own feedback gain (bands = differences of
+                // Decay-rate EQ: each of the six bands gets its own feedback gain (bands = differences of
                 // one-pole low-passes, so they sum back to the input).
                 let mut prev = 0.0;
                 let mut acc = 0.0;
@@ -448,7 +453,7 @@ mod tests {
         let moved = tail(&[("dr_1", 4.0), ("dr_f1", 6000.0)]);
         assert!(moved < low_node * 0.5 && moved < flat, "{low_node} → {moved} (flat {flat})");
         // Points keep their order and spacing whatever the values.
-        let (p, s) = super::dr_layout([5000.0, 100.0, 100.0, 20000.0, 900.0]);
+        let (p, s) = super::dr_layout([5000.0, 100.0, 100.0, 20000.0, 900.0, 300.0]);
         assert!(p.windows(2).all(|w| w[1] >= w[0] * 1.25) && s.iter().zip(p.iter()).all(|(x, f)| x > f));
     }
 

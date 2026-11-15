@@ -325,7 +325,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             let node = |k: usize| Pos2::new(fx(dr, h.v(&format!("dr_f{k}"))), y_of(h.v(&format!("dr_{k}"))));
             if resp.drag_started() {
                 let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
-                let hit = (1..=5).min_by(|a, b| node(*a).distance(origin).total_cmp(&node(*b).distance(origin))).filter(|k| node(*k).distance(origin) < 12.0);
+                let hit = (1..=dragon_engine::effects::reverb::DR_BANDS).min_by(|a, b| node(*a).distance(origin).total_cmp(&node(*b).distance(origin))).filter(|k| node(*k).distance(origin) < 12.0);
                 ui.data_mut(|d| d.insert_temp(grab, hit.unwrap_or(0)));
             }
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
@@ -336,12 +336,12 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 out.push((format!("dr_f{held}"), freq_at(dr, pos.x).clamp(20.0, 20_000.0)));
             }
             if resp.double_clicked() {
-                if let Some(k) = (1..=5).find(|k| node(*k).distance(pos) < 12.0) {
+                if let Some(k) = (1..=dragon_engine::effects::reverb::DR_BANDS).find(|k| node(*k).distance(pos) < 12.0) {
                     out.push((format!("dr_{k}"), 1.0));
                     out.push((format!("dr_f{k}"), dragon_engine::effects::reverb::DR_FREQS[k - 1]));
                 }
             }
-            if (1..=5).any(|k| node(k).distance(pos) < 12.0) {
+            if (1..=dragon_engine::effects::reverb::DR_BANDS).any(|k| node(k).distance(pos) < 12.0) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
             }
         }
@@ -966,17 +966,17 @@ fn decay_rect(r: Rect) -> Rect {
 
 const DR_RANGE: f32 = 2.0; // log2: ×0.25 … ×4
 
-/// Pro-R style decay-rate curve: five free nodes (frequency and ×0.25 … ×4 of the decay time).
+/// Pro-R style decay-rate curve: six free nodes (frequency and ×0.25 … ×4 of the decay time).
 fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(12, 14, 18, 220));
     p.rect_stroke(r, 4.0, Stroke::new(1.0_f32, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
     let y_of = |m: f32| r.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (r.height() * 0.4);
     p.line_segment([Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
-    let mut pts: Vec<Pos2> = (1..=5).map(|k| Pos2::new(fx(r, h.v(&format!("dr_f{k}"))), y_of(h.v(&format!("dr_{k}"))))).collect();
+    let mut pts: Vec<Pos2> = (1..=dragon_engine::effects::reverb::DR_BANDS).map(|k| Pos2::new(fx(r, h.v(&format!("dr_f{k}"))), y_of(h.v(&format!("dr_{k}"))))).collect();
     pts.sort_by(|a, b| a.x.total_cmp(&b.x));
     let mut line = vec![Pos2::new(r.left(), pts[0].y)];
     line.extend(pts.iter().copied());
-    line.push(Pos2::new(r.right(), pts[4].y));
+    line.push(Pos2::new(r.right(), pts[pts.len() - 1].y));
     p.add(Shape::line(line, Stroke::new(1.5_f32, col)));
     for c in &pts {
         p.circle_filled(*c, 4.0, col);
@@ -1725,7 +1725,7 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     glow += (target - glow) * if target > glow { 0.05 } else { 0.02 };
     p.ctx().data_mut(|d| d.insert_temp(glow_id, glow));
     let heat = Color32::from_rgb(0xff, 0x8a, 0x3c);
-    for k in (1..=5).rev() {
+    for k in (1..=dragon_engine::effects::reverb::DR_BANDS).rev() {
         p.circle_filled(Pos2::new(vx, glass.center().y + 10.0), 14.0 + k as f32 * 6.0, heat.gamma_multiply(0.04 * glow));
     }
     p.rect_filled(glass, egui::CornerRadius { nw: 26, ne: 26, sw: 6, se: 6 }, Color32::from_rgba_unmultiplied(0x90, 0xa0, 0xb0, 22));
