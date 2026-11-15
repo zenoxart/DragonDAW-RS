@@ -441,6 +441,198 @@ pub fn slice_to_rack(p: &mut Project, path: &std::path::Path, data: &crate::samp
     (ch, pat)
 }
 
+// ---------------------------------------------------------------------------------------------- patterns
+
+/// A free pattern name: `base #2`, `base #3`, … (FL Studio's naming for clones and unique copies).
+fn unique_pattern_name(p: &Project, base: &str) -> String {
+    let root = match base.rfind(" #") {
+        Some(i) if base[i + 2..].parse::<u32>().is_ok() => &base[..i],
+        _ => base,
+    };
+    (2..).map(|n| format!("{root} #{n}")).find(|n| !p.patterns.iter().any(|x| &x.name == n)).unwrap()
+}
+
+/// Copies a pattern (inserted right after it) and returns the copy's id.
+pub fn clone_pattern(p: &mut Project, pat: Id) -> Option<Id> {
+    let k = p.patterns.iter().position(|x| x.id == pat)?;
+    let mut c = p.patterns[k].clone();
+    c.id = p.next_id();
+    c.name = unique_pattern_name(p, &c.name);
+    let id = c.id;
+    p.patterns.insert(k + 1, c);
+    Some(id)
+}
+
+fn pattern_clips_mut(p: &mut Project) -> impl Iterator<Item = &mut Clip> {
+    p.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| matches!(c.kind, ClipKind::Pattern { .. }))
+}
+
+fn clip_pattern(c: &Clip) -> Option<Id> {
+    match c.kind {
+        ClipKind::Pattern { pattern } => Some(pattern),
+        _ => None,
+    }
+}
+
+/// "Make unique": every given pattern clip gets its own copy of its pattern, so editing it no longer changes
+/// the other clips. Returns the new pattern ids (in clip order).
+pub fn make_unique(p: &mut Project, clips: &[Id]) -> Vec<Id> {
+    let targets: Vec<(Id, Id)> = p.tracks.iter().flat_map(|t| t.clips.iter()).filter(|c| clips.contains(&c.id)).filter_map(|c| clip_pattern(c).map(|pat| (c.id, pat))).collect();
+    let mut out = Vec::new();
+    for (cid, pat) in targets {
+        let Some(new) = clone_pattern(p, pat) else { continue };
+        let name = p.pattern(new).map(|x| x.name.clone()).unwrap_or_default();
+        if let Some(c) = pattern_clips_mut(p).find(|c| c.id == cid) {
+            c.kind = ClipKind::Pattern { pattern: new };
+            c.name = name;
+        }
+        out.push(new);
+    }
+    out
+}
+
+/// Points pattern clips at another pattern ("select source pattern").
+pub fn set_clip_pattern(p: &mut Project, clips: &[Id], pat: Id) {
+    let name = p.pattern(pat).map(|x| x.name.clone()).unwrap_or_default();
+    for c in pattern_clips_mut(p).filter(|c| clips.contains(&c.id)) {
+        c.kind = ClipKind::Pattern { pattern: pat };
+        c.name = name.clone();
+    }
+}
+
+/// "Split by channel": one pattern per channel that has steps or notes in `pat`, named and coloured after the
+/// channel. Every playlist clip of `pat` is replaced by one clip per new pattern, stacked on that track and the
+/// tracks below it (tracks are added when needed); the original pattern is removed. Returns the new patterns.
+pub fn split_by_channel(p: &mut Project, pat: Id) -> Vec<Id> {
+    let Some(k) = p.patterns.iter().position(|x| x.id == pat) else { return Vec::new() };
+    let src = p.patterns[k].clone();
+    let used: Vec<(Id, PatternChannel)> = src.channels.iter().filter(|(_, c)| c.steps.iter().any(|s| s.on) || !c.notes.is_empty()).map(|(id, c)| (*id, c.clone())).collect();
+    if used.len() < 2 {
+        return Vec::new();
+    }
+    let len = src.length_beats();
+    let mut new_ids = Vec::new();
+    let mut new_patterns = Vec::new();
+    for (ch, content) in &used {
+        let id = p.next_id();
+        let (name, color) = p.channel(*ch).map(|c| (c.name.clone(), c.color)).unwrap_or((format!("{} part", src.name), src.color));
+        // Keep the original length so every part loops like the whole did.
+        let mut part = Pattern { id, name: format!("{} – {}", src.name, name), color, steps: src.steps, swing: src.swing, channels: [(*ch, content.clone())].into_iter().collect() };
+        if part.length_beats() < len {
+            part.steps = (len * 4.0).round() as u32;
+        }
+        new_ids.push(id);
+        new_patterns.push(part);
+    }
+    p.patterns.splice(k..=k, new_patterns);
+    // Replace the clips.
+    let mut placements: Vec<(usize, Clip)> = Vec::new();
+    for (ti, t) in p.tracks.iter().enumerate() {
+        for c in t.clips.iter().filter(|c| clip_pattern(c) == Some(pat)) {
+            placements.push((ti, c.clone()));
+        }
+    }
+    for t in p.tracks.iter_mut() {
+        t.clips.retain(|c| clip_pattern(c) != Some(pat));
+    }
+    for (ti, c) in placements {
+        for (j, id) in new_ids.iter().enumerate() {
+            while p.tracks.len() <= ti + j {
+                let n = p.tracks.len() + 1;
+                p.add_track(&format!("Track {n}"));
+            }
+            let cid = p.next_id();
+            let (name, color) = p.pattern(*id).map(|x| (x.name.clone(), x.color)).unwrap_or_default();
+            p.tracks[ti + j].clips.push(Clip { id: cid, name, start: c.start, length: c.length, muted: c.muted, color, kind: ClipKind::Pattern { pattern: *id } });
+        }
+    }
+    new_ids
+}
+
+/// Cuts a pattern in two at `at` beats (on the step grid; on a bar line when it has notes, because note
+/// patterns round their length to bars). Notes crossing the cut are split. Playlist clips of the pattern are
+/// replaced by clips of the two halves that play exactly what was heard before (also across loop repeats).
+/// Returns the two new patterns.
+pub fn split_pattern_at(p: &mut Project, pat: Id, at: f64) -> Option<(Id, Id)> {
+    let k = p.patterns.iter().position(|x| x.id == pat)?;
+    let src = p.patterns[k].clone();
+    let len = src.length_beats();
+    let has_notes = src.channels.values().any(|c| !c.notes.is_empty());
+    let grid = if has_notes { 4.0 } else { 0.25 };
+    if at <= 0.0 || at >= len || ((at / grid).round() * grid - at).abs() > 1e-9 {
+        return None;
+    }
+    let cut_step = (at * 4.0).round() as usize;
+    let cut_tick = (at * PPQ as f64).round() as u32;
+    let total_steps = (len * 4.0).round() as usize;
+    let (a_id, b_id) = (p.next_id(), p.next_id());
+    let mut a = Pattern { id: a_id, name: format!("{} A", src.name), color: src.color, steps: cut_step as u32, swing: src.swing, channels: std::collections::BTreeMap::new() };
+    let mut b = Pattern { id: b_id, name: format!("{} B", src.name), color: src.color, steps: (total_steps - cut_step) as u32, swing: src.swing, channels: std::collections::BTreeMap::new() };
+    for (ch, c) in &src.channels {
+        let mut steps = c.steps.clone();
+        steps.resize(total_steps.max(steps.len()), Step::default());
+        let (mut na, mut nb) = (Vec::new(), Vec::new());
+        for n in &c.notes {
+            if n.end() <= cut_tick {
+                na.push(*n);
+            } else if n.start >= cut_tick {
+                nb.push(Note { start: n.start - cut_tick, ..*n });
+            } else {
+                na.push(Note { length: cut_tick - n.start, ..*n });
+                nb.push(Note { start: 0, length: n.end() - cut_tick, ..*n });
+            }
+        }
+        a.channels.insert(*ch, PatternChannel { steps: steps[..cut_step].to_vec(), notes: na });
+        b.channels.insert(*ch, PatternChannel { steps: steps[cut_step..total_steps].to_vec(), notes: nb });
+    }
+    p.patterns.splice(k..=k, [a, b]);
+    // Rewrite the clips: each loop repeat of the old pattern becomes an A clip and a B clip.
+    for t in p.tracks.iter_mut() {
+        let old: Vec<Clip> = t.clips.iter().filter(|c| clip_pattern(c) == Some(pat)).cloned().collect();
+        t.clips.retain(|c| clip_pattern(c) != Some(pat));
+        for c in old {
+            let mut s = c.start;
+            while s < c.end() - 1e-9 {
+                for (off, l, id, suffix) in [(0.0, at, a_id, "A"), (at, len - at, b_id, "B")] {
+                    let from = s + off;
+                    let to = (from + l).min(c.end());
+                    if to > from + 1e-9 {
+                        t.clips.push(Clip { id: 0, name: format!("{} {suffix}", src.name), start: from, length: to - from, muted: c.muted, color: c.color, kind: ClipKind::Pattern { pattern: id } });
+                    }
+                }
+                s += len;
+            }
+        }
+    }
+    // Fresh ids for the new clips.
+    let mut fix: Vec<(usize, usize)> = Vec::new();
+    for (ti, t) in p.tracks.iter().enumerate() {
+        for (ci, c) in t.clips.iter().enumerate() {
+            if c.id == 0 {
+                fix.push((ti, ci));
+            }
+        }
+    }
+    for (ti, ci) in fix {
+        let id = p.next_id();
+        p.tracks[ti].clips[ci].id = id;
+    }
+    Some((a_id, b_id))
+}
+
+/// Deletes a pattern and its playlist clips. The last pattern is never deleted. Returns the pattern to show.
+pub fn delete_pattern(p: &mut Project, pat: Id) -> Option<Id> {
+    if p.patterns.len() <= 1 {
+        return None;
+    }
+    let k = p.patterns.iter().position(|x| x.id == pat)?;
+    p.patterns.remove(k);
+    for t in p.tracks.iter_mut() {
+        t.clips.retain(|c| clip_pattern(c) != Some(pat));
+    }
+    Some(p.patterns[k.min(p.patterns.len() - 1)].id)
+}
+
 /// Replaces the sound of a channel-rack channel with an audio file (FL Studio: drop a sample onto a channel).
 /// A sampler keeps its settings (root note, envelope, loop, …) except the region and slices, which belong to
 /// the old file; any other instrument becomes a sampler. The channel takes the file's name when it was still
@@ -475,6 +667,101 @@ pub fn is_audio_file(path: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn beat_project() -> (super::Project, super::Id, super::Id, super::Id) {
+        use super::*;
+        let mut p = Project::new_default();
+        let kick = p.add_channel("Kick", Instrument::Synth(Default::default()));
+        let bass = p.add_channel("Bass", Instrument::Synth(Default::default()));
+        let pat = p.patterns[0].id;
+        let pt = p.pattern_mut(pat).unwrap();
+        pt.steps = 32; // two bars
+        pt.channels.insert(kick, PatternChannel { steps: (0..32).map(|i| Step { on: i % 4 == 0, ..Default::default() }).collect(), notes: vec![] });
+        pt.channels.insert(
+            bass,
+            PatternChannel {
+                steps: vec![],
+                notes: vec![Note { pitch: 36, start: 0, length: 2 * PPQ, velocity: 0.8, ..Default::default() }, Note { pitch: 38, start: 3 * PPQ, length: 2 * PPQ, velocity: 0.8, ..Default::default() }],
+            },
+        );
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "Pattern 1".into(), start: 0.0, length: 16.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+        (p, pat, kick, bass)
+    }
+
+    /// Note-on beats heard from the playlist (compiled song events) – the reference for "sounds the same".
+    fn heard(p: &super::Project) -> Vec<(i64, usize, u8)> {
+        let cache = crate::samples::SampleCache::default();
+        let stretch = crate::render::StretchCache::default();
+        let mut pool = crate::render::Pool::new();
+        let song = crate::render::Song::compile(p, &mut crate::render::CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate: 44100.0 });
+        let mut v: Vec<(i64, usize, u8)> = song.note_ons().into_iter().map(|(b, c, n)| ((b * 1000.0).round() as i64, c, n)).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn make_unique_and_clone_patterns() {
+        use super::*;
+        let (mut p, pat, kick, _) = beat_project();
+        let first = p.tracks[0].clips[0].id;
+        let id2 = p.next_id();
+        p.tracks[1].clips.push(Clip { id: id2, name: "Pattern 1".into(), start: 16.0, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+        let new = make_unique(&mut p, &[id2]);
+        assert_eq!(new.len(), 1);
+        assert_eq!(p.patterns.len(), 2);
+        assert_eq!(p.pattern(new[0]).unwrap().name, "Pattern 1 #2");
+        // Editing the unique copy leaves the original alone.
+        p.pattern_mut(new[0]).unwrap().channels.get_mut(&kick).unwrap().steps[1].on = true;
+        assert!(!p.pattern(pat).unwrap().channels[&kick].steps[1].on);
+        assert!(matches!(p.tracks[0].clips[0].kind, ClipKind::Pattern { pattern } if pattern == pat) && p.tracks[0].clips[0].id == first);
+        let c = clone_pattern(&mut p, new[0]).unwrap();
+        assert_eq!(p.pattern(c).unwrap().name, "Pattern 1 #3");
+        assert_eq!(p.patterns[2].id, c, "inserted after its source");
+    }
+
+    #[test]
+    fn split_by_channel_keeps_the_sound() {
+        use super::*;
+        let (mut p, pat, kick, bass) = beat_project();
+        let before = heard(&p);
+        let parts = split_by_channel(&mut p, pat);
+        assert_eq!(parts.len(), 2);
+        assert!(p.pattern(pat).is_none(), "original replaced");
+        assert!(p.pattern(parts[0]).unwrap().channels.contains_key(&kick) && p.pattern(parts[1]).unwrap().channels.contains_key(&bass));
+        assert_eq!(p.tracks[0].clips.len(), 1);
+        assert_eq!(p.tracks[1].clips.len(), 1, "second part on the next track");
+        assert_eq!(heard(&p), before, "the song plays the same notes");
+    }
+
+    #[test]
+    fn split_pattern_at_a_bar_keeps_the_sound() {
+        use super::*;
+        let (mut p, pat, _, bass) = beat_project();
+        let before = heard(&p);
+        assert!(split_pattern_at(&mut p, pat, 2.0).is_none(), "note patterns split on bar lines");
+        let (a, b) = split_pattern_at(&mut p, pat, 4.0).unwrap();
+        assert_eq!(p.pattern(a).unwrap().length_beats(), 4.0);
+        assert_eq!(p.pattern(b).unwrap().length_beats(), 4.0);
+        // The bass note crossing the cut (beat 3 → 5) became two notes.
+        assert_eq!(p.pattern(a).unwrap().channels[&bass].notes.len(), 2);
+        assert_eq!(p.pattern(b).unwrap().channels[&bass].notes[0].start, 0);
+        // The 16-beat clip (two loops of 8 beats) became A B A B.
+        let kinds: Vec<Id> = p.tracks[0]
+            .clips
+            .iter()
+            .map(|c| match c.kind {
+                ClipKind::Pattern { pattern } => pattern,
+                _ => 0,
+            })
+            .collect();
+        assert_eq!(kinds, vec![a, b, a, b]);
+        let after = heard(&p);
+        // Split notes retrigger at the cut; everything heard before is still heard at the same time.
+        assert!(before.iter().all(|e| after.contains(e)), "{before:?} vs {after:?}");
+        assert_eq!(after.len(), before.len() + 2, "the crossing note now also starts at the cut (twice: two loops)");
+        assert!(delete_pattern(&mut p, a).is_some());
+        assert!(p.tracks[0].clips.iter().all(|c| !matches!(c.kind, ClipKind::Pattern { pattern } if pattern == a)));
+    }
     #[test]
     fn dropping_a_sample_replaces_the_channel_sound() {
         use super::*;

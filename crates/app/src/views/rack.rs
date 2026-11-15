@@ -57,17 +57,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             }
         });
-        if ui.button("Clone pattern").clicked() {
-            let id = st.session.edit("Clone pattern", |p| {
-                let id = p.next_id();
-                let mut c = p.pattern(pat).cloned().unwrap();
-                c.id = id;
-                c.name = format!("{} copy", c.name);
-                p.patterns.push(c);
-                id
-            });
-            st.ui.pattern = id;
-        }
+        ui.menu_button("Pattern ▾", |ui| pattern_menu(ui, st, pat, None));
         if ui.button("Clear").clicked() {
             st.session.edit("Clear pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.channels.clear()));
         }
@@ -158,6 +148,95 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.add_sampler(&path);
         }
     });
+}
+
+/// Pattern operations (FL Studio): clone, make unique, split by channel, split at a bar, change the source
+/// pattern of a clip, delete. With `clip` the menu belongs to a playlist clip (make unique / source pattern act
+/// on it, or on all selected pattern clips when it is selected).
+pub fn pattern_menu(ui: &mut Ui, st: &mut State, pat: Id, clip: Option<Id>) {
+    let Some(pattern) = st.session.project.pattern(pat).cloned() else {
+        ui.label("Pattern not found");
+        return;
+    };
+    ui.label(RichText::new(&pattern.name).strong().color(theme::rgb(pattern.color)));
+    let mut name = pattern.name.clone();
+    if ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0).hint_text("name")).changed() {
+        st.session.gesture("Rename pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.name = name.clone()));
+    }
+    ui.separator();
+    if let Some(cid) = clip {
+        let clips: Vec<Id> = if st.ui.clips.contains(&cid) { st.ui.clips.clone() } else { vec![cid] };
+        let n = clips.len();
+        if ui.button(if n > 1 { format!("Make unique ({n} clips)") } else { "Make unique".into() }).on_hover_text("Give the clip its own copy of the pattern, so editing it does not change the others").clicked() {
+            let new = st.session.edit("Make unique", |p| dragon_engine::edit::make_unique(p, &clips));
+            if let Some(&first) = new.first() {
+                st.ui.pattern = first;
+            }
+            close(ui);
+        }
+        ui.menu_button("Source pattern", |ui| {
+            for (id, nm) in st.session.project.patterns.iter().map(|x| (x.id, x.name.clone())).collect::<Vec<_>>() {
+                if ui.selectable_label(id == pat, nm).clicked() {
+                    st.session.edit("Change source pattern", |p| dragon_engine::edit::set_clip_pattern(p, &clips, id));
+                    close(ui);
+                }
+            }
+        });
+    }
+    if ui.button("Clone pattern").on_hover_text("A new, independent copy of the pattern").clicked() {
+        if let Some(id) = st.session.edit("Clone pattern", |p| dragon_engine::edit::clone_pattern(p, pat)) {
+            st.ui.pattern = id;
+        }
+        close(ui);
+    }
+    let used = pattern.channels.values().filter(|c| c.steps.iter().any(|s| s.on) || !c.notes.is_empty()).count();
+    if ui.add_enabled(used >= 2, egui::Button::new("Split by channel")).on_hover_text("One pattern per channel; the playlist clips are replaced by stacked clips of the parts").clicked() {
+        let parts = st.session.edit("Split by channel", |p| dragon_engine::edit::split_by_channel(p, pat));
+        if let Some(&first) = parts.first() {
+            st.ui.pattern = first;
+        }
+        close(ui);
+    }
+    let len = pattern.length_beats();
+    let has_notes = pattern.channels.values().any(|c| !c.notes.is_empty());
+    let bpb = 4.0;
+    ui.menu_button("Split at", |ui| {
+        let step = if has_notes { bpb } else { 1.0 };
+        let mut at = step;
+        let mut any = false;
+        while at < len - 1e-9 {
+            let label = if has_notes || (at % bpb).abs() < 1e-9 { format!("bar {}", (at / bpb) as u32 + 1) } else { format!("beat {}", at as u32 + 1) };
+            if ui.button(label).clicked() {
+                if let Some((a, _)) = st.session.edit("Split pattern", |p| dragon_engine::edit::split_pattern_at(p, pat, at)) {
+                    st.ui.pattern = a;
+                }
+                close(ui);
+            }
+            any = true;
+            at += step;
+        }
+        if !any {
+            ui.label(RichText::new("The pattern is too short to split").small());
+        }
+    });
+    if ui.button("Open in channel rack").clicked() {
+        st.ui.pattern = pat;
+        st.ctx.open("dragon.rack", None);
+        close(ui);
+    }
+    ui.separator();
+    if ui.add_enabled(st.session.project.patterns.len() > 1, egui::Button::new("Delete pattern")).on_hover_text("Removes the pattern and its playlist clips").clicked() {
+        if let Some(next) = st.session.edit("Delete pattern", |p| dragon_engine::edit::delete_pattern(p, pat)) {
+            st.ui.pattern = next;
+        }
+        close(ui);
+    }
+}
+
+/// Closes the menu or popup the pattern menu is shown in.
+fn close(ui: &mut Ui) {
+    ui.close_menu();
+    ui.memory_mut(|m| m.close_popup());
 }
 
 fn short(s: &str, n: usize) -> String {

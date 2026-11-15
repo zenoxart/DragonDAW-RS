@@ -185,6 +185,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     // ----- clips
     let tm = TempoMap::from_project(p);
     let mut clip_rects: Vec<(Id, Id, Rect)> = Vec::new();
+    let mut clip_menus: Vec<(Id, Id, Rect)> = Vec::new();
     let pattern_names: Vec<(Id, String, Rgb)> = p.patterns.iter().map(|x| (x.id, x.name.clone(), x.color)).collect();
     let tracks: Vec<Track> = p.tracks.clone();
     let patterns = p.patterns.clone();
@@ -204,6 +205,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             let selected = st.ui.clips.contains(&c.id);
             draw_clip(st, &tgrid, r, c, &tm, rate, &pattern_names, &patterns, selected, t.muted || c.muted);
             clip_rects.push((t.id, c.id, r));
+            // Pattern clips get FL's menu triangle in the title bar (make unique, split, source pattern …).
+            if let ClipKind::Pattern { pattern } = c.kind {
+                if r.width() > 18.0 {
+                    let icon = Rect::from_min_size(Pos2::new(r.left().max(timeline.left()) + 1.0, r.top() + 1.0), Vec2::new(12.0, 11.0));
+                    tgrid.add(egui::Shape::convex_polygon(
+                        vec![Pos2::new(icon.left() + 2.0, icon.top() + 3.0), Pos2::new(icon.right() - 2.0, icon.top() + 3.0), Pos2::new(icon.center().x, icon.bottom() - 2.0)],
+                        Color32::BLACK,
+                        Stroke::NONE,
+                    ));
+                    clip_menus.push((c.id, pattern, icon));
+                }
+            }
         }
         for (kid, name, ky) in &row.takes {
             let kl = Rect::from_x_y_ranges(timeline.x_range(), *ky..=*ky + TAKE_H);
@@ -216,6 +229,21 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
             tgrid.text(Pos2::new(timeline.left() + 4.0, kl.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(10.0), theme::TEXT_DIM);
         }
+    }
+
+    for (cid, pattern, icon) in clip_menus {
+        if !timeline.contains(icon.center()) {
+            continue;
+        }
+        let r = ui.interact(icon, egui::Id::new(("pl.clipmenu", cid)), Sense::click()).on_hover_text("Pattern clip menu");
+        let popup = egui::Id::new(("pl.clipmenu.popup", cid));
+        if r.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup));
+        }
+        egui::popup_below_widget(ui, popup, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            ui.set_min_width(170.0);
+            super::rack::pattern_menu(ui, st, pattern, Some(cid));
+        });
     }
 
     let p = &st.session.project;
@@ -543,7 +571,8 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
         ClipKind::Pattern { pattern } => names.iter().find(|n| n.0 == *pattern).map(|n| n.1.clone()).unwrap_or_else(|| c.name.clone()),
         ClipKind::Audio(_) => c.name.clone(),
     };
-    p.with_clip_rect(r.intersect(p.clip_rect())).text(title.left_center() + Vec2::new(3.0, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(10.0), Color32::BLACK);
+    let indent = if matches!(c.kind, ClipKind::Pattern { .. }) && r.width() > 18.0 { 15.0 } else { 3.0 };
+    p.with_clip_rect(r.intersect(p.clip_rect())).text(title.left_center() + Vec2::new(indent, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(10.0), Color32::BLACK);
     let body = Rect::from_min_max(Pos2::new(r.left(), r.top() + 13.0), r.max);
     let vis = body.intersect(p.clip_rect());
     if vis.width() <= 0.0 {

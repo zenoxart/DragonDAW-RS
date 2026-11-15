@@ -242,6 +242,11 @@ fn fade_gain(curve: FadeCurve, x: f64) -> f32 {
 }
 
 impl Song {
+    /// Every note-on of the arrangement: (beat, channel index, note). For checks and analysis.
+    pub fn note_ons(&self) -> Vec<(f64, usize, u8)> {
+        self.events.iter().filter(|e| e.on).map(|e| (e.beat, e.chan, e.note)).collect()
+    }
+
     pub fn compile(p: &Project, cx: &mut CompileContext) -> Song {
         let rate = cx.rate;
         let tempo = tempo_map_with_automation(p);
