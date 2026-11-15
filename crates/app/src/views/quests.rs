@@ -103,11 +103,14 @@ pub struct Quests {
     pub window_open: bool,
     last_check: f64,
     events: Vec<Event>,
+    /// The Higgsfield level-up animation (`assets/levelup.gif`), loaded on first use; `Some(None)` when
+    /// the file is not there (the card then draws its emblem itself).
+    anim: Option<Option<crate::gif_anim::GifAnim>>,
 }
 
 impl Default for Quests {
     fn default() -> Self {
-        Quests { progress: Progress::default(), celebrations: Vec::new(), window_open: false, last_check: -10.0, events: Vec::new() }
+        Quests { progress: Progress::default(), celebrations: Vec::new(), window_open: false, last_check: -10.0, events: Vec::new(), anim: None }
     }
 }
 
@@ -316,6 +319,11 @@ pub fn dragon_mark(ui: &mut Ui, size: f32, level: usize) {
 }
 
 /// Celebration banners with an ember burst; the reduced-motion setting keeps only the banner.
+/// The Higgsfield level-up animation file in `assets/`.
+pub const LEVELUP_GIF: &str = "levelup.gif";
+/// The part of the GIF shown in the card's emblem (texture coordinates).
+const LEVELUP_UV: Rect = Rect { min: Pos2 { x: 0.0, y: 0.0 }, max: Pos2 { x: 1.0, y: 1.0 } };
+
 fn celebrations(ctx: &egui::Context, st: &mut State, now: f64) {
     const LIFE: f64 = 3.2;
     st.quests.celebrations.retain(|c| now - c.started < LIFE);
@@ -386,7 +394,20 @@ fn celebrations(ctx: &egui::Context, st: &mut State, now: f64) {
     let ec = Pos2::new(card.left() + radius, card.center().y);
     painter.circle_filled(ec, radius - 12.0, orange.gamma_multiply(0.25 * fade));
     painter.circle_stroke(ec, radius - 12.0, Stroke::new(2.0_f32, orange.gamma_multiply(fade)));
-    painter.text(ec, egui::Align2::CENTER_CENTER, c.icon, egui::FontId::proportional(24.0), Color32::WHITE.gamma_multiply(fade));
+    if st.quests.anim.is_none() {
+        st.quests.anim = Some(crate::gif_anim::GifAnim::load(ctx, LEVELUP_GIF));
+    }
+    match st.quests.anim.as_ref().and_then(|a| a.as_ref()) {
+        // The Higgsfield animation plays in the emblem (once; the last frame holds).
+        Some(a) if !reduced => {
+            let tex = a.frame_at(age, false);
+            let er = Rect::from_center_size(ec, Vec2::splat((radius - 13.0) * 2.0));
+            painter.image(tex.id(), er, LEVELUP_UV, Color32::WHITE.gamma_multiply(fade));
+        }
+        _ => {
+            painter.text(ec, egui::Align2::CENTER_CENTER, c.icon, egui::FontId::proportional(24.0), Color32::WHITE.gamma_multiply(fade));
+        }
+    }
     let dx = card.left() + radius * 2.0 - 2.0;
     painter.line_segment([Pos2::new(dx, card.top() + 14.0), Pos2::new(dx, card.bottom() - 14.0)], Stroke::new(1.0_f32, Color32::from_white_alpha(40).gamma_multiply(fade)));
     let tx = dx + 14.0;

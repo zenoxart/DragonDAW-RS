@@ -9,6 +9,7 @@
 mod app;
 mod audio;
 mod commands;
+mod gif_anim;
 mod session;
 mod splash;
 mod state;

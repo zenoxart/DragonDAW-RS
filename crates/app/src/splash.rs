@@ -15,43 +15,9 @@ pub struct Splash {
     reduced_motion: bool,
 }
 
-fn gif_candidates() -> Vec<std::path::PathBuf> {
-    let mut v = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(d) = exe.parent() {
-            v.push(d.join("assets").join("splash.gif"));
-        }
-    }
-    v.push(std::path::PathBuf::from("assets/splash.gif"));
-    v.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join("splash.gif"));
-    v
-}
-
-fn load_gif(ctx: &egui::Context) -> Vec<(TextureHandle, Duration)> {
-    use image::AnimationDecoder;
-    for p in gif_candidates() {
-        let Ok(f) = std::fs::File::open(&p) else { continue };
-        let Ok(dec) = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(f)) else { continue };
-        let Ok(frames) = dec.into_frames().collect_frames() else { continue };
-        let mut out = Vec::new();
-        for (i, fr) in frames.into_iter().enumerate().take(240) {
-            let (num, den) = fr.delay().numer_denom_ms();
-            let ms = num.checked_div(den).unwrap_or(80).max(20);
-            let buf = fr.into_buffer();
-            let img = egui::ColorImage::from_rgba_unmultiplied([buf.width() as usize, buf.height() as usize], buf.as_raw());
-            out.push((ctx.load_texture(format!("splash{i}"), img, egui::TextureOptions::LINEAR), Duration::from_millis(ms as u64)));
-        }
-        if !out.is_empty() {
-            tracing::info!("splash animation: {} ({} frames)", p.display(), out.len());
-            return out;
-        }
-    }
-    Vec::new()
-}
-
 impl Splash {
     pub fn new(ctx: &egui::Context, reduced_motion: bool) -> Self {
-        let frames = load_gif(ctx);
+        let frames = crate::gif_anim::GifAnim::load(ctx, "splash.gif").map(|a| a.frames).unwrap_or_default();
         let total = frames.iter().map(|f| f.1).sum();
         Splash { frames, total, start: Instant::now(), reduced_motion }
     }
