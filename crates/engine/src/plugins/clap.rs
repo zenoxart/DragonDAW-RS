@@ -34,16 +34,56 @@ fn cstr(p: *const c_char) -> String {
     }
 }
 
-/// The shared library inside a `.clap` bundle (macOS) or the file itself.
-fn binary(path: &Path) -> PathBuf {
+/// The shared library of a `.clap` plugin: the file itself, or inside a `.clap` folder – the macOS bundle
+/// (`Contents/MacOS/<name>`) or a folder holding the library next to its resources (`<name>.clap/<name>.clap`,
+/// used on Linux and Windows by plugins that ship data files).
+pub(crate) fn binary(path: &Path) -> PathBuf {
     if path.is_dir() {
         let name = path.file_stem().map(|s| s.to_os_string()).unwrap_or_default();
         let mac = path.join("Contents").join("MacOS").join(&name);
-        if mac.exists() {
+        if mac.is_file() {
             return mac;
+        }
+        let inner = path.join(path.file_name().unwrap_or_default());
+        if inner.is_file() {
+            return inner;
+        }
+        // Any single `.clap` file inside.
+        if let Ok(rd) = std::fs::read_dir(path) {
+            let files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("clap"))).collect();
+            if let [only] = files.as_slice() {
+                return only.clone();
+            }
         }
     }
     path.to_path_buf()
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    #[test]
+    fn clap_folders_resolve_to_their_library() {
+        let dir = tempfile::tempdir().unwrap();
+        // Linux / Windows style: Foo.clap/Foo.clap (+ resources).
+        let a = dir.path().join("Foo.clap");
+        std::fs::create_dir_all(a.join("presets")).unwrap();
+        std::fs::write(a.join("Foo.clap"), b"x").unwrap();
+        assert_eq!(super::binary(&a), a.join("Foo.clap"));
+        // Inner file with another name.
+        let b = dir.path().join("Bar.clap");
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("bar-x64.clap"), b"x").unwrap();
+        assert_eq!(super::binary(&b), b.join("bar-x64.clap"));
+        // macOS bundle.
+        let c = dir.path().join("Baz.clap");
+        std::fs::create_dir_all(c.join("Contents/MacOS")).unwrap();
+        std::fs::write(c.join("Contents/MacOS/Baz"), b"x").unwrap();
+        assert_eq!(super::binary(&c), c.join("Contents/MacOS/Baz"));
+        // A plain file stays as it is.
+        let f = dir.path().join("Plain.clap");
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(super::binary(&f), f);
+    }
 }
 
 /// Returns the entry, calling `init` once per library.
