@@ -146,9 +146,178 @@ impl IHostApplicationTrait for HostApp {
         }
         kResultOk
     }
-    unsafe fn createInstance(&self, _cid: *mut TUID, _iid: *mut TUID, obj: *mut *mut c_void) -> tresult {
+    /// Plugins with a separate edit controller talk to their processor through `IMessage`s the host creates
+    /// (`IConnectionPoint::notify`); many refuse to build their GUI without them.
+    unsafe fn createInstance(&self, cid: *mut TUID, iid: *mut TUID, obj: *mut *mut c_void) -> tresult {
+        if obj.is_null() || cid.is_null() {
+            return kInvalidArgument;
+        }
         *obj = std::ptr::null_mut();
-        kNoInterface
+        let class = std::slice::from_raw_parts(cid as *const u8, 16);
+        let wanted = if iid.is_null() { class } else { std::slice::from_raw_parts(iid as *const u8, 16) };
+        let is = |id: &[u8; 16]| class == id.as_slice() || wanted == id.as_slice();
+        if is(&IMessage::IID) {
+            let m = ComWrapper::new(Message { id: RefCell::new(None), attrs: ComWrapper::new(Attributes::default()) });
+            *obj = m.to_com_ptr::<IMessage>().unwrap().into_raw() as *mut c_void;
+            kResultOk
+        } else if is(&IAttributeList::IID) {
+            let a = ComWrapper::new(Attributes::default());
+            *obj = a.to_com_ptr::<IAttributeList>().unwrap().into_raw() as *mut c_void;
+            kResultOk
+        } else {
+            kNoInterface
+        }
+    }
+}
+
+/// Host-created message (`IMessage`).
+struct Message {
+    id: RefCell<Option<std::ffi::CString>>,
+    attrs: ComWrapper<Attributes>,
+}
+impl Class for Message {
+    type Interfaces = (IMessage,);
+}
+impl IMessageTrait for Message {
+    unsafe fn getMessageID(&self) -> FIDString {
+        self.id.borrow().as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null())
+    }
+    unsafe fn setMessageID(&self, id: FIDString) {
+        *self.id.borrow_mut() = if id.is_null() { None } else { Some(CStr::from_ptr(id).to_owned()) };
+    }
+    unsafe fn getAttributes(&self) -> *mut IAttributeList {
+        self.attrs.as_com_ref::<IAttributeList>().unwrap().as_ptr()
+    }
+}
+
+#[derive(Clone)]
+enum Attr {
+    Int(i64),
+    Float(f64),
+    Str(Vec<TChar>),
+    Bin(Vec<u8>),
+}
+
+/// Host-created attribute list (`IAttributeList`) carried by messages.
+#[derive(Default)]
+struct Attributes {
+    map: RefCell<std::collections::HashMap<Vec<u8>, Attr>>,
+}
+impl Class for Attributes {
+    type Interfaces = (IAttributeList,);
+}
+fn attr_key(id: IAttributeList_::AttrID) -> Option<Vec<u8>> {
+    // SAFETY: attribute ids are NUL-terminated C strings.
+    (!id.is_null()).then(|| unsafe { CStr::from_ptr(id) }.to_bytes().to_vec())
+}
+impl IAttributeListTrait for Attributes {
+    unsafe fn setInt(&self, id: IAttributeList_::AttrID, value: int64) -> tresult {
+        let Some(k) = attr_key(id) else { return kInvalidArgument };
+        self.map.borrow_mut().insert(k, Attr::Int(value));
+        kResultOk
+    }
+    unsafe fn getInt(&self, id: IAttributeList_::AttrID, value: *mut int64) -> tresult {
+        match attr_key(id).and_then(|k| self.map.borrow().get(&k).cloned()) {
+            Some(Attr::Int(v)) if !value.is_null() => {
+                *value = v;
+                kResultOk
+            }
+            _ => kResultFalse,
+        }
+    }
+    unsafe fn setFloat(&self, id: IAttributeList_::AttrID, value: f64) -> tresult {
+        let Some(k) = attr_key(id) else { return kInvalidArgument };
+        self.map.borrow_mut().insert(k, Attr::Float(value));
+        kResultOk
+    }
+    unsafe fn getFloat(&self, id: IAttributeList_::AttrID, value: *mut f64) -> tresult {
+        match attr_key(id).and_then(|k| self.map.borrow().get(&k).cloned()) {
+            Some(Attr::Float(v)) if !value.is_null() => {
+                *value = v;
+                kResultOk
+            }
+            _ => kResultFalse,
+        }
+    }
+    unsafe fn setString(&self, id: IAttributeList_::AttrID, string: *const TChar) -> tresult {
+        let Some(k) = attr_key(id) else { return kInvalidArgument };
+        if string.is_null() {
+            return kInvalidArgument;
+        }
+        let mut v = Vec::new();
+        let mut i = 0;
+        while *string.add(i) != 0 {
+            v.push(*string.add(i));
+            i += 1;
+        }
+        self.map.borrow_mut().insert(k, Attr::Str(v));
+        kResultOk
+    }
+    unsafe fn getString(&self, id: IAttributeList_::AttrID, string: *mut TChar, size_in_bytes: uint32) -> tresult {
+        match attr_key(id).and_then(|k| self.map.borrow().get(&k).cloned()) {
+            Some(Attr::Str(v)) if !string.is_null() && size_in_bytes >= 2 => {
+                let cap = size_in_bytes as usize / std::mem::size_of::<TChar>() - 1;
+                let n = v.len().min(cap);
+                std::ptr::copy_nonoverlapping(v.as_ptr(), string, n);
+                *string.add(n) = 0;
+                kResultOk
+            }
+            _ => kResultFalse,
+        }
+    }
+    unsafe fn setBinary(&self, id: IAttributeList_::AttrID, data: *const c_void, size_in_bytes: uint32) -> tresult {
+        let Some(k) = attr_key(id) else { return kInvalidArgument };
+        let v = if data.is_null() { Vec::new() } else { std::slice::from_raw_parts(data as *const u8, size_in_bytes as usize).to_vec() };
+        self.map.borrow_mut().insert(k, Attr::Bin(v));
+        kResultOk
+    }
+    unsafe fn getBinary(&self, id: IAttributeList_::AttrID, data: *mut *const c_void, size_in_bytes: *mut uint32) -> tresult {
+        let Some(k) = attr_key(id) else { return kInvalidArgument };
+        // The data must stay valid while the message lives: hand out a pointer into the stored vector.
+        match self.map.borrow().get(&k) {
+            Some(Attr::Bin(v)) if !data.is_null() && !size_in_bytes.is_null() => {
+                *data = v.as_ptr() as *const c_void;
+                *size_in_bytes = v.len() as uint32;
+                kResultOk
+            }
+            _ => kResultFalse,
+        }
+    }
+}
+
+/// Host side of `IComponentHandler`: the plugin's own GUI reports parameter edits here. They are queued for
+/// the audio processor (applied in the next block) and for the app (stored in the project).
+#[derive(Default)]
+struct Handler {
+    /// Edits for the processor.
+    audio: std::sync::Mutex<Vec<(u32, f64)>>,
+    /// Edits for the project.
+    ui: std::sync::Mutex<Vec<(u32, f64)>>,
+    /// `restartComponent` asked for a latency / parameter refresh.
+    restart: std::sync::atomic::AtomicI32,
+}
+impl Class for Handler {
+    type Interfaces = (IComponentHandler,);
+}
+impl IComponentHandlerTrait for Handler {
+    unsafe fn beginEdit(&self, _id: ParamID) -> tresult {
+        kResultOk
+    }
+    unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
+        if let Ok(mut q) = self.audio.lock() {
+            q.push((id, value));
+        }
+        if let Ok(mut q) = self.ui.lock() {
+            q.push((id, value));
+        }
+        kResultOk
+    }
+    unsafe fn endEdit(&self, _id: ParamID) -> tresult {
+        kResultOk
+    }
+    unsafe fn restartComponent(&self, flags: int32) -> tresult {
+        self.restart.fetch_or(flags, std::sync::atomic::Ordering::Relaxed);
+        kResultOk
     }
 }
 
@@ -311,6 +480,11 @@ struct ParamMeta {
 
 /// A loaded VST3 plugin instance (component + processor + controller).
 pub struct Vst3Plugin {
+    handler: ComWrapper<Handler>,
+    /// Last value the host sent per parameter, so unchanged project values are not re-sent on every
+    /// recompile (they would undo edits made in the plugin's own GUI).
+    applied: std::collections::HashMap<u32, f64>,
+    editor_error: Option<String>,
     component: ComPtr<IComponent>,
     processor: ComPtr<IAudioProcessor>,
     controller: Option<ComPtr<IEditController>>,
@@ -375,8 +549,20 @@ impl Vst3Plugin {
                 }
             };
 
-            // State.
-            let (cs, ks) = unpack(&r.state);
+            // State. With a separate controller the controller always gets the component's state (SDK host
+            // behaviour); some plugins build their editor from it.
+            let (mut cs, ks) = unpack(&r.state);
+            if cs.is_empty() && separate_controller {
+                let s = stream(Vec::new());
+                if component.getState(s.as_com_ref::<IBStream>().unwrap().as_ptr()) == kResultOk {
+                    let data = s.data.borrow().clone();
+                    if let Some(c) = &controller {
+                        let s2 = stream(data);
+                        c.setComponentState(s2.as_com_ref::<IBStream>().unwrap().as_ptr());
+                    }
+                }
+                cs.clear();
+            }
             if !cs.is_empty() {
                 let s = stream(cs.clone());
                 component.setState(s.as_com_ref::<IBStream>().unwrap().as_ptr());
@@ -429,8 +615,15 @@ impl Vst3Plugin {
                     }
                 }
             }
+            let handler = ComWrapper::new(Handler::default());
+            if let Some(c) = &controller {
+                c.setComponentHandler(handler.as_com_ref::<IComponentHandler>().unwrap().as_ptr());
+            }
             let queues = (0..params.len().max(1) + 64).map(|_| ComWrapper::new(Queue { id: Cell::new(0), value: Cell::new(0.0) })).collect();
             let mut me = Vst3Plugin {
+                handler,
+                applied: std::collections::HashMap::new(),
+                editor_error: None,
                 component,
                 processor,
                 controller,
@@ -456,8 +649,26 @@ impl Vst3Plugin {
 
     fn run(&mut self, n: usize) {
         self.scratch.ensure(n);
-        // Parameters: last value per id wins within a block.
+        // Parameters: last value per id wins within a block. Edits from the plugin's GUI go to the processor
+        // only (the controller made them).
+        let gui: Vec<(u32, f64)> = self.handler.audio.try_lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
         let mut used = 0usize;
+        {
+            let q = &self.changes.queues;
+            for (id, value) in gui {
+                let existing = (0..used).find(|i| q[*i].id.get() == id);
+                let i = match existing {
+                    Some(i) => i,
+                    None if used < q.len() => {
+                        used += 1;
+                        used - 1
+                    }
+                    None => continue,
+                };
+                q[i].id.set(id);
+                q[i].value.set(value.clamp(0.0, 1.0));
+            }
+        }
         {
             let mut evs = self.events.list.borrow_mut();
             evs.clear();
@@ -571,7 +782,24 @@ impl Vst3Plugin {
         if self.editor.is_some() {
             return true;
         }
-        let Some(c) = &self.controller else { return false };
+        match self.open_view() {
+            Ok(ed) => {
+                self.editor = Some(ed);
+                self.editor_error = None;
+                true
+            }
+            Err(e) => {
+                tracing::warn!("{}: {e}", self.info.name);
+                self.editor_error = Some(e);
+                false
+            }
+        }
+    }
+
+    /// Creates the plugin's view and embeds it into a native window (SDK order: createView, platform check,
+    /// content scale, getSize, setFrame, attached).
+    fn open_view(&mut self) -> std::result::Result<Editor, String> {
+        let c = self.controller.as_ref().ok_or("the plugin has no edit controller")?;
         let platform: &CStr = if cfg!(target_os = "windows") {
             c"HWND"
         } else if cfg!(target_os = "macos") {
@@ -579,31 +807,54 @@ impl Vst3Plugin {
         } else {
             c"X11EmbedWindowID"
         };
-        // SAFETY: IPlugView lifecycle per SDK: create, check platform, size, setFrame, attached.
+        // SAFETY: IPlugView lifecycle per the SDK, on the UI thread.
         unsafe {
-            let Some(view) = ComPtr::<IPlugView>::from_raw(c.createView(c"editor".as_ptr())) else { return false };
+            let view = ComPtr::<IPlugView>::from_raw(c.createView(c"editor".as_ptr())).ok_or("the plugin has no editor view (createView returned nothing)")?;
             if view.isPlatformTypeSupported(platform.as_ptr()) != kResultTrue {
-                return false;
+                return Err(format!("the editor does not support the {} window type", platform.to_string_lossy()));
             }
-            let mut rect: ViewRect = std::mem::zeroed();
-            view.getSize(&mut rect);
-            let (w, h) = ((rect.right - rect.left).max(64) as u32, (rect.bottom - rect.top).max(64) as u32);
-            let window = match super::window::EditorWindow::open(&self.info.name, w, h) {
-                Ok(win) => win,
-                Err(e) => {
-                    tracing::warn!("plugin editor window: {e}");
-                    return false;
-                }
+            let size = |v: &ComPtr<IPlugView>| {
+                let mut rect: ViewRect = std::mem::zeroed();
+                v.getSize(&mut rect);
+                ((rect.right - rect.left).max(64) as u32, (rect.bottom - rect.top).max(64) as u32)
             };
+            let (w, h) = size(&view);
+            let mut window = super::window::EditorWindow::open(&self.info.name, w, h).map_err(|e| format!("cannot open the editor window: {e}"))?;
+            // HiDPI: tell the editor the window's scale, then take its (possibly larger) size.
+            let scale = window.scale();
+            if (scale - 1.0).abs() > 0.01 {
+                if let Some(cs) = view.cast::<IPlugViewContentScaleSupport>() {
+                    cs.setContentScaleFactor(scale);
+                    let (w2, h2) = size(&view);
+                    if (w2, h2) != (w, h) {
+                        window.resize(w2, h2);
+                    }
+                }
+            }
             let frame = ComWrapper::new(Frame::default());
             view.setFrame(frame.as_com_ref::<IPlugFrame>().unwrap().as_ptr());
-            if view.attached(window.handle(), platform.as_ptr()) != kResultOk {
+            let r = view.attached(window.handle(), platform.as_ptr());
+            if r != kResultOk {
                 view.setFrame(std::ptr::null_mut());
-                return false;
+                return Err(format!("the editor refused to attach to the window (result {r})"));
             }
-            self.editor = Some(Editor { view, window, frame });
+            // Many editors only know their real size once attached.
+            let (w3, h3) = size(&view);
+            if (w3, h3) != (w, h) {
+                window.resize(w3, h3);
+            }
+            Ok(Editor { view, window, frame })
         }
-        true
+    }
+
+    /// Parameter edits made in the plugin's own GUI since the last call (normalised values).
+    pub fn gui_edits(&mut self) -> Vec<(u32, f64)> {
+        let edits: Vec<(u32, f64)> = self.handler.ui.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        for (id, v) in &edits {
+            // The project will store this value; it is already applied, so do not send it back.
+            self.applied.insert(*id, *v);
+        }
+        edits
     }
 
     /// Pumps the editor window and the plugin's run-loop handlers. Returns `false` once the editor closed.
@@ -740,7 +991,12 @@ impl Drop for Vst3Plugin {
 impl Effect for Vst3Plugin {
     fn set_param(&mut self, id: &str, value: f32) {
         if let Ok(pid) = id.parse::<u32>() {
-            self.pending.push(HostEvent::Param { id: pid, value: value as f64 });
+            let v = value as f64;
+            if self.applied.get(&pid).is_some_and(|old| (old - v).abs() < 1e-9) {
+                return;
+            }
+            self.applied.insert(pid, v);
+            self.pending.push(HostEvent::Param { id: pid, value: v });
         }
     }
     fn reset(&mut self) {}
@@ -774,6 +1030,12 @@ impl Effect for Vst3Plugin {
     }
     fn idle(&mut self) -> bool {
         self.idle_editor()
+    }
+    fn editor_error(&self) -> Option<String> {
+        self.editor_error.clone()
+    }
+    fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
+        self.gui_edits()
     }
 }
 
@@ -824,7 +1086,53 @@ impl InstrumentVoice for Vst3Plugin {
     fn idle(&mut self) -> bool {
         self.idle_editor()
     }
+    fn editor_error(&self) -> Option<String> {
+        self.editor_error.clone()
+    }
+    fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
+        self.gui_edits()
+    }
 }
 
 #[allow(dead_code)]
 fn _assert_comref(_: ComRef<'_, IBStream>) {}
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    /// Plugins with a separate controller create messages through the host; they must round-trip.
+    #[test]
+    fn host_creates_messages_and_attribute_lists() {
+        let host = ComWrapper::new(HostApp);
+        let h = host.as_com_ref::<IHostApplication>().unwrap();
+        // SAFETY: COM calls on our own objects.
+        unsafe {
+            let mut iid: TUID = std::mem::transmute(IMessage::IID);
+            let mut obj: *mut c_void = std::ptr::null_mut();
+            assert_eq!(h.createInstance(&mut iid, &mut iid, &mut obj), kResultOk);
+            let m = ComPtr::<IMessage>::from_raw(obj as *mut IMessage).unwrap();
+            m.setMessageID(c"Spectrum".as_ptr());
+            assert_eq!(CStr::from_ptr(m.getMessageID()), c"Spectrum");
+            let a = ComRef::<IAttributeList>::from_raw(m.getAttributes()).unwrap();
+            assert_eq!(a.setInt(c"n".as_ptr(), 42), kResultOk);
+            let mut n = 0;
+            assert_eq!(a.getInt(c"n".as_ptr(), &mut n), kResultOk);
+            assert_eq!(n, 42);
+            let data = [1u8, 2, 3];
+            a.setBinary(c"bin".as_ptr(), data.as_ptr() as *const c_void, 3);
+            let (mut p, mut len) = (std::ptr::null(), 0u32);
+            assert_eq!(a.getBinary(c"bin".as_ptr(), &mut p, &mut len), kResultOk);
+            assert_eq!(std::slice::from_raw_parts(p as *const u8, len as usize), &data);
+            let text: Vec<TChar> = "hi".encode_utf16().chain(std::iter::once(0)).map(|c| c as TChar).collect();
+            a.setString(c"s".as_ptr(), text.as_ptr());
+            let mut out = [0 as TChar; 8];
+            assert_eq!(a.getString(c"s".as_ptr(), out.as_mut_ptr(), 16), kResultOk);
+            assert_eq!(&out[..3], &text[..3]);
+            assert_eq!(a.getInt(c"missing".as_ptr(), &mut n), kResultFalse);
+            // Unknown classes are refused.
+            let mut other: TUID = [7; 16];
+            assert_eq!(h.createInstance(&mut other, &mut other, &mut obj), kNoInterface);
+        }
+    }
+}

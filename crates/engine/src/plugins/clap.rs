@@ -218,7 +218,16 @@ unsafe extern "C" fn in_get(list: *const clap_input_events, i: u32) -> *const cl
     let v = &*((*list).ctx as *const Vec<EvSlot>);
     v.get(i as usize).map(|e| e as *const EvSlot as *const clap_event_header).unwrap_or(std::ptr::null())
 }
-unsafe extern "C" fn out_push(_list: *const clap_output_events, _e: *const clap_event_header) -> bool {
+/// Output events: parameter values the plugin reports (its own GUI moved a control) are collected.
+unsafe extern "C" fn out_push(list: *const clap_output_events, e: *const clap_event_header) -> bool {
+    if list.is_null() || e.is_null() || (*list).ctx.is_null() {
+        return true;
+    }
+    if (*e).space_id == CLAP_CORE_EVENT_SPACE_ID && (*e).type_ == CLAP_EVENT_PARAM_VALUE {
+        let pv = &*(e as *const clap_event_param_value);
+        let out = &mut *((*list).ctx as *mut Vec<(u32, f64)>);
+        out.push((pv.param_id, pv.value));
+    }
     true
 }
 
@@ -266,6 +275,13 @@ pub struct ClapPlugin {
     gui_open: bool,
     state: Box<HostState>,
     window: Option<super::window::EditorWindow>,
+    /// Parameter values reported by the plugin (GUI edits), plain values, filled during `process`.
+    reported: Vec<(u32, f64)>,
+    /// GUI edits for the app (normalised).
+    gui_edits: Vec<(u32, f64)>,
+    /// Last normalised value the host sent per parameter (unchanged project values are not re-sent).
+    applied: std::collections::HashMap<u32, f64>,
+    editor_error: Option<String>,
     pub info: PluginRef,
 }
 
@@ -364,6 +380,10 @@ impl ClapPlugin {
                 gui_open: false,
                 state,
                 window: None,
+                reported: Vec::with_capacity(64),
+                gui_edits: Vec::new(),
+                applied: std::collections::HashMap::new(),
+                editor_error: None,
                 info: r.clone(),
             };
             for (id, v) in &r.params {
@@ -425,7 +445,8 @@ impl ClapPlugin {
         ];
         let mut outb = clap_audio_buffer { data32: out_ptrs.as_mut_ptr(), data64: std::ptr::null_mut(), channel_count: 2, latency: 0, constant_mask: 0 };
         let in_events = clap_input_events { ctx: &self.events as *const Vec<EvSlot> as *mut c_void, size: Some(in_size), get: Some(in_get) };
-        let out_events = clap_output_events { ctx: std::ptr::null_mut(), try_push: Some(out_push) };
+        self.reported.clear();
+        let out_events = clap_output_events { ctx: &mut self.reported as *mut Vec<(u32, f64)> as *mut c_void, try_push: Some(out_push) };
         let process = clap_process {
             steady_time: self.steady,
             frames_count: n as u32,
@@ -447,6 +468,18 @@ impl ClapPlugin {
             }
         }
         self.steady += n as i64;
+        if !self.reported.is_empty() {
+            let reported = std::mem::take(&mut self.reported);
+            for (id, plain) in &reported {
+                if let Some(p) = self.params.iter().find(|p| p.id == *id) {
+                    let norm = if p.max > p.min { ((plain - p.min) / (p.max - p.min)).clamp(0.0, 1.0) } else { 0.0 };
+                    if self.gui_edits.len() < 4096 {
+                        self.gui_edits.push((*id, norm));
+                    }
+                }
+            }
+            self.reported = reported;
+        }
     }
 
     fn params_list(&self) -> Vec<PluginParam> {
@@ -488,6 +521,9 @@ impl ClapPlugin {
 
     fn set_editor(&mut self, open: bool) -> bool {
         if self.gui.is_null() {
+            if open {
+                self.editor_error = Some("the plugin has no GUI (no gui extension)".into());
+            }
             return false;
         }
         let api: &CStr = if cfg!(target_os = "windows") {
@@ -502,14 +538,28 @@ impl ClapPlugin {
             let g = &*self.gui;
             if open && !self.gui_open {
                 self.state.closed.set(false);
+                let mut why: String;
                 // Preferred: embed into a native window of ours.
-                if g.is_api_supported.map(|f| f(self.plugin, api.as_ptr(), false)).unwrap_or(false) && g.create.map(|f| f(self.plugin, api.as_ptr(), false)).unwrap_or(false) {
+                let embeddable = g.is_api_supported.map(|f| f(self.plugin, api.as_ptr(), false)).unwrap_or(false);
+                if !embeddable {
+                    why = format!("the GUI cannot be embedded ({} not supported)", api.to_string_lossy());
+                } else if !g.create.map(|f| f(self.plugin, api.as_ptr(), false)).unwrap_or(false) {
+                    why = "the plugin could not create its GUI".into();
+                } else {
                     let (mut w, mut h) = (400u32, 300u32);
                     if let Some(f) = g.get_size {
                         f(self.plugin, &mut w, &mut h);
                     }
                     match super::window::EditorWindow::open(&self.info.name, w, h) {
-                        Ok(win) => {
+                        Ok(mut win) => {
+                            // HiDPI: tell the GUI the window's scale, then take its size.
+                            let scale = win.scale() as f64;
+                            if (scale - 1.0).abs() > 0.01 && g.set_scale.map(|f| f(self.plugin, scale)).unwrap_or(false) {
+                                let (mut w2, mut h2) = (w, h);
+                                if g.get_size.map(|f| f(self.plugin, &mut w2, &mut h2)).unwrap_or(false) && (w2, h2) != (w, h) {
+                                    win.resize(w2, h2);
+                                }
+                            }
                             let handle = win.handle();
                             let specific = if cfg!(target_os = "linux") { clap_window_handle { x11: handle as std::ffi::c_ulong } } else { clap_window_handle { ptr: handle } };
                             let cw = clap_window { api: api.as_ptr(), specific };
@@ -519,28 +569,34 @@ impl ClapPlugin {
                                 }
                                 self.window = Some(win);
                                 self.gui_open = true;
+                                self.editor_error = None;
                                 return true;
                             }
+                            why = "the GUI refused the host window (set_parent failed)".into();
                         }
-                        Err(e) => tracing::warn!("plugin editor window: {e}"),
+                        Err(e) => {
+                            tracing::warn!("plugin editor window: {e}");
+                            why = format!("cannot open the editor window: {e}");
+                        }
                     }
                     if let Some(f) = g.destroy {
                         f(self.plugin);
                     }
                 }
                 // Fallback: the plugin's own floating window.
-                if !g.is_api_supported.map(|f| f(self.plugin, api.as_ptr(), true)).unwrap_or(false) {
-                    return false;
-                }
-                if !g.create.map(|f| f(self.plugin, api.as_ptr(), true)).unwrap_or(false) {
-                    return false;
-                }
-                self.gui_open = g.show.map(|f| f(self.plugin)).unwrap_or(false);
-                if !self.gui_open {
-                    if let Some(f) = g.destroy {
-                        f(self.plugin);
+                if g.is_api_supported.map(|f| f(self.plugin, api.as_ptr(), true)).unwrap_or(false) && g.create.map(|f| f(self.plugin, api.as_ptr(), true)).unwrap_or(false) {
+                    self.gui_open = g.show.map(|f| f(self.plugin)).unwrap_or(false);
+                    if !self.gui_open {
+                        if let Some(f) = g.destroy {
+                            f(self.plugin);
+                        }
+                        why = format!("{why}; its floating window did not open either");
                     }
                 }
+                self.editor_error = (!self.gui_open).then(|| {
+                    tracing::warn!("{}: {why}", self.info.name);
+                    why
+                });
             } else if !open && self.gui_open {
                 if let Some(f) = g.hide {
                     f(self.plugin);
@@ -553,6 +609,16 @@ impl ClapPlugin {
             }
         }
         self.gui_open
+    }
+
+    /// Parameter edits made in the plugin's own GUI since the last call (normalised). The project will store
+    /// them; they are already applied, so they are not sent back.
+    pub fn gui_edits(&mut self) -> Vec<(u32, f64)> {
+        let edits = std::mem::take(&mut self.gui_edits);
+        for (id, v) in &edits {
+            self.applied.insert(*id, *v);
+        }
+        edits
     }
 
     /// Pumps the editor window and services the plugin's timers and file descriptors.
@@ -651,7 +717,12 @@ impl Drop for ClapPlugin {
 impl Effect for ClapPlugin {
     fn set_param(&mut self, id: &str, value: f32) {
         if let Ok(pid) = id.parse::<u32>() {
-            let v = self.plain(pid, value as f64);
+            let n = value as f64;
+            if self.applied.get(&pid).is_some_and(|old| (old - n).abs() < 1e-9) {
+                return;
+            }
+            self.applied.insert(pid, n);
+            let v = self.plain(pid, n);
             self.pending.push(HostEvent::Param { id: pid, value: v });
         }
     }
@@ -685,6 +756,12 @@ impl Effect for ClapPlugin {
     }
     fn idle(&mut self) -> bool {
         self.idle_editor()
+    }
+    fn editor_error(&self) -> Option<String> {
+        self.editor_error.clone()
+    }
+    fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
+        self.gui_edits()
     }
 }
 
@@ -737,5 +814,11 @@ impl InstrumentVoice for ClapPlugin {
     }
     fn idle(&mut self) -> bool {
         self.idle_editor()
+    }
+    fn editor_error(&self) -> Option<String> {
+        self.editor_error.clone()
+    }
+    fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
+        self.gui_edits()
     }
 }

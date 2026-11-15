@@ -182,11 +182,13 @@ fn sidechain_reaches_clap_and_vst3_plugins() {
     }
 }
 
-/// Embedded editors: needs an X server (set DISPLAY, e.g. Xvfb); skipped otherwise.
-#[cfg(target_os = "linux")]
+/// Embedded editors on Linux (needs an X server: set DISPLAY, e.g. Xvfb) and Windows: the plugin's GUI
+/// embeds into the host's window, the host applies its resize request, and a control change made in the GUI
+/// reaches the processor and the app (component handler / CLAP output events).
+#[cfg(any(target_os = "linux", windows))]
 #[test]
-fn editors_embed_resize_and_run_timers() {
-    if std::env::var_os("DISPLAY").is_none() {
+fn editors_embed_resize_and_report_gui_edits() {
+    if cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none() {
         eprintln!("skipped: no DISPLAY");
         return;
     }
@@ -197,22 +199,43 @@ fn editors_embed_resize_and_run_timers() {
     let mut cp = ClapPlugin::load(&c.to_ref(), 48000.0, 512, false).unwrap();
     let mut vp = Vst3Plugin::load(&v.to_ref(), 48000.0, 512, false).unwrap();
     for (name, p) in [("clap", &mut cp as &mut dyn Effect), ("vst3", &mut vp as &mut dyn Effect)] {
-        assert!(p.editor(true), "{name}: editor opens");
+        // The project's stored value (as a compile applies it).
+        p.set_param("0", 0.5);
+        assert!(p.editor(true), "{name}: editor opens: {:?}", p.editor_error());
+        assert!(p.editor_error().is_none());
+        let (mut l, mut r) = (vec![0.5f32; 64], vec![0.5f32; 64]);
         for _ in 0..20 {
             assert!(p.idle(), "{name}: editor stays open");
+            p.process(&mut l, &mut r, None);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        // The plugin's timer saw the host-applied resize and wrote 0.75 into its parameter.
+        // The GUI saw the host-applied resize and set the gain to 0.75 (normalised).
         let v = p.plugin_param(0).unwrap();
         assert!((v - 0.75).abs() < 1e-6, "{name}: parameter {v}");
+        // …and the processor got it: 0.5 in × gain 1.5.
+        let (mut l, mut r) = (vec![0.5f32; 64], vec![0.5f32; 64]);
+        p.process(&mut l, &mut r, None);
+        assert!((l[10] - 0.75).abs() < 1e-4, "{name}: processed {}", l[10]);
+        // A recompile before the app picked up the edit re-applies the old project value (0.5): unchanged
+        // since the host last sent it, so it must not undo the GUI edit.
+        p.set_param("0", 0.5);
+        p.process(&mut l, &mut r, None);
+        assert!((p.plugin_param(0).unwrap() - 0.75).abs() < 1e-6, "{name}: GUI edit kept");
+        // …and the app is told, so the project stores it.
+        let edits = p.take_param_edits();
+        assert!(edits.iter().any(|(id, v)| *id == 0 && (v - 0.75).abs() < 1e-6), "{name}: edits {edits:?}");
+        // A host-side change (generic slider) still goes through.
+        p.set_param("0", 0.25);
+        p.process(&mut l, &mut r, None);
+        assert!((p.plugin_param(0).unwrap() - 0.25).abs() < 1e-6, "{name}: host edit applied");
         p.editor(false);
         assert!(!p.idle(), "{name}: closed");
     }
     // The embedded child window lives inside the host's editor window.
     assert!(Effect::editor(&mut cp, true));
-    assert_eq!(cp.editor_window().unwrap().x11_children(), 1);
+    assert_eq!(cp.editor_window().unwrap().child_count(), 1);
     assert!(Effect::editor(&mut vp, true));
-    assert_eq!(vp.editor_window().unwrap().x11_children(), 1);
+    assert_eq!(vp.editor_window().unwrap().child_count(), 1);
 }
 
 #[test]

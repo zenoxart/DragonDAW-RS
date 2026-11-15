@@ -24,6 +24,7 @@ fn wstring(src: &str, dst: &mut [TChar]) {
 /// Single-component gain: processor and controller in one object. Normalized 0..1 maps to gain 0..2.
 struct Gain {
     normalized: Rc<Cell<f64>>,
+    handler: Rc<RefCell<Option<ComPtr<IComponentHandler>>>>,
 }
 
 impl Class for Gain {
@@ -215,12 +216,14 @@ impl IEditControllerTrait for Gain {
         }
         kResultOk
     }
-    unsafe fn setComponentHandler(&self, _h: *mut IComponentHandler) -> tresult {
+    unsafe fn setComponentHandler(&self, h: *mut IComponentHandler) -> tresult {
+        *self.handler.borrow_mut() = ComRef::from_raw(h).map(|h| h.to_com_ptr());
         kResultOk
     }
     unsafe fn createView(&self, _name: FIDString) -> *mut IPlugView {
         let view = ComWrapper::new(View {
             param: self.normalized.clone(),
+            handler: self.handler.clone(),
             child: RefCell::new(None),
             frame: RefCell::new(None),
             sized: Cell::new(false),
@@ -233,11 +236,13 @@ impl IEditControllerTrait for Gain {
     }
 }
 
-/// Test editor: embeds a child X11 window, asks the host to resize it, and uses the host's run loop timer.
-/// The timer writes 0.75 into the gain parameter once the resize arrived (0.25 before), so the host test
-/// can observe the whole round trip.
+/// Test editor: embeds a child window (X11 or Win32), asks the host to resize it, and – like a real GUI –
+/// reports a control change through the host's component handler. On Linux the change happens in a host
+/// run-loop timer, once the resize arrived (0.25 before, 0.75 after); on Windows (no run loop) when the host
+/// applies the size. The host test observes the whole round trip.
 struct View {
     param: Rc<Cell<f64>>,
+    handler: Rc<RefCell<Option<ComPtr<IComponentHandler>>>>,
     child: RefCell<Option<crate::x11child::Child>>,
     frame: RefCell<Option<ComPtr<IPlugFrame>>>,
     sized: Cell<bool>,
@@ -249,22 +254,35 @@ impl Class for View {
     type Interfaces = (IPlugView, ITimerHandler);
 }
 
+impl View {
+    /// What a GUI does when a control moves: change the value and tell the host.
+    unsafe fn edit(&self, v: f64) {
+        self.param.set(v);
+        if let Some(h) = self.handler.borrow().as_ref() {
+            h.beginEdit(0);
+            h.performEdit(0, v);
+            h.endEdit(0);
+        }
+    }
+}
+
 impl ITimerHandlerTrait for View {
     unsafe fn onTimer(&self) {
-        self.param.set(if self.sized.get() { 0.75 } else { 0.25 });
+        self.edit(if self.sized.get() { 0.75 } else { 0.25 });
     }
 }
 
 impl IPlugViewTrait for View {
     unsafe fn isPlatformTypeSupported(&self, t: FIDString) -> tresult {
-        if std::ffi::CStr::from_ptr(t) == c"X11EmbedWindowID" {
+        let want = if cfg!(windows) { c"HWND" } else { c"X11EmbedWindowID" };
+        if std::ffi::CStr::from_ptr(t) == want {
             kResultTrue
         } else {
             kResultFalse
         }
     }
     unsafe fn attached(&self, parent: *mut c_void, _t: FIDString) -> tresult {
-        let Some(child) = crate::x11child::Child::new(parent as u64, 320, 200) else { return kResultFalse };
+        let Some(child) = crate::x11child::Child::new(parent as usize as u64, 320, 200) else { return kResultFalse };
         *self.child.borrow_mut() = Some(child);
         if let Some(f) = self.frame.borrow().as_ref() {
             let mut r = ViewRect { left: 0, top: 0, right: 500, bottom: 400 };
@@ -292,6 +310,9 @@ impl IPlugViewTrait for View {
     }
     unsafe fn onSize(&self, _s: *mut ViewRect) -> tresult {
         self.sized.set(true);
+        if cfg!(not(target_os = "linux")) {
+            self.edit(0.75);
+        }
         kResultOk
     }
     unsafe fn onFocus(&self, _s: TBool) -> tresult {
@@ -354,7 +375,7 @@ impl IPluginFactoryTrait for Factory {
         if *(cid as *const TUID) != CID {
             return kInvalidArgument;
         }
-        let instance = ComWrapper::new(Gain { normalized: Rc::new(Cell::new(0.5)) }).to_com_ptr::<FUnknown>().unwrap();
+        let instance = ComWrapper::new(Gain { normalized: Rc::new(Cell::new(0.5)), handler: Rc::new(RefCell::new(None)) }).to_com_ptr::<FUnknown>().unwrap();
         let ptr = instance.as_ptr();
         ((*(*ptr).vtbl).queryInterface)(ptr, iid as *mut TUID, obj)
     }

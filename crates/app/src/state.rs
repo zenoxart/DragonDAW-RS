@@ -106,6 +106,10 @@ pub struct UiState {
     pub clip_window: Option<Id>,
     /// Open native plugin editors: (mixer channel or rack channel, insert).
     pub native_editors: Vec<(Id, Option<Id>)>,
+    /// A run of parameter edits from a plugin's own window (one knob turn = one undo step): when the last
+    /// edit arrived and the history revision after it. The run ends after a short pause or when anything
+    /// else edits the project.
+    pub plugin_edit_run: Option<(std::time::Instant, u64)>,
     pub video: crate::views::video::VideoState,
     /// Running stem separation: (source clip start beat, track name) → stem files.
     pub stem_job: Option<redhive_client_framework::runtime::Promise<StemResult>>,
@@ -156,6 +160,7 @@ impl UiState {
             waveforms: Default::default(),
             clip_window: None,
             native_editors: Vec::new(),
+            plugin_edit_run: None,
             video: Default::default(),
             stem_job: None,
             pattern_mode: false,
@@ -897,13 +902,55 @@ impl State {
     /// Services open native plugin editors (window events, plugin timers); drops the closed ones.
     pub fn pump_plugin_editors(&mut self) -> bool {
         let pool = &self.session.pool;
-        self.ui.native_editors.retain(|(owner, ins)| match ins {
-            Some(i) => pool.effect_by_id(*i).map(|e| e.lock().map(|mut g| g.idle()).unwrap_or(false)).unwrap_or(false),
-            None => pool.instrument_by_id(*owner).map(|e| e.lock().map(|mut g| g.idle()).unwrap_or(false)).unwrap_or(false),
+        // Parameter edits made in the plugins' own windows, to store in the project.
+        let mut edits: Vec<(EditorKey, Vec<(u32, f64)>)> = Vec::new();
+        self.ui.native_editors.retain(|key @ (owner, ins)| {
+            let (open, e) = match ins {
+                Some(i) => pool.effect_by_id(*i).and_then(|e| e.lock().ok().map(|mut g| (g.idle(), g.take_param_edits()))).unwrap_or((false, Vec::new())),
+                None => pool.instrument_by_id(*owner).and_then(|e| e.lock().ok().map(|mut g| (g.idle(), g.take_param_edits()))).unwrap_or((false, Vec::new())),
+            };
+            if !e.is_empty() {
+                edits.push((*key, e));
+            }
+            open
         });
+        if edits.is_empty() {
+            if self.ui.plugin_edit_run.is_some_and(|(t, _)| t.elapsed() > std::time::Duration::from_millis(400)) {
+                self.ui.plugin_edit_run = None;
+            }
+            return !self.ui.native_editors.is_empty();
+        }
+        let apply = |p: &mut Project| {
+            for ((owner, ins), list) in &edits {
+                let r = match ins {
+                    Some(i) => p.mixer.get_mut(*owner).and_then(|c| c.inserts.iter_mut().find(|x| x.id == *i)).and_then(|x| x.plugin.as_mut()),
+                    None => match p.channel_mut(*owner).map(|c| &mut c.instrument) {
+                        Some(Instrument::Plugin(r)) => Some(r),
+                        _ => None,
+                    },
+                };
+                if let Some(r) = r {
+                    for (id, v) in list {
+                        r.params.insert(*id, *v);
+                    }
+                }
+            }
+        };
+        // Continue the current run (no new undo step) unless it paused or something else edited meanwhile.
+        let continuing = self.ui.plugin_edit_run.is_some_and(|(t, rev)| t.elapsed() <= std::time::Duration::from_millis(400) && rev == self.session.history.revision);
+        if continuing {
+            apply(&mut self.session.project);
+            self.session.history.touch();
+        } else {
+            self.session.edit("Plugin parameter", apply);
+        }
+        self.ui.plugin_edit_run = Some((std::time::Instant::now(), self.session.history.revision));
         !self.ui.native_editors.is_empty()
     }
 }
+
+/// An open plugin editor: owner (mixer channel or rack channel) and, for effects, the insert.
+type EditorKey = (Id, Option<Id>);
 
 /// Result of a stem-separation job: source clip start, clip name and the stem files.
 pub type StemResult = Result<(f64, String, Vec<(String, PathBuf)>), String>;

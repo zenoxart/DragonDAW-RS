@@ -324,79 +324,127 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
             (ps, vs)
         }
     };
-    ui.horizontal(|ui| {
-        if ui.button("Open plugin GUI").clicked() {
-            let ok = match &inst {
-                Ok(e) => e.lock().unwrap().editor(true),
-                Err(i) => i.lock().unwrap().editor(true),
-            };
-            if ok {
-                let key = match slot {
-                    PluginSlot::Insert(m, i) => (m, Some(i)),
-                    PluginSlot::Channel(c) => (c, None),
-                };
-                if !st.ui.native_editors.contains(&key) {
-                    st.ui.native_editors.push(key);
-                }
-            } else {
-                st.toast("This plugin has no editor the host can open on this platform – use the generic controls", redhive_contracts::ui::Severity::Info);
+    let key = match slot {
+        PluginSlot::Insert(m, i) => (m, Some(i)),
+        PluginSlot::Channel(c) => (c, None),
+    };
+    // The plugin's own GUI opens by itself whenever this window appears (FL Studio behaviour); the generic
+    // controls below are for plugins without a GUI or as a fallback.
+    let seen_id = egui::Id::new(("plugin.window.seen", key));
+    let pass = ui.ctx().cumulative_pass_nr();
+    let last_seen: Option<u64> = ui.data(|d| d.get_temp(seen_id));
+    ui.data_mut(|d| d.insert_temp(seen_id, pass));
+    let appeared = last_seen.map(|f| pass.saturating_sub(f) > 2).unwrap_or(true);
+    let error_id = egui::Id::new(("plugin.window.error", key));
+    let open_gui = |st: &mut State, ui: &Ui| -> bool {
+        let (ok, err) = match &inst {
+            Ok(e) => {
+                let mut g = e.lock().unwrap();
+                let ok = g.editor(true);
+                (ok, g.editor_error())
             }
+            Err(i) => {
+                let mut g = i.lock().unwrap();
+                let ok = g.editor(true);
+                (ok, g.editor_error())
+            }
+        };
+        if ok {
+            if !st.ui.native_editors.contains(&key) {
+                st.ui.native_editors.push(key);
+            }
+            ui.data_mut(|d| d.remove::<String>(error_id));
+        } else {
+            ui.data_mut(|d| d.insert_temp(error_id, err.unwrap_or_else(|| "the plugin has no editor the host can open on this platform".into())));
+        }
+        ok
+    };
+    if appeared && !st.ui.native_editors.contains(&key) {
+        open_gui(st, ui);
+    }
+    let gui_open = st.ui.native_editors.contains(&key);
+    let error: Option<String> = ui.data(|d| d.get_temp(error_id));
+    ui.horizontal(|ui| {
+        if gui_open {
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(dot.center(), 4.0, theme::OK);
+            ui.label(RichText::new("Plugin window open").color(theme::OK));
+            if ui.button("Close plugin window").clicked() {
+                match &inst {
+                    Ok(e) => e.lock().unwrap().editor(false),
+                    Err(i) => i.lock().unwrap().editor(false),
+                };
+                st.ui.native_editors.retain(|k| *k != key);
+            }
+        } else if ui.button("Open plugin window").on_hover_text("The plugin's own interface").clicked() && !open_gui(st, ui) {
+            let why: String = ui.data(|d| d.get_temp(error_id)).unwrap_or_default();
+            st.toast(format!("The plugin window could not be opened: {why}"), redhive_contracts::ui::Severity::Warning);
         }
         if ui.button("Store state in project").on_hover_text("Saves the plugin's full internal state (also done automatically on save)").clicked() {
             st.capture_plugin_states();
         }
     });
-    let filter_id = egui::Id::new(("plfilter", pl.id.clone()));
-    let mut filter: String = ui.data_mut(|d| d.get_temp(filter_id).unwrap_or_default());
-    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("filter parameters…"));
-    ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
-    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-        if params.is_empty() {
-            ui.label("The plugin exposes no parameters.");
-        }
-        for (prm, v) in params.iter().zip(values) {
-            if !filter.is_empty() && !prm.name.to_lowercase().contains(&filter.to_lowercase()) {
-                continue;
+    if let (false, Some(e)) = (gui_open, &error) {
+        ui.label(RichText::new(format!("Plugin window unavailable: {e}. Use the generic controls below.")).small().color(theme::WARN));
+    }
+    let generic = egui::CollapsingHeader::new(format!("Generic controls ({})", params.len())).id_salt(("plugin.generic", key)).default_open(!gui_open && error.is_some()).open(if appeared {
+        Some(!gui_open && error.is_some())
+    } else {
+        None
+    });
+    generic.show(ui, |ui| {
+        let filter_id = egui::Id::new(("plfilter", pl.id.clone()));
+        let mut filter: String = ui.data_mut(|d| d.get_temp(filter_id).unwrap_or_default());
+        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("filter parameters…"));
+        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+            if params.is_empty() {
+                ui.label("The plugin exposes no parameters.");
             }
-            let mut val = pl.params.get(&prm.id).copied().unwrap_or(v) as f32;
-            let r = ui.add(egui::Slider::new(&mut val, 0.0..=1.0).text(&prm.name));
-            let pid = prm.id;
-            widgets::apply(st, &r, "Plugin parameter", |p| {
-                let r = match slot {
-                    PluginSlot::Insert(m, i) => p.mixer.get_mut(m).and_then(|c| c.inserts.iter_mut().find(|x| x.id == i)).and_then(|x| x.plugin.as_mut()),
-                    PluginSlot::Channel(c) => match p.channel_mut(c).map(|c| &mut c.instrument) {
-                        Some(Instrument::Plugin(r)) => Some(r),
-                        _ => None,
-                    },
-                };
-                if let Some(r) = r {
-                    r.params.insert(pid, val as f64);
+            for (prm, v) in params.iter().zip(values) {
+                if !filter.is_empty() && !prm.name.to_lowercase().contains(&filter.to_lowercase()) {
+                    continue;
                 }
-            });
-            if prm.automatable {
-                let target = Target::PluginParam {
-                    channel: match slot {
-                        PluginSlot::Insert(m, _) => m,
-                        PluginSlot::Channel(c) => c,
-                    },
-                    insert: match slot {
-                        PluginSlot::Insert(_, i) => Some(i),
-                        _ => None,
-                    },
-                    param: pid,
-                };
-                r.context_menu(|ui| {
-                    if ui.button("MIDI learn").clicked() {
-                        st.ui.midi_learn = Some(target.clone());
-                        ui.close_menu();
-                    }
-                    if ui.button("Create automation lane").clicked() {
-                        crate::views::automation::add_lane(st, target.clone());
-                        ui.close_menu();
+                let mut val = pl.params.get(&prm.id).copied().unwrap_or(v) as f32;
+                let r = ui.add(egui::Slider::new(&mut val, 0.0..=1.0).text(&prm.name));
+                let pid = prm.id;
+                widgets::apply(st, &r, "Plugin parameter", |p| {
+                    let r = match slot {
+                        PluginSlot::Insert(m, i) => p.mixer.get_mut(m).and_then(|c| c.inserts.iter_mut().find(|x| x.id == i)).and_then(|x| x.plugin.as_mut()),
+                        PluginSlot::Channel(c) => match p.channel_mut(c).map(|c| &mut c.instrument) {
+                            Some(Instrument::Plugin(r)) => Some(r),
+                            _ => None,
+                        },
+                    };
+                    if let Some(r) = r {
+                        r.params.insert(pid, val as f64);
                     }
                 });
+                if prm.automatable {
+                    let target = Target::PluginParam {
+                        channel: match slot {
+                            PluginSlot::Insert(m, _) => m,
+                            PluginSlot::Channel(c) => c,
+                        },
+                        insert: match slot {
+                            PluginSlot::Insert(_, i) => Some(i),
+                            _ => None,
+                        },
+                        param: pid,
+                    };
+                    r.context_menu(|ui| {
+                        if ui.button("MIDI learn").clicked() {
+                            st.ui.midi_learn = Some(target.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button("Create automation lane").clicked() {
+                            crate::views::automation::add_lane(st, target.clone());
+                            ui.close_menu();
+                        }
+                    });
+                }
             }
-        }
+        });
     });
 }
 

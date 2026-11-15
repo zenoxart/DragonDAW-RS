@@ -1048,6 +1048,7 @@ dependencies = [
  "dragon-engine",
  "tempfile",
  "vst3",
+ "windows-sys 0.59.0",
  "x11-dl",
 ]
 

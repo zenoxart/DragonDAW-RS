@@ -54,6 +54,14 @@ pub trait InstrumentVoice: Send {
     fn idle(&mut self) -> bool {
         false
     }
+    /// Why the last `editor(true)` failed, if it did (shown to the user).
+    fn editor_error(&self) -> Option<String> {
+        None
+    }
+    /// Parameter edits made in the plugin's own GUI since the last call: (parameter id, normalised value).
+    fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
+        Vec::new()
+    }
 }
 
 /// Creates the engine instrument for a model (plugins are created by the plugin host).

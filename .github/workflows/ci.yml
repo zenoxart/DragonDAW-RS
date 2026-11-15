@@ -56,6 +56,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+      # Windows: load the in-repo CLAP / VST3 test plugins through the host and embed their editors into
+      # real Win32 windows (HWND parenting, resize, GUI → host parameter edits).
+      - name: Plugin host tests
+        if: runner.os == 'Windows'
+        run: |
+          cargo build -p dragon-test-plugins --locked
+          cargo test -p dragon-test-plugins --locked
 
   msrv:
     name: MSRV (1.89)

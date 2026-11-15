@@ -289,3 +289,119 @@ fn probe(st: &State) -> ReferenceStateProbe {
     let (r, m) = st.reference.results();
     ReferenceStateProbe { reference_lufs: r.map(|a| a.integrated), mix_lufs: m.map(|a| a.integrated) }
 }
+
+// ---- plugin windows (with a fake plugin: the real CLAP / VST3 hosts are tested in dragon-test-plugins)
+
+use dragon_engine::effects::{Effect, PluginParam};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering as AtOrd};
+use std::sync::Arc;
+
+/// Shared switches of the fake plugin: whether its GUI may open, whether it is open, a pending GUI edit.
+#[derive(Default)]
+struct FakeGui {
+    allow: AtomicBool,
+    open: AtomicBool,
+    opened: AtomicU32,
+    edit: std::sync::Mutex<Vec<(u32, f64)>>,
+}
+
+struct FakePlugin(Arc<FakeGui>);
+
+impl Effect for FakePlugin {
+    fn set_param(&mut self, _id: &str, _v: f32) {}
+    fn reset(&mut self) {}
+    fn process(&mut self, _l: &mut [f32], _r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {}
+    fn plugin_params(&self) -> Vec<PluginParam> {
+        vec![PluginParam { id: 7, name: "Cutoff".into(), default: 0.5, steps: 0, automatable: true }]
+    }
+    fn editor(&mut self, open: bool) -> bool {
+        let ok = open && self.0.allow.load(AtOrd::Relaxed);
+        if ok {
+            self.0.opened.fetch_add(1, AtOrd::Relaxed);
+        }
+        self.0.open.store(ok, AtOrd::Relaxed);
+        ok
+    }
+    fn idle(&mut self) -> bool {
+        self.0.open.load(AtOrd::Relaxed)
+    }
+    fn editor_error(&self) -> Option<String> {
+        (!self.0.allow.load(AtOrd::Relaxed)).then(|| "the editor refused to attach".to_string())
+    }
+    fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
+        std::mem::take(&mut *self.0.edit.lock().unwrap())
+    }
+}
+
+struct FakeFactory(Arc<FakeGui>);
+
+impl dragon_engine::render::PluginFactory for FakeFactory {
+    fn create_effect(&mut self, _p: &PluginRef, _rate: f32, _max: usize) -> Option<Box<dyn Effect>> {
+        Some(Box::new(FakePlugin(self.0.clone())))
+    }
+    fn create_instrument(&mut self, _p: &PluginRef, _rate: f32, _max: usize) -> Option<Box<dyn dragon_engine::instruments::InstrumentVoice>> {
+        None
+    }
+}
+
+fn plugin_harness(allow: bool) -> (Harness, Arc<FakeGui>, Id, Id) {
+    let mut h = Harness::new();
+    let gui = Arc::new(FakeGui::default());
+    gui.allow.store(allow, AtOrd::Relaxed);
+    h.st.session.pool = dragon_engine::render::Pool::with_plugins(Box::new(FakeFactory(gui.clone())));
+    let m = h.st.session.project.mixer.master.id;
+    let iid = h.st.session.edit("add", |p| {
+        let iid = p.next_id();
+        let plugin = PluginRef { format: PluginFormat::Vst3, path: "/plugins/Fake.vst3".into(), id: "00".into(), name: "Fake Synth FX".into(), state: Vec::new(), params: Default::default() };
+        p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(plugin), preset: String::new() });
+        iid
+    });
+    h.st.session.compile(48000.0);
+    h.st.ui.effect_windows.push((m, iid));
+    (h, gui, m, iid)
+}
+
+fn windows_and_pump(ui: &mut egui::Ui, st: &mut State) {
+    super::windows::show(ui.ctx(), st);
+    st.pump_plugin_editors();
+}
+
+#[test]
+fn plugin_window_opens_the_plugins_own_gui_by_itself() {
+    let (mut h, gui, m, iid) = plugin_harness(true);
+    h.idle(windows_and_pump, 3);
+    assert!(gui.open.load(AtOrd::Relaxed), "the plugin's GUI opened without a click");
+    assert_eq!(gui.opened.load(AtOrd::Relaxed), 1, "opened once, not every frame");
+    assert!(h.st.ui.native_editors.contains(&(m, Some(iid))));
+    // A knob turned in the plugin's window is stored in the project as one undo step.
+    gui.edit.lock().unwrap().push((7, 0.9));
+    h.idle(windows_and_pump, 2);
+    gui.edit.lock().unwrap().push((7, 0.95));
+    h.idle(windows_and_pump, 2);
+    let stored = |h: &Harness| h.st.session.project.mixer.master.inserts.iter().find(|x| x.id == iid).unwrap().plugin.as_ref().unwrap().params.get(&7).copied();
+    assert_eq!(stored(&h), Some(0.95));
+    std::thread::sleep(std::time::Duration::from_millis(450));
+    h.idle(windows_and_pump, 1);
+    assert!(h.st.ui.plugin_edit_run.is_none(), "the edit run closed after a pause");
+    h.st.session.undo();
+    assert_eq!(stored(&h), None, "one undo removes the whole knob turn");
+    // Closing the plugin window and reopening the effect window opens it again.
+    gui.open.store(false, AtOrd::Relaxed);
+    h.idle(windows_and_pump, 2);
+    assert!(h.st.ui.native_editors.is_empty());
+    h.st.ui.effect_windows.clear();
+    h.idle(windows_and_pump, 4);
+    h.st.ui.effect_windows.push((m, iid));
+    h.idle(windows_and_pump, 2);
+    assert_eq!(gui.opened.load(AtOrd::Relaxed), 2);
+}
+
+#[test]
+fn plugin_window_failure_shows_the_reason() {
+    let (mut h, gui, m, iid) = plugin_harness(false);
+    h.idle(windows_and_pump, 3);
+    assert!(!gui.open.load(AtOrd::Relaxed));
+    assert!(h.st.ui.native_editors.is_empty());
+    let shown = h.ctx.data(|d| d.get_temp::<String>(egui::Id::new(("plugin.window.error", (m, Some(iid)))))).unwrap();
+    assert!(shown.contains("refused to attach"), "{shown}");
+}

@@ -49,6 +49,8 @@ struct State {
     rate: f64,
     note: Option<u8>,
     phase: f64,
+    /// The GUI changed the gain: report it to the host in the next process call.
+    report: bool,
 }
 
 unsafe fn state<'a>(p: *const clap_plugin) -> &'a mut State {
@@ -99,6 +101,23 @@ unsafe extern "C" fn process(p: *const clap_plugin, pr: *const clap_process) -> 
                 }
             }
             _ => {}
+        }
+    }
+    // A GUI change is reported to the host as an output parameter event.
+    if s.report && !pr.out_events.is_null() {
+        let ev = clap_event_param_value {
+            header: clap_event_header { size: std::mem::size_of::<clap_event_param_value>() as u32, time: 0, space_id: CLAP_CORE_EVENT_SPACE_ID, type_: CLAP_EVENT_PARAM_VALUE, flags: 0 },
+            param_id: 0,
+            cookie: std::ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: s.gain,
+        };
+        let out = &*pr.out_events;
+        if out.try_push.map(|f| f(out, &ev.header)).unwrap_or(false) {
+            s.report = false;
         }
     }
     let n = pr.frames_count as usize;
@@ -242,7 +261,8 @@ unsafe fn host_ext<T>(p: *const clap_plugin, id: &CStr) -> *const T {
     (*h).get_extension.map(|g| g(h, id.as_ptr())).unwrap_or(std::ptr::null()) as *const T
 }
 unsafe extern "C" fn g_supported(_p: *const clap_plugin, api: *const c_char, floating: bool) -> bool {
-    CStr::from_ptr(api) == CLAP_WINDOW_API_X11 && !floating
+    let want = if cfg!(windows) { CLAP_WINDOW_API_WIN32 } else { CLAP_WINDOW_API_X11 };
+    CStr::from_ptr(api) == want && !floating
 }
 unsafe extern "C" fn g_preferred(_p: *const clap_plugin, _api: *mut *const c_char, _f: *mut bool) -> bool {
     false
@@ -289,13 +309,17 @@ unsafe extern "C" fn g_adjust(_p: *const clap_plugin, _w: *mut u32, _h: *mut u32
 }
 unsafe extern "C" fn g_set_size(p: *const clap_plugin, _w: u32, _h: u32) -> bool {
     state(p).sized = true;
+    if cfg!(not(target_os = "linux")) {
+        // No host timer loop needed on Windows: the "GUI" changes the gain when the size arrives.
+        on_timer(p, 0);
+    }
     true
 }
 unsafe extern "C" fn g_set_parent(p: *const clap_plugin, w: *const clap_window) -> bool {
-    let parent = (*w).specific.x11;
-    // `c_ulong` is 64-bit on Linux but 32-bit on Windows.
+    // `c_ulong` is 64-bit on Linux but 32-bit on Windows, hence the cast.
     #[allow(clippy::unnecessary_cast)]
-    let Some(child) = crate::x11child::Child::new(parent as u64, 320, 200) else {
+    let parent = if cfg!(target_os = "linux") { (*w).specific.x11 as u64 } else { (*w).specific.ptr as usize as u64 };
+    let Some(child) = crate::x11child::Child::new(parent, 320, 200) else {
         return false;
     };
     state(p).child = Some(child);
@@ -336,7 +360,11 @@ static GUI: Gui = Gui(clap_plugin_gui {
 
 unsafe extern "C" fn on_timer(p: *const clap_plugin, _id: clap_id) {
     let s = state(p);
-    s.gain = if s.sized { 1.5 } else { 0.5 };
+    let g = if s.sized { 1.5 } else { 0.5 };
+    if g != s.gain {
+        s.report = true;
+    }
+    s.gain = g;
 }
 struct Timer(clap_plugin_timer_support);
 unsafe impl Sync for Timer {}
@@ -379,7 +407,7 @@ unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, _host: *const clap
     } else {
         return std::ptr::null();
     };
-    let data = Box::into_raw(Box::new(State { host: _host, child: None, sized: false, timer: None, instrument, gain: 1.0, rate: 48000.0, note: None, phase: 0.0 }));
+    let data = Box::into_raw(Box::new(State { host: _host, child: None, sized: false, timer: None, instrument, gain: 1.0, rate: 48000.0, note: None, phase: 0.0, report: false }));
     Box::into_raw(Box::new(clap_plugin {
         desc: d,
         plugin_data: data as *mut c_void,

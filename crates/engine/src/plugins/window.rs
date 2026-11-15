@@ -31,9 +31,14 @@ impl EditorWindow {
         self.inner.pump()
     }
 
-    /// Native id of the display connection (X11 only), so tests can inspect the window tree.
-    pub fn x11_children(&self) -> usize {
+    /// Number of direct child windows (the plugin's GUI), so tests can check that the editor embedded.
+    pub fn child_count(&self) -> usize {
         self.inner.children()
+    }
+
+    /// Display scale of the window (1.0 = 96 dpi on Windows); plugins are told to draw at this scale.
+    pub fn scale(&self) -> f32 {
+        self.inner.scale()
     }
 }
 
@@ -101,6 +106,10 @@ mod imp {
             self.open
         }
 
+        pub fn scale(&self) -> f32 {
+            1.0
+        }
+
         pub fn children(&self) -> usize {
             // SAFETY: XQueryTree with out-pointers we free.
             unsafe {
@@ -134,7 +143,10 @@ mod imp {
 mod imp {
     use super::*;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
     pub struct Window {
@@ -153,35 +165,65 @@ mod imp {
         DefWindowProcW(hwnd, msg, w, l)
     }
 
+    /// Plugin GUIs (VSTGUI, JUCE, iPlug …) use OLE for drag and drop and expect it on the UI thread.
+    /// The app's window toolkit normally initialises it already; then this is a no-op (S_FALSE).
+    fn ensure_ole() {
+        thread_local!(static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+        DONE.with(|d| {
+            if !d.get() {
+                // SAFETY: per-thread OLE initialisation; S_FALSE / RPC_E_CHANGED_MODE are fine for us.
+                unsafe { windows_sys::Win32::System::Ole::OleInitialize(std::ptr::null()) };
+                d.set(true);
+            }
+        });
+    }
+
     impl Window {
         pub fn open(title: &str, w: u32, h: u32) -> Result<Window> {
+            ensure_ole();
             // SAFETY: standard Win32 window creation on the UI thread.
             unsafe {
                 let class = wide("DragonPluginEditor");
                 let inst = GetModuleHandleW(std::ptr::null());
                 let wc = WNDCLASSW {
-                    style: 0,
+                    style: CS_DBLCLKS,
                     lpfnWndProc: Some(wndproc),
                     cbClsExtra: 0,
                     cbWndExtra: 0,
                     hInstance: inst,
                     hIcon: std::ptr::null_mut(),
-                    hCursor: std::ptr::null_mut(),
-                    hbrBackground: std::ptr::null_mut(),
+                    hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
+                    hbrBackground: GetStockObject(BLACK_BRUSH) as HBRUSH,
                     lpszMenuName: std::ptr::null(),
                     lpszClassName: class.as_ptr(),
                 };
+                // Fails harmlessly when the class is already registered.
                 RegisterClassW(&wc);
-                let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+                // Owned by the DAW's main window: stays above it, minimises with it, no taskbar entry.
+                let owner = GetActiveWindow();
+                let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
                 let mut rect = windows_sys::Win32::Foundation::RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
                 AdjustWindowRect(&mut rect, style, 0);
                 let t = wide(title);
-                let hwnd =
-                    CreateWindowExW(0, class.as_ptr(), t.as_ptr(), style, CW_USEDEFAULT, CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, std::ptr::null_mut(), std::ptr::null_mut(), inst, std::ptr::null());
+                let hwnd = CreateWindowExW(
+                    WS_EX_DLGMODALFRAME,
+                    class.as_ptr(),
+                    t.as_ptr(),
+                    style,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    owner,
+                    std::ptr::null_mut(),
+                    inst,
+                    std::ptr::null(),
+                );
                 if hwnd.is_null() {
                     return Err(EngineError::Plugin("CreateWindowExW failed".into()));
                 }
                 ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
                 Ok(Window { hwnd })
             }
         }
@@ -196,7 +238,7 @@ mod imp {
                 let style = GetWindowLongW(self.hwnd, GWL_STYLE) as u32;
                 let mut rect = windows_sys::Win32::Foundation::RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
                 AdjustWindowRect(&mut rect, style, 0);
-                SetWindowPos(self.hwnd, std::ptr::null_mut(), 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER);
+                SetWindowPos(self.hwnd, std::ptr::null_mut(), 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
         }
 
@@ -206,8 +248,27 @@ mod imp {
             unsafe { IsWindowVisible(self.hwnd) != 0 }
         }
 
+        pub fn scale(&self) -> f32 {
+            // SAFETY: query on our window (0 when the API is unavailable → treat as 96 dpi).
+            let dpi = unsafe { GetDpiForWindow(self.hwnd) };
+            if dpi == 0 {
+                1.0
+            } else {
+                dpi as f32 / 96.0
+            }
+        }
+
         pub fn children(&self) -> usize {
-            0
+            // SAFETY: walking the direct children of our window.
+            unsafe {
+                let mut n = 0;
+                let mut c = GetWindow(self.hwnd, GW_CHILD);
+                while !c.is_null() {
+                    n += 1;
+                    c = GetWindow(c, GW_HWNDNEXT);
+                }
+                n
+            }
         }
     }
 
@@ -237,6 +298,9 @@ mod imp {
         pub fn resize(&mut self, _w: u32, _h: u32) {}
         pub fn pump(&mut self) -> bool {
             false
+        }
+        pub fn scale(&self) -> f32 {
+            1.0
         }
         pub fn children(&self) -> usize {
             0

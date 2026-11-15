@@ -76,7 +76,7 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 |---|---|---|
 | Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: YIN pitch detection, key + scale, retune speed, amount (`effects/pitch.rs`) |
 | MP3 / Ogg Vorbis export | ✅ | LAME and libvorbis (aoTuV) encoders, export dialog and `dragon render --format mp3/ogg` |
-| Native plugin editors embedded in a host window | ✅ Linux (X11) / Windows | `plugins/window.rs`; VST3 `IPlugFrame` + `IRunLoop`, CLAP `set_parent` + timer / fd host extensions. macOS ❌ |
+| Native plugin editors embedded in a host window | ✅ Linux (X11) / Windows | `plugins/window.rs`; the plugin's own window opens automatically with its effect / instrument window (generic controls as a fallback, with the reason when a GUI cannot open). VST3: `IPlugFrame`, `IRunLoop` (Linux), `IComponentHandler` (GUI edits reach the processor and the project, one undo step per knob turn), host-created `IMessage` / `IAttributeList`, content scale for HiDPI. CLAP: `set_parent`, `set_scale`, timer / fd host extensions, GUI edits from output events. Tested on Linux and Windows CI with real windows. macOS ❌ |
 | Sidechain into plugins | ✅ | CLAP second input port, VST3 aux input bus |
 | Clip launcher / performance mode | ✅ | View › Performance (F12): tracks × patterns, launch quantised to bar / beat, stop lanes, `LiveEvent::Launch` in the renderer |
 | Audio-to-MIDI | ✅ | Tools › Convert selected clip to MIDI (melody: YIN pitch tracking; drums: onsets sorted kick / snare / hat) |
