@@ -188,6 +188,15 @@ Checked against the manufacturers' manuals and spec sheets (tests in `effects/st
 | Video track | ✅ (needs ffmpeg) | File › Import video, View › Video (frame at the playhead with timecode), soundtrack as a clip, export the video with the mix |
 | Surround 5.1 / 7.1 | ✅ (export) | Project › Surround; per-channel XY panner with spread and LFE send (2D VBAP); multichannel WAV export (`surround.rs`). Monitoring is stereo; master inserts are not applied to the surround mix |
 | Dolby Atmos (objects, ADM BWF) | ✅ | 7.1.4 bed with height panning; every top-level channel exported as two positioned objects in an ADM BWF (BS.2076 axml + BS.2088 chna) for the Dolby Atmos Renderer, Resolve, Nuendo. No in-app Atmos binaural monitoring (Dolby-licensed); files over 4 GB (BW64) not supported |
+| Start screen: make a beat, record, mix, master, stem master, album master, film sound design | ✅ | `modes.rs`: each builds a fitting project and opens its views; File › Start screen…; Options › Show this at start |
+| Album master | ✅ | Mastering tab (album projects): songs one after another on their own channels through an album bus, group buses, "Match loudness" (one offline measurement, every song to the median loudness before the shared chain) – `views/album.rs` |
+| Stem master | ✅ | start screen: Drums, Melody, All vocals, SFX group buses and a mastering chain |
+| Master chain in the Mastering tab | ✅ | signal flow (IN → effects with their gain reduction → OUT with true peak; click opens, the switch bypasses) and the full slot list |
+| Audio Repair (iZotope RX style) | ✅ | double-click an audio clip › Audio repair…: spectrogram with time and time × frequency selection; de-noise (learned profile, decision-directed Wiener), de-hum (auto 50 / 60 Hz, zero-phase notches), de-click (LPC interpolation), de-clip, distortion repair (soft-clipped peaks), de-reverb (Lebart), spectral attenuate, gain; every repair renders to a new file, Ctrl+Z goes back – `repair.rs`, `views/repair.rs` |
+| Note editing (Melodyne style) | ✅ (monophonic) | Audio repair › Notes: detected notes as blobs with pitch curves, drag to move (semitones / free), pitch centre, flatten drift and vibrato. Note timing, formants and polyphonic (DNA) editing are not there |
+| Hammerstein graph of an effect | ✅ | every effect editor › Hammerstein: kernels G1–G5, THD and the static curve from a synchronised sweep (Novak), re-measured on every change; time-varying and adaptive effects are flagged – `hammerstein.rs` |
+| Drag a cut clip into a new grouped track | ✅ | drag clips below the last track: a new track grouped with theirs, same mixer channel; grouped tracks mute / solo together |
+| Hint bar (control and value at the top left) | ✅ | stock panels and displays, plugin parameter lists, plugins' own windows, mixer faders |
 
 ## P4 – out of scope for an offline app
 
