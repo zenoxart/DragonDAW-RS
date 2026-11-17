@@ -69,12 +69,16 @@ pub struct TubeStage {
     /// DC blocker state (the even term shifts the average).
     dc_x: f32,
     dc_y: f32,
+    /// The bias shift and the sag follow the level's peaks, held through a low-frequency wave's cycle:
+    /// otherwise they ride the waveform of the bass and cancel its even harmonics.
+    over_hold: super::PeakHold,
+    sag_hold: super::PeakHold,
 }
 
 impl TubeStage {
     pub fn new(model: TubeModel, rate: f32) -> Self {
         let lp_a = (-std::f32::consts::TAU * model.miller / rate).exp();
-        TubeStage { model, bias: 0.0, rate, shift: 0.0, env: 0.0, lp: 0.0, lp_a, dc_x: 0.0, dc_y: 0.0 }
+        TubeStage { model, bias: 0.0, rate, shift: 0.0, env: 0.0, lp: 0.0, lp_a, dc_x: 0.0, dc_y: 0.0, over_hold: super::PeakHold::new(30.0, rate), sag_hold: super::PeakHold::new(30.0, rate) }
     }
 
     pub fn set_model(&mut self, m: TubeModel) {
@@ -88,6 +92,8 @@ impl TubeStage {
         self.lp = 0.0;
         self.dc_x = 0.0;
         self.dc_y = 0.0;
+        self.over_hold.reset();
+        self.sag_hold.reset();
     }
 
     #[inline]
@@ -97,17 +103,17 @@ impl TubeStage {
         self.lp = x + (self.lp - x) * self.lp_a;
         let x = self.lp;
         // Grid conduction charges the coupling cap: positive peaks shift the bias down, recovering slowly.
-        let over = (x * m.k + m.asym - 0.6).max(0.0);
+        let over = self.over_hold.next((x * m.k + m.asym - 0.6).max(0.0));
         let attack = 0.002 * m.blocking;
         let release = 0.00003;
         self.shift += (over * 0.5 - self.shift) * if over * 0.5 > self.shift { attack } else { release };
         // Supply sag: sustained level pulls the gain down a little.
-        let a = x.abs();
+        let a = self.sag_hold.next(x);
         self.env += (a - self.env) * if a > self.env { 0.0005 } else { 0.00005 };
         let sag = 1.0 / (1.0 + m.sag * self.env * 1.5);
         let y = tube_curve(&m, self.bias - self.shift, x * sag);
-        // Output coupling capacitor (≈ 10 Hz high-pass).
-        let r = 1.0 - std::f32::consts::TAU * 10.0 / self.rate;
+        // Output coupling capacitor (≈ 5 Hz high-pass: blocks the DC, leaves the bass alone).
+        let r = 1.0 - std::f32::consts::TAU * 5.0 / self.rate;
         self.dc_y = y - self.dc_x + r * self.dc_y;
         self.dc_x = y;
         self.dc_y

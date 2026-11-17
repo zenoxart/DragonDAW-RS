@@ -51,15 +51,19 @@ struct Env {
     a: f32,
     r: f32,
     e: f32,
+    /// Peaks held through a low-frequency wave's cycle, so the gain does not ride the bass's waveform.
+    hold: crate::dsp::PeakHold,
 }
 
 impl Env {
     fn set(&mut self, att_ms: f32, rel_ms: f32, rate: f32) {
         self.a = coef(att_ms, rate);
         self.r = coef(rel_ms, rate);
+        self.hold.set(30.0, rate);
     }
     #[inline]
     fn next(&mut self, x: f32) -> f32 {
+        let x = self.hold.next(x);
         let c = if x > self.e { self.a } else { self.r };
         self.e = x + c * (self.e - x);
         self.e

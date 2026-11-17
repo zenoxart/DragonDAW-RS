@@ -15,6 +15,8 @@ const RATE: f32 = 48_000.0;
 const LEVELS: [f32; 4] = [-18.0, -12.0, -6.0, 0.0];
 /// Waits this long after the last change before measuring again.
 const SETTLE: f64 = 0.35;
+/// Effects that adapt to their input's spectrum (the sweep is not like music to them).
+const ADAPTIVE: &[&str] = &["clean_voice"];
 
 pub const ORDER_COLORS: [Color32; MAX_ORDER] =
     [Color32::from_rgb(0xe8, 0xec, 0xf2), Color32::from_rgb(0xff, 0x8a, 0x4c), Color32::from_rgb(0xf2, 0xc9, 0x4c), Color32::from_rgb(0x52, 0xd2, 0x7f), Color32::from_rgb(0x4c, 0xa8, 0xff)];
@@ -193,9 +195,12 @@ pub fn view(ui: &mut Ui, ins: &Insert, bpm: f64, key: egui::Id, accent: Color32)
     match &result {
         Some(k) => {
             for (n, curve) in k.kernels.iter().enumerate().rev() {
-                let pts: Vec<Pos2> = k.freqs.iter().zip(curve).map(|(f, v)| Pos2::new(x_of(*f), y_of(*v))).collect();
+                // An order's curve starts where its input is audible (G2 at 40 Hz, G3 at 60 Hz …).
+                let pts: Vec<Pos2> = k.freqs.iter().zip(curve).filter(|(_, v)| v.is_finite()).map(|(f, v)| Pos2::new(x_of(*f), y_of(*v))).collect();
                 let c = ORDER_COLORS[n];
-                p.add(egui::Shape::line(pts, Stroke::new(if n == 0 { 2.2_f32 } else { 1.6 }, if busy { c.gamma_multiply(0.45) } else { c })));
+                if pts.len() > 1 {
+                    p.add(egui::Shape::line(pts, Stroke::new(if n == 0 { 2.2_f32 } else { 1.6 }, if busy { c.gamma_multiply(0.45) } else { c })));
+                }
             }
             // The memoryless curve the kernels amount to at 1 kHz, in the corner.
             let inset = Rect::from_min_size(Pos2::new(plot.right() - 118.0, plot.bottom() - 118.0), Vec2::splat(110.0));
@@ -214,7 +219,7 @@ pub fn view(ui: &mut Ui, ins: &Insert, bpm: f64, key: egui::Id, accent: Color32)
                 p.line_segment([Pos2::new(h.x, plot.top()), Pos2::new(h.x, plot.bottom())], Stroke::new(1.0_f32, Color32::from_white_alpha(60)));
                 let mut lines = vec![format!("{:.0} Hz   THD {:.3} %", k.freqs[i], k.thd[i])];
                 for (n, curve) in k.kernels.iter().enumerate() {
-                    lines.push(format!("G{}  {:>7.1} dB", n + 1, curve[i]));
+                    lines.push(if curve[i].is_finite() { format!("G{}  {:>7.1} dB", n + 1, curve[i]) } else { format!("G{}        —", n + 1) });
                 }
                 let text = lines.join("\n");
                 let g = p.layout_no_wrap(text, egui::FontId::monospace(10.0), theme::TEXT);
@@ -228,8 +233,27 @@ pub fn view(ui: &mut Ui, ins: &Insert, bpm: f64, key: egui::Id, accent: Color32)
             p.text(plot.center(), egui::Align2::CENTER_CENTER, if failed { "This effect could not be measured" } else { "Measuring the effect with a sine sweep…" }, egui::FontId::proportional(13.0), theme::TEXT_DIM);
         }
     }
+    // What the curves can and cannot say about this effect.
+    if let Some(k) = &result {
+        if ADAPTIVE.contains(&ins.effect.as_str()) {
+            ui.label(
+                egui::RichText::new("⚠ Adaptive effect: it reacts to the measuring sweep itself (a resonance suppressor treats a pure tone as a resonance), so the curves show its response to a sweep, not to music.")
+                    .size(11.0)
+                    .color(theme::WARN),
+            );
+        } else if k.time_varying {
+            ui.label(
+                egui::RichText::new(format!(
+                    "⚠ Time-varying effect (its response moved {:.1} dB between two runs): LFOs or tracking change it while it plays, so part of what shows as harmonics are modulation sidebands.",
+                    k.wobble_db
+                ))
+                .size(11.0)
+                .color(theme::WARN),
+            );
+        }
+    }
     ui.label(
-        egui::RichText::new("A Hammerstein model splits the effect into branches: the input raised to the n-th power, then a filter G_n. G1 is its frequency response, G2 / G3 … how much even / odd distortion it adds at each frequency. Measured on a fresh copy of the effect with an exponential sine sweep.")
+        egui::RichText::new("A Hammerstein model splits the effect into branches: the input raised to the n-th power, then a filter G_n. G1 is its frequency response, G2 / G3 … how much even / odd distortion it adds at each frequency. Measured on a fresh copy of the effect with an exponential sine sweep. Each order is drawn where its input is audible: Gn at f comes from input at f / n.")
             .size(10.5)
             .color(theme::TEXT_DIM),
     );

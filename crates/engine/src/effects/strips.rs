@@ -324,6 +324,8 @@ pub struct ClassAStrip {
     release: f32,
     comp_gain: f32,
     comp_first: bool,
+    /// Keeps the detected level steady through a low-frequency wave's cycle.
+    steady: crate::dsp::PeakHold,
     output: f32,
     pre: [Preamp; 2],
     cell: OptoCell,
@@ -356,6 +358,7 @@ impl ClassAStrip {
             release: 400.0,
             comp_gain: db_to_gain(4.0),
             comp_first: false,
+            steady: crate::dsp::PeakHold::new(30.0, rate),
             output: db_to_gain(-6.0),
             pre: [Preamp::new(rate); 2],
             cell: OptoCell::default(),
@@ -458,7 +461,7 @@ impl Effect for ClassAStrip {
             }
             if self.comp_on {
                 // Feed-forward detector into the opto cell, soft knee.
-                let level = gain_to_db(a.abs().max(b.abs()).max(1e-6));
+                let level = gain_to_db(self.steady.next(a.abs().max(b.abs())).max(1e-6));
                 let over = level - self.threshold;
                 let knee = 8.0;
                 let over = if over < -knee / 2.0 {

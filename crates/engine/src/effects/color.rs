@@ -103,7 +103,7 @@ pub fn saturator_def() -> EffectDef {
         uses_sidechain: false,
         create: |rate| {
             let t = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], rate);
-            Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(10.0, rate); 2], tubes: [t; 2] })
+            Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(5.0, rate); 2], tubes: [t; 2] })
         },
     }
 }
@@ -621,7 +621,8 @@ impl DragonParticle {
         self.glue.set_param("attack", 30.0);
         self.glue.set_param("release", 200.0);
         self.glue.set_param("knee", 8.0);
-        self.glue.set_param("makeup", a * 6.0);
+        // Make-up for the glue's reduction (its detector reads the true peaks), so more amount = louder.
+        self.glue.set_param("makeup", a * 10.0);
         self.sat.set_param("mode", 0.0);
         self.sat.set_param("tube", tube);
         self.sat.set_param("drive", a * 9.0);
@@ -781,7 +782,7 @@ mod scope_tests {
         let rms = |v: &[f32]| (v[48000..].iter().map(|s| s * s).sum::<f32>() / 48000.0).sqrt();
         let lo = run(&[("amount", 0.1)]);
         let hi = run(&[("amount", 0.9)]);
-        assert!(rms(&hi) > rms(&lo) * 1.3, "louder with more amount");
+        assert!(rms(&hi) > rms(&lo) * 1.3, "louder with more amount: {} vs {}", rms(&hi), rms(&lo));
         assert!(hi.iter().all(|v| v.abs() < 0.95), "under the ceiling");
         let ag = run(&[("amount", 0.9), ("auto_gain", 1.0)]);
         let ratio = rms(&ag) / rms(&x);

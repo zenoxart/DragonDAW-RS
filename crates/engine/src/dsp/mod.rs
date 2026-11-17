@@ -489,6 +489,47 @@ impl Lfo {
     }
 }
 
+/// Holds a level detector's peaks for a while before letting the level fall. A steady wave then reads as
+/// its amplitude through its whole cycle instead of rising and falling with every half wave: without
+/// this, a compressor's gain rides low-frequency waveforms and adds odd-order distortion to the bass.
+/// Rises pass at once, so attacks are caught as before.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PeakHold {
+    held: f32,
+    left: u32,
+    hold: u32,
+}
+
+impl PeakHold {
+    /// Holds for `ms`; a little over half the period of the lowest frequency to keep steady (30 ms for
+    /// 20 Hz, whose half waves come every 25 ms).
+    pub fn new(ms: f32, rate: f32) -> Self {
+        let mut h = PeakHold::default();
+        h.set(ms, rate);
+        h
+    }
+    pub fn set(&mut self, ms: f32, rate: f32) {
+        self.hold = (ms.max(0.0) * 0.001 * rate) as u32;
+    }
+    #[inline]
+    pub fn next(&mut self, x: f32) -> f32 {
+        let x = x.abs();
+        if x >= self.held {
+            self.held = x;
+            self.left = self.hold;
+        } else if self.left > 0 {
+            self.left -= 1;
+        } else {
+            self.held = x;
+        }
+        self.held
+    }
+    pub fn reset(&mut self) {
+        self.held = 0.0;
+        self.left = 0;
+    }
+}
+
 /// Envelope follower (peak, attack/release in ms).
 #[derive(Debug, Clone, Copy)]
 pub struct Follower {
@@ -522,6 +563,22 @@ impl Follower {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peak_hold_reads_a_steady_sine_as_its_amplitude() {
+        let rate = 48_000.0;
+        let mut h = PeakHold::new(25.0, rate);
+        let mut lo = f32::MAX;
+        for i in 0..48_000 {
+            let v = h.next(0.5 * (std::f32::consts::TAU * 30.0 * i as f32 / rate).sin());
+            if i > 4800 {
+                lo = lo.min(v);
+            }
+        }
+        assert!(lo > 0.49, "the held level dips to {lo}");
+        // A rise passes at once.
+        assert_eq!(h.next(0.9), 0.9);
+    }
 
     #[test]
     fn biquad_lowpass_attenuates_highs() {

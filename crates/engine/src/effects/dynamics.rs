@@ -2,7 +2,7 @@
 //! de-esser and transient shaper.
 
 use super::{Effect, EffectDef, ParamInfo};
-use crate::dsp::{db_to_gain, gain_to_db, Biquad, BiquadKind, Follower};
+use crate::dsp::{db_to_gain, gain_to_db, Biquad, BiquadKind, Follower, PeakHold};
 
 // ------------------------------------------------------------------------------------------------ compressor
 
@@ -68,6 +68,8 @@ pub struct Compressor {
     last_out: f32,
     sc_lp: [Biquad; 2],
     sc_lp_freq: f32,
+    /// Keeps the detected level steady through a low-frequency wave's cycle.
+    steady: PeakHold,
 }
 
 /// Compressor styles after FabFilter Pro-C: detector, knee, release behaviour and feedback differ.
@@ -162,6 +164,7 @@ impl Effect for Compressor {
         self.rms = 0.0;
         self.last_out = 0.0;
         self.hold_left = 0.0;
+        self.steady.reset();
     }
     fn latency(&self) -> usize {
         self.look
@@ -184,7 +187,7 @@ impl Effect for Compressor {
             };
             let (dl, dr) = if self.sc_hp_freq > 21.0 { (self.sc_hp[0].process(dl), self.sc_hp[1].process(dr)) } else { (dl, dr) };
             let (dl, dr) = if self.sc_lp_freq < 19_500.0 { (self.sc_lp[0].process(dl), self.sc_lp[1].process(dr)) } else { (dl, dr) };
-            let peak = dl.abs().max(dr.abs());
+            let peak = self.steady.next(dl.abs().max(dr.abs()));
             let ff = if spec.rms_ms > 0.0 {
                 self.rms = peak * peak + (self.rms - peak * peak) * rms_a;
                 (self.rms * 2.0).sqrt()
@@ -260,6 +263,7 @@ pub fn compressor_def() -> EffectDef {
                 last_out: 0.0,
                 sc_lp: [Biquad::new(BiquadKind::LowPass, (rate * 0.45).min(20000.0), 0.707, 0.0, rate); 2],
                 sc_lp_freq: 20000.0,
+                steady: PeakHold::new(30.0, rate),
             })
         },
     }
@@ -370,6 +374,8 @@ struct MbBand {
     env: f32,
     /// Gain change now (dB; negative = cut).
     change: f32,
+    /// Keeps the band's detected level steady through its lowest frequency's cycle.
+    steady: PeakHold,
 }
 
 impl MbBand {
@@ -453,6 +459,9 @@ impl Multiband {
             self.dynf_db = [f32::NAN; MB_BANDS];
         }
         for (b, band) in self.bands.iter_mut().enumerate() {
+            // Hold for half a period of the band's lowest frequency (band 1 goes down to 20 Hz).
+            let low = if b == 0 { 20.0 } else { self.xf[b - 1] };
+            band.steady.set((600.0 / low.max(20.0)).min(30.0), self.rate);
             let g = |k: usize| self.p[MB_G + b * MB_PB + k];
             band.mode = (g(0).round().max(0.0) as usize).min(MB_MODES.len() - 1);
             band.thr = g(1);
@@ -562,7 +571,7 @@ impl Effect for Multiband {
             let mut y = [0.0f32; 2];
             for b in 0..n {
                 let band = &mut self.bands[b];
-                let peak = if use_sc && band.sc { sparts[0][b].abs().max(sparts[1][b].abs()) } else { parts[0][b].abs().max(parts[1][b].abs()) };
+                let peak = band.steady.next(if use_sc && band.sc { sparts[0][b].abs().max(sparts[1][b].abs()) } else { parts[0][b].abs().max(parts[1][b].abs()) });
                 let db = gain_to_db(peak.max(1e-6));
                 // Peak detector with the band's attack / release, then the static curve.
                 let want = band.target(db);

@@ -104,6 +104,8 @@ pub struct MultibandSaturator {
     xo: [[Lr4; 3]; 2],
     tone: [[Biquad; BANDS]; 2],
     env: [Follower; BANDS],
+    /// Band levels held through a low-frequency wave's cycle (drive does not ride the waveform).
+    steady: [crate::dsp::PeakHold; BANDS],
     dc: [[(f32, f32); BANDS]; 2],
     /// Feedback loops (Saturn): a short delay per band and channel, tuned by the feedback frequency.
     fb: [[Vec<f32>; BANDS]; 2],
@@ -120,6 +122,7 @@ impl MultibandSaturator {
             xo: [[Lr4::default(); 3]; 2],
             tone: [[Biquad::default(); BANDS]; 2],
             env: std::array::from_fn(|_| Follower::new(5.0, 120.0, rate)),
+            steady: [crate::dsp::PeakHold::new(30.0, rate); BANDS],
             dc: [[(0.0, 0.0); BANDS]; 2],
             fb: std::array::from_fn(|_| std::array::from_fn(|_| vec![0.0; FB_LEN])),
             fb_pos: 0,
@@ -174,7 +177,7 @@ impl Effect for MultibandSaturator {
         let bp: [(usize, f32, f32, f32, f32); BANDS] =
             std::array::from_fn(|b| (self.band(b, "style").round() as usize, self.band(b, "drive"), self.band(b, "dyn") / 100.0, db_to_gain(self.band(b, "level")), self.band(b, "mix") / 100.0));
         let fbs: [(f32, usize); BANDS] = std::array::from_fn(|b| (self.band(b, "fb") / 100.0 * 0.95, ((self.rate / self.band(b, "fb_freq").max(20.0)) as usize).clamp(1, FB_LEN - 1)));
-        let dc_a = 1.0 - std::f32::consts::TAU * 10.0 / self.rate;
+        let dc_a = 1.0 - std::f32::consts::TAU * 5.0 / self.rate;
         let mut lvl = [0.0f32; BANDS];
         let mut drv = [0.0f32; BANDS];
         for i in 0..l.len() {
@@ -191,7 +194,7 @@ impl Effect for MultibandSaturator {
                 split[ch][nb - 1] = rest;
             }
             for b in 0..nb {
-                let e = self.env[b].next(split[0][b].abs().max(split[1][b].abs()));
+                let e = self.env[b].next(self.steady[b].next(split[0][b].abs().max(split[1][b].abs())));
                 let e_db = crate::dsp::gain_to_db(e.max(1e-6));
                 lvl[b] = lvl[b].max(e_db);
                 let (style, drive, dynamics, level, bmix) = bp[b];
