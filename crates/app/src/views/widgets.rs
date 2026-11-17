@@ -337,6 +337,27 @@ pub fn fader(ui: &mut Ui, value: &mut f32, max: f32, height: f32) -> Response {
     r.on_hover_text(format!("{db:.1} dB"))
 }
 
+/// The dB scale for a [`fader`] of the same `max` and `height`: marks at the fader's own positions
+/// (its square-root taper), so the cap lines up with the number it is at.
+pub fn fader_scale(ui: &mut Ui, max: f32, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(24.0, height), Sense::hover());
+    let p = ui.painter();
+    let top = rect.top() + 4.0;
+    let h = height - 8.0;
+    for db in [6.0f32, 0.0, -6.0, -12.0, -24.0, -48.0] {
+        let n = (dragon_engine::dsp::db_to_gain(db) / max).clamp(0.0, 1.0).sqrt();
+        if n <= 0.0 {
+            continue;
+        }
+        let y = top + h - n * h;
+        let unity = db == 0.0;
+        p.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.left() + if unity { 5.0 } else { 3.0 }, y)], Stroke::new(1.0_f32, if unity { theme::TEXT } else { theme::TEXT_DIM }));
+        let label = if db > 0.0 { format!("+{db:.0}") } else { format!("{db:.0}") };
+        p.text(Pos2::new(rect.left() + 8.0, y), egui::Align2::LEFT_CENTER, label, egui::FontId::monospace(8.5), if unity { theme::TEXT } else { theme::TEXT_DIM });
+    }
+    p.text(Pos2::new(rect.left() + 8.0, top + h), egui::Align2::LEFT_CENTER, "-∞", egui::FontId::monospace(8.5), theme::TEXT_DIM);
+}
+
 /// Stereo peak meter (linear values) with a peak-hold colour.
 pub fn meter(ui: &mut Ui, l: f32, r: f32, height: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(12.0, height), Sense::hover());

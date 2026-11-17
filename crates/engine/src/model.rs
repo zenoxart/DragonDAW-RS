@@ -715,6 +715,10 @@ pub struct MixerSend {
     pub level: f32,
     /// Taken before the fader (and pan).
     pub pre_fader: bool,
+    /// FL's "Sidechain to this track": the signal is only sidechain material for the target's effects,
+    /// not heard in its mix.
+    #[serde(default)]
+    pub sidechain_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -731,6 +735,9 @@ pub struct MixerChannel {
     pub id: Id,
     pub name: String,
     pub color: Rgb,
+    /// Icon key (see the app's track icons); empty = the one the name suggests.
+    #[serde(default)]
+    pub icon: String,
     pub kind: ChannelKind,
     pub volume: f32,
     pub pan: f32,
@@ -770,6 +777,7 @@ impl MixerChannel {
             id,
             name: name.into(),
             color,
+            icon: String::new(),
             kind: ChannelKind::Audio,
             volume: 0.8,
             pan: 0.0,
@@ -1062,6 +1070,16 @@ impl Default for Project {
 
 impl Project {
     /// A new project with one pattern, a few tracks and matching mixer channels (like a fresh FL session).
+    /// A fully empty project: the master (without effects) and an empty "Pattern 1" – no playlist or
+    /// mixer tracks, no instruments. Tracks and mixer channels appear as you add things.
+    pub fn empty() -> Self {
+        let mut p = Project::default();
+        let pat = p.next_id();
+        p.patterns.push(Pattern { id: pat, name: "Pattern 1".into(), color: PALETTE[2], steps: 16, swing: 0.0, channels: BTreeMap::new() });
+        p.meta.name = "Untitled".into();
+        p
+    }
+
     pub fn new_default() -> Self {
         let mut p = Project::default();
         let pat = p.next_id();
@@ -1103,6 +1121,17 @@ impl Project {
         let color = PALETTE[self.mixer.channels.len() % PALETTE.len()];
         self.mixer.channels.push(MixerChannel::new(id, name, color));
         id
+    }
+
+    /// Moves the mixer channels `ids` one place left (`dir` < 0) or right, keeping their order; channels
+    /// at the edge stay. The master is not among them.
+    pub fn move_mixer_channels(&mut self, ids: &[Id], dir: i32) {
+        move_items(&mut self.mixer.channels, |c| ids.contains(&c.id), dir);
+    }
+
+    /// Moves the playlist tracks `ids` one place up (`dir` < 0) or down.
+    pub fn move_tracks(&mut self, ids: &[Id], dir: i32) {
+        move_items(&mut self.tracks, |t| ids.contains(&t.id), dir);
     }
 
     /// Adds a playlist track with its own mixer channel.
@@ -1280,6 +1309,23 @@ impl Project {
     }
 }
 
+/// Moves every item matching `sel` one place by `dir` (−1 / +1); a block at the edge does not move.
+fn move_items<T>(v: &mut [T], sel: impl Fn(&T) -> bool, dir: i32) {
+    let picked: Vec<usize> = (0..v.len()).filter(|&i| sel(&v[i])).collect();
+    if picked.is_empty() || (dir < 0 && picked[0] == 0) || (dir > 0 && *picked.last().unwrap() + 1 >= v.len()) {
+        return;
+    }
+    if dir < 0 {
+        for &i in &picked {
+            v.swap(i, i - 1);
+        }
+    } else {
+        for &i in picked.iter().rev() {
+            v.swap(i, i + 1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1312,5 +1358,26 @@ mod tests {
         assert_eq!(p.length_beats(), 4.0);
         p.channels.entry(5).or_default().notes.push(Note { start: PPQ * 5, ..Note::default() });
         assert_eq!(p.length_beats(), 8.0);
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    #[test]
+    fn move_channels_and_tracks() {
+        let mut p = Project::empty();
+        let ids: Vec<Id> = (0..5).map(|k| p.add_track(&format!("T{k}"))).collect();
+        let m: Vec<Id> = p.mixer.channels.iter().map(|c| c.id).collect();
+        p.move_mixer_channels(&[m[1], m[2]], 1);
+        assert_eq!(p.mixer.channels.iter().map(|c| c.id).collect::<Vec<_>>(), vec![m[0], m[3], m[1], m[2], m[4]]);
+        p.move_mixer_channels(&[m[0]], -1);
+        assert_eq!(p.mixer.channels[0].id, m[0], "the first one stays");
+        p.move_tracks(&[ids[4]], -1);
+        assert_eq!(p.tracks[3].id, ids[4]);
+        // [0, 1, 2, 4, 3]: tracks 3 and 4 form a block at the end – it stays.
+        p.move_tracks(&[ids[3], ids[4]], 1);
+        assert_eq!((p.tracks[3].id, p.tracks[4].id), (ids[4], ids[3]), "a block at the end stays");
     }
 }

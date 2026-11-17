@@ -12,7 +12,9 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let st = State::new(redhive_client_framework::AppContext::new("en"), Settings { show_splash: false, ..Settings::default() });
+        let mut st = State::new(redhive_client_framework::AppContext::new("en"), Settings { show_splash: false, ..Settings::default() });
+        // Most tests work on the demo project (tracks, instruments, a pattern on the playlist).
+        st.new_demo_project();
         Harness { ctx: egui::Context::default(), st }
     }
 
@@ -1341,4 +1343,141 @@ fn effect_panel_knob_edits_the_project() {
     let sw = rects.iter().find(|(p, _)| p == "sidechain").unwrap().1;
     h.click(editor, sw.center(), PointerButton::Primary, Modifiers::NONE);
     assert_eq!(ins(&h).params.get("sidechain").copied(), Some(1.0));
+}
+
+/// File → New gives a fully empty project (no tracks, mixer channels, instruments or master effects),
+/// every view works with it, and you can build from nothing: a pattern dropped on the empty playlist
+/// gets a track, an instrument gets its mixer channel, and it plays.
+#[test]
+fn new_project_is_empty_and_usable() {
+    let mut h = Harness::new();
+    h.st.new_project();
+    let p = &h.st.session.project;
+    assert!(p.tracks.is_empty() && p.mixer.channels.is_empty() && p.channels.is_empty(), "nothing in it");
+    assert!(p.mixer.master.inserts.is_empty(), "no master effects");
+    assert_eq!(p.patterns.len(), 1, "an empty Pattern 1");
+    assert!(p.patterns[0].channels.is_empty());
+    for view in [super::playlist::show as fn(&mut egui::Ui, &mut State), super::mixer::show, super::rack::show, super::piano_roll::show, super::picker::show, super::master::show, super::transport::show] {
+        h.idle(view, 2);
+    }
+    // Build from nothing.
+    let pat = h.st.session.project.patterns[0].id;
+    super::picker::place(&mut h.st, &super::picker::PickItem::Pattern(pat), None, 0.0);
+    assert_eq!(h.st.session.project.tracks.len(), 1, "the pattern got a track");
+    h.st.session.edit("Add synth", |p| {
+        let ch = p.add_channel("Synth", Instrument::Synth(SynthParams::default()));
+        p.pattern_mut(pat).unwrap().channels.insert(ch, PatternChannel { steps: vec![], notes: vec![Note { pitch: 60, start: 0, length: PPQ, ..Note::default() }] });
+    });
+    assert_eq!(h.st.session.project.mixer.channels.len(), 2, "track and instrument have their mixer channels");
+    for view in [super::playlist::show as fn(&mut egui::Ui, &mut State), super::mixer::show, super::rack::show, super::piano_roll::show] {
+        h.idle(view, 2);
+    }
+    let cache = dragon_engine::samples::SampleCache::default();
+    let opts = dragon_engine::export::ExportOptions { range: dragon_engine::export::ExportRange::Song, tail: 0.2, ..Default::default() };
+    let mut pool = dragon_engine::render::Pool::new();
+    let mix = dragon_engine::export::render_mix(&h.st.session.project, &cache, &opts, &mut pool, &mut |_| {});
+    assert!(mix.l.iter().any(|x| x.abs() > 0.01), "the note plays");
+}
+
+/// Mixer: Ctrl+click selects several tracks; clicking a bus's route arrow routes all of them; Shift+click
+/// selects a range; "Sidechain to this track" makes sidechain-only sends and points the bus's
+/// compressor at the first source.
+#[test]
+fn mixer_multi_select_routes_and_sidechains() {
+    let mut h = Harness::new();
+    let mixer = |ui: &mut egui::Ui, st: &mut State| super::mixer::show(ui, st);
+    let bus = h.st.session.edit("bus", |p| p.add_mixer_channel("Bus"));
+    let iid = h.st.session.edit("comp", |p| {
+        let id = p.next_id();
+        let def = dragon_engine::effects::find("compressor").unwrap();
+        p.mixer.get_mut(bus).unwrap().inserts.push(Insert { id, effect: "compressor".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        id
+    });
+    h.idle(mixer, 3);
+    let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).expect("mixer drawn");
+    let chans: Vec<Id> = h.st.session.project.mixer.channels.iter().map(|c| c.id).collect();
+    let at = |id: Id| rects.iter().find(|r| r.0 == id).unwrap().1;
+    // Click the first track, Ctrl+click the second and third.
+    let top = |r: Rect| Pos2::new(r.center().x, r.top() + 8.0);
+    h.click(mixer, top(at(chans[0])), PointerButton::Primary, Modifiers::NONE);
+    h.click(mixer, top(at(chans[1])), PointerButton::Primary, Modifiers::COMMAND);
+    h.click(mixer, top(at(chans[2])), PointerButton::Primary, Modifiers::COMMAND);
+    assert_eq!(h.st.ui.mixer_sel, vec![chans[0], chans[1], chans[2]]);
+    // Route all three to the bus at once (what its route arrow does).
+    let srcs = super::mixer::sources(&h.st);
+    super::mixer::toggle_routes(&mut h.st, &srcs, bus);
+    for c in &chans[0..3] {
+        let ch = h.st.session.project.mixer.get(*c).unwrap();
+        assert!(ch.output == Some(bus) || ch.sends.iter().any(|s| s.target == bus && !s.sidechain_only), "{c} routes to the bus");
+    }
+    assert_eq!(h.st.session.history.labels().last().map(|s| s.as_str()), Some("Route selected tracks"));
+    // Shift+click: the range from the current track.
+    h.click(mixer, top(at(chans[4])), PointerButton::Primary, Modifiers::SHIFT);
+    assert_eq!(h.st.ui.mixer_sel, chans[2..=4].to_vec());
+    // Sidechain the range to the bus.
+    let srcs = super::mixer::sources(&h.st);
+    super::mixer::sidechain_to(&mut h.st, &srcs, bus);
+    for c in &chans[2..=4] {
+        let ch = h.st.session.project.mixer.get(*c).unwrap();
+        assert!(ch.sends.iter().any(|s| s.target == bus && s.sidechain_only), "{c} sidechains to the bus");
+    }
+    let comp = h.st.session.project.mixer.get(bus).unwrap().inserts.iter().find(|i| i.id == iid).unwrap().clone();
+    assert_eq!(comp.sidechain, Some(chans[2]), "the compressor listens to the first source");
+}
+
+/// Renaming, reordering and icons: drag a mixer strip's header to move the track; double-click its name
+/// to rename (the playlist track with the same name follows); pick an icon; Alt+Left in the mixer;
+/// drag a playlist track's grip down; Alt+Down in the playlist.
+#[test]
+fn rename_reorder_and_icons() {
+    let mut h = Harness::new();
+    let mixer = |ui: &mut egui::Ui, st: &mut State| super::mixer::show(ui, st);
+    h.idle(mixer, 3);
+    let order = |h: &Harness| h.st.session.project.mixer.channels.iter().map(|c| c.id).collect::<Vec<Id>>();
+    let before = order(&h);
+    let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).unwrap();
+    let r1 = rects.iter().find(|r| r.0 == before[0]).unwrap().1;
+    let head = Pos2::new(r1.center().x, r1.top() + 12.0);
+    // Two strip widths to the right.
+    h.drag(mixer, head, head + egui::vec2(2.0 * 92.0, 0.0), PointerButton::Primary, Modifiers::NONE);
+    let after = order(&h);
+    assert_eq!(after[2], before[0], "moved two places right: {after:?}");
+    assert_eq!(h.st.session.history.labels().last().map(|s| s.as_str()), Some("Move mixer track"), "one undo step");
+    // Alt+Left moves it back one.
+    h.st.ui.mixer = before[0];
+    h.st.ui.mixer_sel = vec![before[0]];
+    h.st.ui.editor = crate::state::Editor::Mixer;
+    crate::commands::execute(&mut h.st, "ctx.alt_left", &h.ctx.clone());
+    assert_eq!(order(&h)[1], before[0]);
+    // Double-click the name of the first track's channel (named like its playlist track) and rename it.
+    let tid = h.st.session.project.tracks[0].id;
+    let ch = h.st.session.project.tracks[0].mixer;
+    // Start the rename the way a double-click on the name does, then type.
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("mixer.rename"), ch));
+    h.idle(mixer, 2);
+    h.frame(mixer, vec![Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }, Event::Text("Drums".into())], Modifiers::NONE);
+    h.frame(mixer, vec![Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    h.idle(mixer, 2);
+    assert_eq!(h.st.session.project.mixer.get(ch).unwrap().name, "Drums");
+    assert_eq!(h.st.session.project.track(tid).unwrap().name, "Drums", "the playlist track follows");
+    // Icons: automatic from the name, or chosen.
+    assert_eq!(super::track_icons::guess("Drums"), "bus");
+    h.st.session.edit("Track icon", |p| p.mixer.get_mut(ch).unwrap().icon = "kick".into());
+    assert_eq!(h.st.session.project.mixer.get(ch).unwrap().icon, "kick");
+    // Playlist: drag track 1's grip down by two rows.
+    let playlist = |ui: &mut egui::Ui, st: &mut State| super::playlist::show(ui, st);
+    h.idle(playlist, 3);
+    let info = super::playlist::DropInfo::get(&h.ctx).unwrap();
+    let header = h.rect("pl.header");
+    let (t0, top, bottom) = info.tracks[0];
+    let row = bottom - top;
+    let grip = Pos2::new(header.left() + 4.0, (top + bottom) / 2.0);
+    h.drag(playlist, grip, grip + egui::vec2(0.0, 2.0 * row), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(h.st.session.project.tracks[2].id, t0, "moved two rows down");
+    // Alt+Down: the clicked track moves one further.
+    h.st.ui.track = Some(t0);
+    h.st.ui.clips.clear();
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    crate::commands::execute(&mut h.st, "ctx.alt_down", &h.ctx.clone());
+    assert_eq!(h.st.session.project.tracks[3].id, t0);
 }

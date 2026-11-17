@@ -21,6 +21,7 @@ use redhive_contracts::{IconRef, TextKey};
 /// editor tools are P (draw), B (paint), D (delete), T (mute), C (slice) and E (select).
 const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("file.new", "New project", "File", 0, ""),
+    ("file.new_demo", "New project with demo beat", "File", 0, ""),
     ("file.open", "Open…", "File", 0, "Ctrl+O"),
     ("file.save", "Save", "File", 1, "Ctrl+S"),
     ("file.save_as", "Save as…", "File", 1, "Ctrl+Shift+S"),
@@ -76,10 +77,10 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("ctx.alt_g", "Group channels (rack) / ungroup (piano roll, playlist)", "", 0, "Alt+G"),
     ("ctx.alt_z", "Zip channels (rack) / undo history", "", 0, "Alt+Z"),
     ("ctx.alt_u", "Unzip channels (rack) / chop tool (piano roll)", "", 0, "Alt+U"),
-    ("ctx.alt_up", "Move channels up (rack) / nudge notes up (piano roll)", "", 0, "Alt+Up"),
-    ("ctx.alt_down", "Move channels down (rack) / nudge notes down (piano roll)", "", 0, "Alt+Down"),
-    ("ctx.alt_left", "Nudge notes left (piano roll)", "", 0, "Alt+Left"),
-    ("ctx.alt_right", "Nudge notes right (piano roll)", "", 0, "Alt+Right"),
+    ("ctx.alt_up", "Move channels up (rack) / nudge notes up (piano roll) / move tracks up (playlist)", "", 0, "Alt+Up"),
+    ("ctx.alt_down", "Move channels down (rack) / nudge notes down (piano roll) / move tracks down (playlist)", "", 0, "Alt+Down"),
+    ("ctx.alt_left", "Nudge notes left (piano roll) / move mixer tracks left (mixer)", "", 0, "Alt+Left"),
+    ("ctx.alt_right", "Nudge notes right (piano roll) / move mixer tracks right (mixer)", "", 0, "Alt+Right"),
     ("rack.delete", "Delete selected channels", "", 0, "Alt+Delete"),
     ("rack.up", "Select channel above", "", 0, "Up"),
     ("rack.down", "Select channel below", "", 0, "Down"),
@@ -351,6 +352,19 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "ctx.alt_u" if st.ui.editor == Ed::Rack => rack_zip(st, false),
         "ctx.alt_u" => crate::views::note_tools::open(st, crate::views::note_tools::Tool::Chop),
         "ctx.alt_up" | "ctx.alt_down" if st.ui.editor == Ed::Rack => rack_move(st, if id == "ctx.alt_up" { -1 } else { 1 }),
+        "ctx.alt_left" | "ctx.alt_right" if st.ui.editor == Ed::Mixer => {
+            let ids = if st.ui.mixer_sel.contains(&st.ui.mixer) { st.ui.mixer_sel.clone() } else { vec![st.ui.mixer] };
+            st.session.edit("Move mixer tracks", |p| p.move_mixer_channels(&ids, if id == "ctx.alt_left" { -1 } else { 1 }));
+        }
+        "ctx.alt_up" | "ctx.alt_down" if st.ui.editor == Ed::Playlist => {
+            // The tracks holding the selected clips (or the track under the last click).
+            let p = &st.session.project;
+            let mut ids: Vec<Id> = p.tracks.iter().filter(|t| t.clips.iter().any(|c| st.ui.clips.contains(&c.id))).map(|t| t.id).collect();
+            if ids.is_empty() {
+                ids.extend(st.ui.track);
+            }
+            st.session.edit("Move tracks", |p| p.move_tracks(&ids, if id == "ctx.alt_up" { -1 } else { 1 }));
+        }
         "ctx.alt_up" | "ctx.alt_down" | "ctx.alt_left" | "ctx.alt_right" if st.ui.editor == Ed::PianoRoll => {
             // FL Alt+arrows: fine nudge – a quarter of the snap in time, a semitone in pitch.
             let fine = ((PPQ as f64 * st.ui.snap.max(0.0625) / 4.0) as i64).max(1);
@@ -523,6 +537,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             }
         }
         "file.new" => st.new_project(),
+        "file.new_demo" => st.new_demo_project(),
         "file.open" => st.open_dialog(),
         "file.save" => {
             st.save(false);

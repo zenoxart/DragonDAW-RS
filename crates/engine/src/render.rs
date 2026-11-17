@@ -36,6 +36,98 @@ pub struct Pool {
     effects: HashMap<Id, (String, SharedEffect)>,
     instruments: HashMap<Id, (String, SharedInstrument)>,
     pub plugins: Option<Box<dyn PluginFactory>>,
+    /// Per insert: the parameter hand-off to the audio thread and the values last sent.
+    inboxes: HashMap<Id, (Arc<Inbox>, ParamSent)>,
+    /// Per channel: the instrument settings last applied (an unchanged instrument is not locked).
+    applied: HashMap<Id, (Instrument, Envelope)>,
+}
+
+/// Parameter values last sent to an effect.
+#[derive(Default)]
+struct ParamSent {
+    builtin: HashMap<&'static str, f32>,
+    plugin: HashMap<u32, f64>,
+    tempo: f64,
+}
+
+/// Which parameter a queued change sets.
+#[derive(Clone, Copy, Debug)]
+pub enum PKey {
+    /// A built-in effect's parameter id.
+    Static(&'static str),
+    /// A plugin parameter (numeric id).
+    Num(u32),
+    Tempo,
+}
+
+/// Parameter changes for a running effect, handed to the audio thread. The UI never locks a running
+/// effect (if the audio thread had to wait for the UI – which the OS may pause at any time – the
+/// block would be late: a crackle); the audio thread applies the queue right before it processes the
+/// effect, and reports the effect's latency back.
+pub struct Inbox {
+    q: Mutex<Vec<(PKey, f64)>>,
+    pending: std::sync::atomic::AtomicBool,
+    latency: std::sync::atomic::AtomicUsize,
+    /// The latency changed after a queued change (the song's delay compensation needs a recompile).
+    latency_moved: std::sync::atomic::AtomicBool,
+}
+
+impl Inbox {
+    fn new(latency: usize) -> Self {
+        Inbox { q: Mutex::new(Vec::with_capacity(256)), pending: false.into(), latency: latency.into(), latency_moved: false.into() }
+    }
+
+    /// Queues changes (UI side).
+    pub fn push(&self, changes: impl IntoIterator<Item = (PKey, f64)>) {
+        let mut q = self.q.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        q.extend(changes);
+        if !q.is_empty() {
+            self.pending.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Applies queued changes to `e` (audio side, with the effect already locked). Never waits: if the
+    /// UI is queuing right now, the changes land on the next block.
+    #[inline]
+    pub fn apply(&self, e: &mut dyn Effect) {
+        use std::sync::atomic::Ordering;
+        if !self.pending.load(Ordering::Acquire) {
+            return;
+        }
+        let Ok(mut q) = self.q.try_lock() else { return };
+        let mut buf = [0u8; 12];
+        for (k, v) in q.drain(..) {
+            match k {
+                PKey::Static(id) => e.set_param(id, v as f32),
+                PKey::Num(n) => e.set_param(num_str(n, &mut buf), v as f32),
+                PKey::Tempo => e.set_tempo(v),
+            }
+        }
+        self.pending.store(false, Ordering::Release);
+        let l = e.latency();
+        if self.latency.swap(l, Ordering::Relaxed) != l {
+            self.latency_moved.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn latency(&self) -> usize {
+        self.latency.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// `n` as decimal text in `buf`, without allocating.
+fn num_str(n: u32, buf: &mut [u8; 12]) -> &str {
+    let mut i = buf.len();
+    let mut n = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    std::str::from_utf8(&buf[i..]).unwrap_or("0")
 }
 
 impl Pool {
@@ -47,14 +139,15 @@ impl Pool {
         Pool { plugins: Some(f), ..Default::default() }
     }
 
-    fn effect(&mut self, ins: &Insert, rate: f32) -> Option<SharedEffect> {
+    /// The insert's effect and whether it was just created (not yet seen by the audio thread).
+    fn effect(&mut self, ins: &Insert, rate: f32) -> Option<(SharedEffect, bool)> {
         let key = match &ins.plugin {
             Some(p) => format!("plugin:{}:{}", p.path.display(), p.id),
             None => ins.effect.clone(),
         };
         if let Some((k, e)) = self.effects.get(&ins.id) {
             if *k == key {
-                return Some(e.clone());
+                return Some((e.clone(), false));
             }
         }
         let e: Box<dyn Effect> = match &ins.plugin {
@@ -63,7 +156,85 @@ impl Pool {
         };
         let shared = Arc::new(Mutex::new(e));
         self.effects.insert(ins.id, (key, shared.clone()));
-        Some(shared)
+        self.inboxes.remove(&ins.id);
+        Some((shared, true))
+    }
+
+    /// Sends an effect its parameters: straight in while only this thread knows it, otherwise only the
+    /// changed values through its inbox. Returns the inbox and the effect's latency.
+    fn send_params(&mut self, ins: &Insert, e: &SharedEffect, fresh: bool, bpm: f64) -> (Arc<Inbox>, usize) {
+        let mut changes: Vec<(PKey, f64)> = Vec::new();
+        let entry = self.inboxes.entry(ins.id).or_insert_with(|| (Arc::new(Inbox::new(0)), ParamSent::default()));
+        let sent = &mut entry.1;
+        match &ins.plugin {
+            None => {
+                if let Some(def) = effects::find(&ins.effect) {
+                    for prm in def.params {
+                        let v = effects::value(def, &ins.params, prm.id);
+                        if fresh || sent.builtin.get(prm.id) != Some(&v) {
+                            sent.builtin.insert(prm.id, v);
+                            changes.push((PKey::Static(prm.id), v as f64));
+                        }
+                    }
+                }
+            }
+            // Parameters edited in the host (generic editor, automation base values).
+            Some(pl) => {
+                for (id, v) in &pl.params {
+                    if fresh || sent.plugin.get(id) != Some(v) {
+                        sent.plugin.insert(*id, *v);
+                        changes.push((PKey::Num(*id), *v));
+                    }
+                }
+            }
+        }
+        if fresh || sent.tempo != bpm {
+            sent.tempo = bpm;
+            changes.push((PKey::Tempo, bpm));
+        }
+        let inbox = entry.0.clone();
+        if fresh {
+            // Nobody else has it yet: set everything directly and measure its latency.
+            let mut g = e.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut buf = [0u8; 12];
+            for (k, v) in changes {
+                match k {
+                    PKey::Static(id) => g.set_param(id, v as f32),
+                    PKey::Num(n) => g.set_param(num_str(n, &mut buf), v as f32),
+                    PKey::Tempo => g.set_tempo(v),
+                }
+            }
+            let l = g.latency();
+            inbox.latency.store(l, std::sync::atomic::Ordering::Relaxed);
+            (inbox, l)
+        } else {
+            if !changes.is_empty() {
+                inbox.push(changes);
+            }
+            let l = inbox.latency();
+            (inbox, l)
+        }
+    }
+
+    /// Queues built-in parameter values for a running insert (live knob moves). Only changed values go.
+    pub fn push_builtin(&mut self, ins: Id, def: &effects::EffectDef, params: &std::collections::BTreeMap<String, f32>) {
+        let Some((inbox, sent)) = self.inboxes.get_mut(&ins) else { return };
+        let mut changes = Vec::new();
+        for prm in def.params {
+            let v = effects::value(def, params, prm.id);
+            if sent.builtin.get(prm.id) != Some(&v) {
+                sent.builtin.insert(prm.id, v);
+                changes.push((PKey::Static(prm.id), v as f64));
+            }
+        }
+        if !changes.is_empty() {
+            inbox.push(changes);
+        }
+    }
+
+    /// Whether an effect's latency changed since the last call (the song needs a recompile).
+    pub fn latency_moved(&self) -> bool {
+        self.inboxes.values().fold(false, |any, (i, _)| i.latency_moved.swap(false, std::sync::atomic::Ordering::Relaxed) | any)
     }
 
     fn instrument(&mut self, ch: &RackChannel, rate: f32, cache: &SampleCache) -> Option<SharedInstrument> {
@@ -82,13 +253,16 @@ impl Pool {
         };
         let shared = Arc::new(Mutex::new(i));
         self.instruments.insert(ch.id, (key, shared.clone()));
+        self.applied.remove(&ch.id);
         Some(shared)
     }
 
     /// Drops processors whose owner no longer exists.
     fn retain(&mut self, effects: &HashSet<Id>, instruments: &HashSet<Id>) {
         self.effects.retain(|k, _| effects.contains(k));
+        self.inboxes.retain(|k, _| effects.contains(k));
         self.instruments.retain(|k, _| instruments.contains(k));
+        self.applied.retain(|k, _| instruments.contains(k));
     }
 
     pub fn effect_by_id(&self, id: Id) -> Option<SharedEffect> {
@@ -157,6 +331,7 @@ struct CChannel {
 struct CInsert {
     id: Id,
     effect: SharedEffect,
+    inbox: Arc<Inbox>,
     enabled: bool,
     mix: f32,
     sidechain: Option<usize>,
@@ -339,31 +514,14 @@ impl Song {
             let mut latency = 0;
             for ins in &c.inserts {
                 effect_ids.insert(ins.id);
-                let Some(e) = cx.pool.effect(ins, rate) else {
+                let Some((e, fresh)) = cx.pool.effect(ins, rate) else {
                     warnings.push(format!("Effect '{}' on '{}' could not be loaded", ins.plugin.as_ref().map(|p| p.name.as_str()).unwrap_or(&ins.effect), c.name));
                     continue;
                 };
-                {
-                    let mut g = e.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    match &ins.plugin {
-                        None => {
-                            if let Some(def) = effects::find(&ins.effect) {
-                                for prm in def.params {
-                                    g.set_param(prm.id, effects::value(def, &ins.params, prm.id));
-                                }
-                            }
-                        }
-                        // Parameters edited in the host (generic editor, automation base values).
-                        Some(pl) => {
-                            for (id, v) in &pl.params {
-                                g.set_param(&id.to_string(), *v as f32);
-                            }
-                        }
-                    }
-                    g.set_tempo(p.bpm);
-                    if ins.enabled {
-                        latency += g.latency();
-                    }
+                // Parameters reach a running effect through its inbox (never by locking it here).
+                let (inbox, lat) = cx.pool.send_params(ins, &e, fresh, p.bpm);
+                if ins.enabled {
+                    latency += lat;
                 }
                 let mods = match (&ins.plugin, effects::find(&ins.effect)) {
                     (None, Some(def)) => ins
@@ -380,7 +538,7 @@ impl Song {
                         .collect(),
                     _ => Vec::new(),
                 };
-                inserts.push(CInsert { id: ins.id, effect: e, enabled: ins.enabled, mix: ins.mix.clamp(0.0, 1.0), sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i), mods });
+                inserts.push(CInsert { id: ins.id, effect: e, inbox, enabled: ins.enabled, mix: ins.mix.clamp(0.0, 1.0), sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i), mods });
             }
             let audible = !c.muted && (!any_solo || solo_ok.contains(&i));
             strips.push(CStrip {
@@ -393,7 +551,8 @@ impl Song {
                 audible,
                 is_vca: c.kind == ChannelKind::Vca,
                 inserts,
-                sends: c.sends.iter().filter_map(|s| strip_index.get(&s.target).map(|&t| (t, s.level, s.pre_fader))).filter(|(t, _, _)| *t != i).collect(),
+                // Sidechain-only routes are not heard: the target's effects read the source as their sidechain.
+                sends: c.sends.iter().filter(|s| !s.sidechain_only).filter_map(|s| strip_index.get(&s.target).map(|&t| (t, s.level, s.pre_fader))).filter(|(t, _, _)| *t != i).collect(),
                 output: out_of(c),
                 input: c.input,
                 latency,
@@ -507,8 +666,10 @@ impl Song {
         for c in &p.channels {
             instrument_ids.insert(c.id);
             let inst = cx.pool.instrument(c, rate, cx.cache);
+            // Only an instrument whose settings changed is locked (the audio thread may be playing it).
+            let changed = cx.pool.applied.get(&c.id).is_none_or(|(i, e)| *i != c.instrument || *e != c.envelope);
             match &inst {
-                Some(i) => {
+                Some(i) if changed => {
                     let mut g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     g.update(&c.instrument, cx.cache);
                     if let Instrument::Plugin(pl) = &c.instrument {
@@ -517,10 +678,11 @@ impl Song {
                         }
                     }
                 }
+                Some(_) => {}
                 None => warnings.push(format!("Instrument of '{}' could not be loaded", c.name)),
             }
             // The sampler takes the channel envelope.
-            if let (Some(i), Instrument::Sampler(_)) = (&inst, &c.instrument) {
+            if let (Some(i), Instrument::Sampler(_), true) = (&inst, &c.instrument, changed) {
                 // Envelope is applied through a dedicated hook on the sampler.
                 let mut g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 g.set_param("__env_enabled", if c.envelope.enabled { 1.0 } else { 0.0 });
@@ -536,6 +698,9 @@ impl Song {
                 ] {
                     g.set_param(k, v);
                 }
+            }
+            if changed && inst.is_some() {
+                cx.pool.applied.insert(c.id, (c.instrument.clone(), c.envelope));
             }
             channels.push(CChannel {
                 id: c.id,
@@ -995,6 +1160,9 @@ pub struct Renderer {
     route_tmp: (Vec<f32>, Vec<f32>),
     /// Offline analysis: a loudness meter per strip, fed each strip's pre-fader signal (auto-balance).
     strip_meters: Option<Vec<LoudnessMeter>>,
+    /// The mixer stage's load (share of the block time) and whether it runs on the worker threads.
+    mix_load: f32,
+    mix_parallel: bool,
     edge_lines: HashMap<(Id, Id, bool), [DelayLine; 2]>,
     loudness: LoudnessMeter,
     pub meters: Meters,
@@ -1066,6 +1234,8 @@ impl Renderer {
             scratch: Scratch::default(),
             route_tmp: Default::default(),
             strip_meters: None,
+            mix_load: 0.0,
+            mix_parallel: false,
             edge_lines: HashMap::new(),
             ramps: Ramps::default(),
             loudness: LoudnessMeter::new(rate),
@@ -1429,6 +1599,7 @@ impl Renderer {
         }
         let pool = crate::mixpool::MixPool::global();
         let threads = pool.threads();
+        let mix_started = std::time::Instant::now();
         for &(la, lb) in &song.levels {
             let level = &song.order[la..lb];
             // ---- parallel pass: plain insert chains (no sidechain, no modulation) of this level run on all
@@ -1445,7 +1616,9 @@ impl Renderer {
                 }
                 eligible += ok as usize;
             }
-            let parallel = threads > 1 && n >= 128 && eligible >= 2;
+            // Only under load: for a light project the audio thread does it alone and never waits on
+            // another thread.
+            let parallel = threads > 1 && n >= 128 && eligible >= 2 && (self.mix_parallel || pool.always());
             if parallel {
                 for &si in level {
                     if !sc.par[si] {
@@ -1476,6 +1649,7 @@ impl Renderer {
                             let (mix, mix0) = mixes[base[si] + ii];
                             crate::fault::set_current(Some(ins.id));
                             let mut e = ins.effect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            ins.inbox.apply(&mut **e);
                             e.set_position(b0, playing);
                             if mix >= 0.999 && mix0 >= 0.999 {
                                 e.process(bl, br, None);
@@ -1584,6 +1758,7 @@ impl Renderer {
                                 e.set_param(m.info.id, m.info.denormalize(nv));
                             }
                         }
+                        ins.inbox.apply(&mut **e);
                         e.set_position(b0, playing);
                         crate::fault::set_current(Some(ins.id));
                         if mix >= 0.999 && mix0 >= 0.999 {
@@ -1667,6 +1842,20 @@ impl Renderer {
                 if let Some(o) = s.output {
                     self.route(si, o, false, 1.0, n, false);
                 }
+            }
+        }
+
+        // ---- parallel mixer on / off by load (with hysteresis): the stage's time as a share of the
+        // block, scaled up while it runs spread over the workers.
+        {
+            let budget = n as f32 / self.rate;
+            let spread = if self.mix_parallel { (threads as f32 * 0.6).max(1.0) } else { 1.0 };
+            let load = mix_started.elapsed().as_secs_f32() / budget.max(1e-6) * spread;
+            self.mix_load = self.mix_load * 0.9 + load * 0.1;
+            if self.mix_load > 0.30 {
+                self.mix_parallel = true;
+            } else if self.mix_load < 0.12 {
+                self.mix_parallel = false;
             }
         }
 
@@ -1980,6 +2169,9 @@ fn add_input(buf: &mut (Vec<f32>, Vec<f32>), src: InputSource, input: &[&[f32]],
     }
 }
 
+/// Length of the automatic de-click fades at audio clip edges (seconds).
+const DECLICK: f64 = 0.003;
+
 /// Mixes one audio clip into `[l, r)` for the time span starting at `t_start` seconds.
 fn mix_clip(c: &CClip, tempo: &TempoMap, t_start: f64, l: &mut [f32], r: &mut [f32], rate: f32) {
     let n = l.len();
@@ -1990,6 +2182,13 @@ fn mix_clip(c: &CClip, tempo: &TempoMap, t_start: f64, l: &mut [f32], r: &mut [f
     }
     let len_beats = c.end_beat - c.start_beat;
     let frames = c.data.frames() as f64;
+    // De-click only where the clip cuts into the audio: a start inside the file (slipped, trimmed or
+    // reversed), an end before the file's end. A sample's own first frame is kept (drum attacks).
+    let start_pos = if c.reverse { frames - 1.0 - c.src_offset } else { c.src_offset };
+    let end_local = (clip_end_sec - c.start_sec) * rate as f64;
+    let end_pos = if c.reverse { frames - 1.0 - (c.src_offset + end_local * c.step) } else { c.src_offset + end_local * c.step };
+    let cut_in = if c.reverse { start_pos < frames - 2.0 } else { start_pos > 0.5 };
+    let cut_out = if c.reverse { end_pos > 0.5 } else { end_pos < frames - 2.0 };
     for k in 0..n {
         let t = t_start + k as f64 / rate as f64;
         if t < c.start_sec || t >= clip_end_sec {
@@ -2001,7 +2200,10 @@ fn mix_clip(c: &CClip, tempo: &TempoMap, t_start: f64, l: &mut [f32], r: &mut [f
             continue;
         }
         let (a, b) = c.data.sample_at(pos);
-        let mut g = 1.0f32;
+        // De-click (like FL's default): 3 ms raised-cosine fades at both clip edges, so a clip that starts
+        // or ends mid-waveform does not jump.
+        let edge = (if cut_in { t - c.start_sec } else { f64::MAX }).min(if cut_out { clip_end_sec - t } else { f64::MAX });
+        let mut g = if edge < DECLICK { (0.5 - 0.5 * (std::f64::consts::PI * edge / DECLICK).cos()) as f32 } else { 1.0 };
         if c.fade_in > 0.0 || c.fade_out > 0.0 || !c.gain_line.is_empty() {
             let beat = tempo.seconds_to_beat(t) - c.start_beat;
             if c.fade_in > 0.0 && beat < c.fade_in {
@@ -2032,7 +2234,6 @@ fn gain_line_db(points: &[GainPoint], beat: f64) -> f32 {
     a.db + (b.db - a.db) * t
 }
 
-/// Builds a fresh renderer for offline work.
 /// After an insert: if its output is not finite (NaN / infinity – a blown-up filter or feedback loop),
 /// silence the block and reset the effect so it cannot poison everything after it (and every later
 /// block), and report the insert.
@@ -2049,6 +2250,7 @@ fn guard_finite(e: &mut dyn Effect, id: Id, l: &mut [f32], r: &mut [f32]) {
     }
 }
 
+/// Builds a fresh renderer for offline work.
 pub fn offline_renderer(p: &Project, cache: &SampleCache, rate: f32, pool: &mut Pool) -> Renderer {
     let stretch = StretchCache::default();
     let song = Song::compile(p, &mut CompileContext { cache, stretch: &stretch, pool, rate });
@@ -2362,7 +2564,7 @@ mod tests {
             let c = p.mixer.get_mut(ch).unwrap();
             c.main_out = false;
             c.output = None;
-            c.sends.push(MixerSend { target: b2, level: 1.0, pre_fader: false });
+            c.sends.push(MixerSend { target: b2, level: 1.0, pre_fader: false, sidechain_only: false });
         }
         p.mixer.get_mut(b2).unwrap().volume = 0.5;
         let routed = render_secs(&p, 0.3).0.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -2370,6 +2572,41 @@ mod tests {
         p.mixer.get_mut(ch).unwrap().sends.clear();
         let none = render_secs(&p, 0.3).0.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(none < 1e-6, "{none}");
+    }
+
+    /// A sidechain-only route (FL's "Sidechain to this track") is not heard in the target, but the
+    /// target's compressor reacts to it: a tone on a bus is ducked by a kick track that only sidechains.
+    #[test]
+    fn sidechain_only_route_ducks_without_being_heard() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = sine_file(dir.path(), "tone.wav", 0.3);
+        let kick = sine_file(dir.path(), "kick.wav", 1.0);
+        let mut p = Project::empty();
+        let t_tone = p.add_track("Tone");
+        let t_kick = p.add_track("Kick");
+        for (t, f) in [(t_tone, tone), (t_kick, kick)] {
+            let id = p.next_id();
+            p.track_mut(t).unwrap().clips.push(Clip { id, name: "c".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: f, ..Default::default() }) });
+        }
+        let (tone_ch, kick_ch) = (p.track(t_tone).unwrap().mixer, p.track(t_kick).unwrap().mixer);
+        // The kick: no main output, only sidechain material for the tone's channel.
+        {
+            let k = p.mixer.get_mut(kick_ch).unwrap();
+            k.main_out = false;
+            k.sends.push(MixerSend { target: tone_ch, level: 1.0, pre_fader: false, sidechain_only: true });
+        }
+        let level = |p: &Project| render_secs(p, 0.5).0[12000..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let alone = level(&p);
+        assert!(alone > 0.2 && alone < 0.4, "only the tone is heard ({alone})");
+        // A compressor on the tone's channel listening to the kick ducks it.
+        let iid = p.next_id();
+        let mut params = effects::find("compressor").unwrap().defaults();
+        params.insert("threshold".into(), -30.0);
+        params.insert("ratio".into(), 8.0);
+        params.insert("sidechain".into(), 1.0);
+        p.mixer.get_mut(tone_ch).unwrap().inserts.push(Insert { id: iid, effect: "compressor".into(), enabled: true, mix: 1.0, params, sidechain: Some(kick_ch), plugin: None, preset: String::new(), mods: Vec::new() });
+        let ducked = level(&p);
+        assert!(ducked < alone * 0.6, "ducked by the kick: {ducked} vs {alone}");
     }
 
     /// FabFilter-style modulation: a square LFO on a utility's gain makes the level jump between two

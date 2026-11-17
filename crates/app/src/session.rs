@@ -105,16 +105,19 @@ impl Session {
                 if self.live_params.get(&ins.id) == Some(&ins.params) {
                     continue;
                 }
-                if let (Some(def), Some(e)) = (dragon_engine::effects::find(&ins.effect), self.pool.effect_by_id(ins.id)) {
-                    if let Ok(mut g) = e.lock() {
-                        for prm in def.params {
-                            g.set_param(prm.id, dragon_engine::effects::value(def, &ins.params, prm.id));
-                        }
-                    }
+                // Through the effect's inbox: the audio thread applies it before the next block (the UI
+                // never locks a running effect).
+                if let Some(def) = dragon_engine::effects::find(&ins.effect) {
+                    self.pool.push_builtin(ins.id, def, &ins.params);
                 }
                 self.live_params.insert(ins.id, ins.params.clone());
             }
         }
+    }
+
+    /// Whether a running effect's latency changed (delay compensation needs a recompile).
+    pub fn latency_moved(&self) -> bool {
+        self.pool.latency_moved()
     }
 
     pub fn force_recompile(&mut self) {

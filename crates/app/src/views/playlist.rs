@@ -416,6 +416,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 
     // ----- track headers
     let header = Rect::from_min_max(Pos2::new(rect.left(), timeline.top()), Pos2::new(timeline.left(), rect.bottom()));
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("pl.header"), header));
     let mut header_ui = ui.new_child(egui::UiBuilder::new().max_rect(header));
     header_ui.set_clip_rect(header);
     for (row, t) in rows.iter().zip(&tracks) {
@@ -1135,11 +1136,43 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
 }
 
 fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
+    let tid = t.id;
+    if ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| r.contains(p))) {
+        st.ui.track = Some(tid);
+        st.ui.editor = crate::state::Editor::Playlist;
+    }
+    // Grip (the colour strip): drag up / down to move the track, live, one undo step.
+    let grip = Rect::from_min_size(r.min, Vec2::new(8.0, r.height()));
+    let gr = ui.interact(grip, egui::Id::new(("pl.grip", tid)), Sense::click_and_drag()).on_hover_text("Drag to move the track (Alt+Up / Down)");
+    if gr.hovered() || gr.dragged() {
+        ui.ctx().set_cursor_icon(if gr.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+    }
+    let acc_key = egui::Id::new(("pl.grip.acc", tid));
+    if gr.drag_started() {
+        ui.data_mut(|d| d.insert_temp(acc_key, 0.0f32));
+    }
+    if gr.dragged() {
+        let mut acc: f32 = ui.data(|d| d.get_temp(acc_key)).unwrap_or(0.0) + gr.drag_delta().y;
+        let step = r.height().max(16.0);
+        while acc.abs() >= step * 0.6 {
+            let dir = acc.signum() as i32;
+            st.session.gesture("Move track", |p| p.move_tracks(&[tid], dir));
+            acc -= step * dir as f32;
+        }
+        ui.data_mut(|d| d.insert_temp(acc_key, acc));
+    }
+    if gr.drag_stopped() {
+        st.session.end_gesture();
+    }
     let p = ui.painter();
     p.rect_filled(r.shrink2(Vec2::new(0.0, 0.5)), 0.0, theme::PANEL);
     p.rect_filled(Rect::from_min_size(r.min, Vec2::new(4.0, r.height())), 0.0, theme::rgb(t.color));
+    if gr.hovered() || gr.dragged() {
+        for k in 0..3 {
+            p.circle_filled(Pos2::new(r.left() + 5.5, r.center().y - 5.0 + k as f32 * 5.0), 1.2, theme::TEXT);
+        }
+    }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(Vec2::new(8.0, 3.0))));
-    let tid = t.id;
     child.horizontal(|ui| {
         let mut name = t.name.clone();
         let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(78.0).frame(false).font(egui::TextStyle::Small));

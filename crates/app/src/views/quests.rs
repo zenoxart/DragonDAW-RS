@@ -461,7 +461,7 @@ mod tests {
         assert!(!achieved("route", &p, &[]));
         let b = p.add_mixer_channel("Bus");
         let ch = p.mixer.channels[0].id;
-        p.mixer.get_mut(ch).unwrap().sends.push(MixerSend { target: b, level: 1.0, pre_fader: false });
+        p.mixer.get_mut(ch).unwrap().sends.push(MixerSend { target: b, level: 1.0, pre_fader: false, sidechain_only: false });
         assert!(achieved("route", &p, &[]));
         assert!(!achieved("export", &p, &[]));
         assert!(achieved("export", &p, &[Event::Exported]));

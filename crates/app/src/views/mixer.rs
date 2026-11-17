@@ -10,7 +10,7 @@ use super::widgets::{self, knob};
 use crate::state::State;
 use crate::theme;
 use dragon_engine::model::*;
-use egui::{Color32, Pos2, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
 const PANEL_W: f32 = 330.0;
 /// Height of an effect slot row.
@@ -24,6 +24,103 @@ enum Route {
     Main,
     /// A send with its level.
     Send(f32),
+    /// Sidechain material only (not heard in the target).
+    Sidechain,
+}
+
+/// Arrow colour of a sidechain-only route.
+const SIDECHAIN_COL: Color32 = Color32::from_rgb(0xb0, 0x7c, 0xff);
+
+/// The mixer tracks routing applies to: the multi-selection when the clicked track is part of it,
+/// otherwise just the selected track.
+pub(super) fn sources(st: &State) -> Vec<Id> {
+    if st.ui.mixer_sel.len() > 1 && st.ui.mixer_sel.contains(&st.ui.mixer) {
+        st.ui.mixer_sel.clone()
+    } else {
+        vec![st.ui.mixer]
+    }
+}
+
+/// Click on a strip: select it; Ctrl adds / removes it, Shift selects the range from the current one.
+fn select_strip(ui: &Ui, st: &mut State, id: Id, all: &[MixerChannel]) {
+    let m = ui.input(|i| i.modifiers);
+    if m.command {
+        if st.ui.mixer_sel.is_empty() {
+            st.ui.mixer_sel.push(st.ui.mixer);
+        }
+        if let Some(k) = st.ui.mixer_sel.iter().position(|x| *x == id) {
+            if st.ui.mixer_sel.len() > 1 {
+                st.ui.mixer_sel.remove(k);
+                if st.ui.mixer == id {
+                    st.ui.mixer = st.ui.mixer_sel[0];
+                }
+                return;
+            }
+        } else {
+            st.ui.mixer_sel.push(id);
+        }
+    } else if m.shift {
+        let a = all.iter().position(|c| c.id == st.ui.mixer).unwrap_or(0);
+        let b = all.iter().position(|c| c.id == id).unwrap_or(a);
+        st.ui.mixer_sel = all[a.min(b)..=a.max(b)].iter().map(|c| c.id).collect();
+    } else {
+        st.ui.mixer_sel = vec![id];
+    }
+    st.ui.mixer = id;
+}
+
+/// Routes (or un-routes, when the clicked source already routes there) every source to `target`.
+pub(super) fn toggle_routes(st: &mut State, srcs: &[Id], target: Id) {
+    let master = st.session.project.mixer.master.id;
+    let first = st.session.project.mixer.get(srcs[0]).map(|c| route_of(c, target, master)).unwrap_or(Route::None);
+    let add = first == Route::None;
+    st.session.edit(if srcs.len() > 1 { "Route selected tracks" } else { "Route" }, |p| {
+        for &src in srcs.iter().filter(|s| **s != target && **s != master) {
+            let Some(c) = p.mixer.get_mut(src) else { continue };
+            if c.kind == ChannelKind::Vca {
+                continue;
+            }
+            let now = route_of(c, target, master);
+            match (add, now) {
+                (true, Route::None) => {
+                    if main_target(c, master).is_none() {
+                        c.main_out = true;
+                        c.output = if target == master { None } else { Some(target) };
+                    } else {
+                        c.sends.push(MixerSend { target, level: 1.0, pre_fader: false, sidechain_only: false });
+                    }
+                }
+                (false, Route::Main) => {
+                    c.main_out = false;
+                    c.output = None;
+                }
+                (false, Route::Send(_) | Route::Sidechain) => c.sends.retain(|s| s.target != target),
+                _ => {}
+            }
+        }
+    });
+}
+
+/// FL's "Sidechain to this track": each source feeds `target` as sidechain material only (not heard
+/// there), and the target's first sidechain-capable effect without a source listens to it.
+pub(super) fn sidechain_to(st: &mut State, srcs: &[Id], target: Id) {
+    let master = st.session.project.mixer.master.id;
+    st.session.edit("Sidechain to this track", |p| {
+        let mut first_src = None;
+        for &src in srcs.iter().filter(|s| **s != target && **s != master) {
+            let Some(c) = p.mixer.get_mut(src) else { continue };
+            match c.sends.iter_mut().find(|s| s.target == target) {
+                Some(s) => s.sidechain_only = true,
+                None => c.sends.push(MixerSend { target, level: 1.0, pre_fader: false, sidechain_only: true }),
+            }
+            first_src.get_or_insert(src);
+        }
+        if let (Some(src), Some(t)) = (first_src, p.mixer.get_mut(target)) {
+            if let Some(ins) = t.inserts.iter_mut().find(|i| i.sidechain.is_none() && i.plugin.is_none() && dragon_engine::effects::find(&i.effect).is_some_and(|d| d.uses_sidechain)) {
+                ins.sidechain = Some(src);
+            }
+        }
+    });
 }
 
 fn main_target(c: &MixerChannel, master: Id) -> Option<Id> {
@@ -38,7 +135,11 @@ fn route_of(src: &MixerChannel, target: Id, master: Id) -> Route {
     if main_target(src, master) == Some(target) {
         Route::Main
     } else if let Some(s) = src.sends.iter().find(|s| s.target == target) {
-        Route::Send(s.level)
+        if s.sidechain_only {
+            Route::Sidechain
+        } else {
+            Route::Send(s.level)
+        }
     } else {
         Route::None
     }
@@ -55,32 +156,38 @@ fn toggle_route(st: &mut State, src: Id, target: Id) {
                 c.main_out = false;
                 c.output = None;
             }
-            Route::Send(_) => c.sends.retain(|s| s.target != target),
+            Route::Send(_) | Route::Sidechain => c.sends.retain(|s| s.target != target),
             Route::None => {
                 if main_target(c, master).is_none() {
                     c.main_out = true;
                     c.output = if target == master { None } else { Some(target) };
                 } else {
-                    c.sends.push(MixerSend { target, level: 1.0, pre_fader: false });
+                    c.sends.push(MixerSend { target, level: 1.0, pre_fader: false, sidechain_only: false });
                 }
             }
         }
     });
 }
 
-/// FL's "Route to this track only": the main output goes to `target`, every other route is removed.
-fn route_only(st: &mut State, src: Id, target: Id) {
+/// FL's "Route to this track only": the main output goes to `target`, every other route is removed –
+/// for every source.
+fn route_only(st: &mut State, srcs: &[Id], target: Id) {
     let master = st.session.project.mixer.master.id;
     st.session.edit("Route to this track only", |p| {
-        if let Some(c) = p.mixer.get_mut(src) {
-            c.sends.clear();
-            c.main_out = true;
-            c.output = if target == master { None } else { Some(target) };
+        for &src in srcs.iter().filter(|s| **s != target && **s != master) {
+            if let Some(c) = p.mixer.get_mut(src) {
+                c.sends.clear();
+                c.main_out = true;
+                c.output = if target == master { None } else { Some(target) };
+            }
         }
     });
 }
 
 pub fn show(ui: &mut Ui, st: &mut State) {
+    if ui.ui_contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
+        st.ui.editor = crate::state::Editor::Mixer;
+    }
     let meters = st.audio.meters().snapshot();
     let all: Vec<MixerChannel> = std::iter::once(st.session.project.mixer.master.clone()).chain(st.session.project.mixer.channels.iter().cloned()).collect();
     let master = st.session.project.mixer.master.id;
@@ -103,6 +210,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         }
                     }
                     cables(ui, st, &all, &rects, &meters);
+                    // Where each strip is (tests and tooling).
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.rects"), rects.clone()));
                     ui.vertical(|ui| {
                         if ui.add(egui::Button::new(RichText::new("+\ninsert").small()).min_size(Vec2::new(46.0, 40.0))).on_hover_text("Add a mixer insert").clicked() {
                             st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
@@ -143,16 +252,124 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
 }
 
+/// Renames a mixer track; a playlist track that carried the same name follows.
+fn rename_channel(st: &mut State, id: Id, name: String) {
+    st.session.edit("Rename mixer track", |p| {
+        let old = p.mixer.get(id).map(|c| c.name.clone()).unwrap_or_default();
+        for t in p.tracks.iter_mut().filter(|t| t.mixer == id && t.name == old) {
+            t.name = name.clone();
+        }
+        if let Some(c) = p.mixer.get_mut(id) {
+            c.name = name;
+        }
+    });
+}
+
+/// Dragging a strip's header sideways moves the track (and the other selected ones) live, one place per
+/// strip width – one undo step for the whole drag.
+fn drag_to_move(ui: &Ui, st: &mut State, r: &egui::Response, id: Id, width: f32) {
+    let acc_key = egui::Id::new(("mixer.move", id));
+    if r.drag_started() {
+        ui.data_mut(|d| d.insert_temp(acc_key, 0.0f32));
+    }
+    if r.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let mut acc: f32 = ui.data(|d| d.get_temp(acc_key)).unwrap_or(0.0) + r.drag_delta().x;
+        let step = width + 2.0;
+        let ids = if st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.len() > 1 { st.ui.mixer_sel.clone() } else { vec![id] };
+        while acc.abs() >= step * 0.6 {
+            let dir = acc.signum() as i32;
+            st.session.gesture("Move mixer track", |p| p.move_mixer_channels(&ids, dir));
+            acc -= step * dir as f32;
+        }
+        ui.data_mut(|d| d.insert_temp(acc_key, acc));
+    }
+    if r.drag_stopped() {
+        st.session.end_gesture();
+    }
+}
+
+/// Right-click menu of a strip's header / name: rename, icon, colour, move.
+fn strip_menu(ui: &mut Ui, st: &mut State, m: &MixerChannel, is_master: bool) {
+    let id = m.id;
+    if !is_master && ui.button("Rename").clicked() {
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.rename"), id));
+        ui.close_menu();
+    }
+    ui.menu_button("Icon", |ui| {
+        let auto = super::track_icons::guess(&m.name);
+        egui::Grid::new(("mixer.icons", id)).spacing(Vec2::new(4.0, 4.0)).show(ui, |ui| {
+            for (k, (key, label)) in super::track_icons::ICONS.iter().enumerate() {
+                let current = if m.icon.is_empty() { auto == *key } else { m.icon == *key };
+                let (r, resp) = ui.allocate_exact_size(Vec2::splat(30.0), Sense::click());
+                ui.painter().rect_filled(
+                    r,
+                    4.0,
+                    if current {
+                        theme::ACCENT.gamma_multiply(0.35)
+                    } else if resp.hovered() {
+                        theme::PANEL_2
+                    } else {
+                        theme::PANEL
+                    },
+                );
+                super::track_icons::draw(ui.painter(), r.shrink(6.0), key, if current { Color32::WHITE } else { theme::TEXT });
+                if resp.on_hover_text(*label).clicked() {
+                    let key = key.to_string();
+                    st.session.edit("Track icon", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.icon = key.clone()));
+                    ui.close_menu();
+                }
+                if k % 6 == 5 {
+                    ui.end_row();
+                }
+            }
+        });
+        ui.separator();
+        if ui.button(format!("Automatic (from the name){}", if auto.is_empty() { String::new() } else { format!(": {auto}") })).clicked() {
+            st.session.edit("Track icon", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.icon.clear()));
+            ui.close_menu();
+        }
+    });
+    if !is_master {
+        ui.separator();
+        let ids = if st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.len() > 1 { st.ui.mixer_sel.clone() } else { vec![id] };
+        if ui.button("Move left    Alt+Left").clicked() {
+            st.session.edit("Move mixer tracks", |p| p.move_mixer_channels(&ids, -1));
+            ui.close_menu();
+        }
+        if ui.button("Move right   Alt+Right").clicked() {
+            st.session.edit("Move mixer tracks", |p| p.move_mixer_channels(&ids, 1));
+            ui.close_menu();
+        }
+    }
+}
+
+/// A row of `content_w` points centred in `width`.
+fn centred_row(ui: &mut Ui, width: f32, content_w: f32, f: impl FnOnce(&mut Ui)) {
+    ui.allocate_ui_with_layout(Vec2::new(width, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.add_space(((width - content_w) / 2.0).max(0.0));
+        f(ui);
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &MixerChannel, all: &[MixerChannel], meters: &dragon_engine::render::MeterValues, height: f32) -> egui::Rect {
     let id = m.id;
     let master = all[0].id;
     let is_master = id == master;
     let is_sel = sel.id == id;
+    let in_sel = !is_sel && st.ui.mixer_sel.len() > 1 && st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.contains(&sel.id);
     let vca = m.kind == ChannelKind::Vca;
     let width = if is_master { 96.0 } else { 88.0 };
-    let fill = if is_sel { theme::PANEL_2 } else { theme::PANEL };
-    let frame = egui::Frame::NONE.fill(fill).stroke(Stroke::new(1.0_f32, if is_sel { theme::ACCENT } else { theme::GRID })).corner_radius(3.0).inner_margin(egui::Margin::symmetric(3, 4));
+    let fill = if is_sel || in_sel { theme::PANEL_2 } else { theme::PANEL };
+    let stroke = if is_sel {
+        Stroke::new(1.5_f32, theme::ACCENT)
+    } else if in_sel {
+        Stroke::new(1.0_f32, theme::ACCENT.gamma_multiply(0.6))
+    } else {
+        Stroke::new(1.0_f32, theme::GRID)
+    };
+    let frame = egui::Frame::NONE.fill(fill).stroke(stroke).corner_radius(3.0).inner_margin(egui::Margin::symmetric(3, 4));
     let resp = frame.show(ui, |ui| {
         ui.set_width(width);
         ui.set_min_height(height);
@@ -167,47 +384,98 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 index.to_string()
             };
             let feeds_sel = !is_sel && route_of(m, sel.id, master) != Route::None;
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(label).small().monospace().color(if is_sel { theme::ACCENT_2 } else { theme::TEXT_DIM }));
-                if feeds_sel {
-                    ui.label(RichText::new("▶").small().color(theme::OK)).on_hover_text(format!("Routes into {}", sel.name));
+            // Header: icon and number; drag it sideways to move the track.
+            // Its id follows the track (not the slot), so a drag keeps holding the moved strip.
+            let (head, _) = ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::hover());
+            let hresp = ui.interact(head, egui::Id::new(("mixer.head", id)), if is_master { Sense::click() } else { Sense::click_and_drag() });
+            {
+                let p = ui.painter();
+                let key = if m.icon.is_empty() { super::track_icons::guess(if is_master { "master" } else { &m.name }) } else { m.icon.as_str() };
+                let tcol = if is_sel { theme::ACCENT_2 } else { theme::TEXT_DIM };
+                let text = p.layout_no_wrap(label.clone(), egui::FontId::monospace(11.0), tcol);
+                let icon_w = if key.is_empty() { 0.0 } else { 18.0 };
+                let x0 = head.center().x - (icon_w + text.size().x) / 2.0;
+                if !key.is_empty() {
+                    super::track_icons::draw(p, Rect::from_min_size(Pos2::new(x0, head.top() + 2.0), Vec2::splat(15.0)), key, theme::rgb(m.color).gamma_multiply(1.4));
                 }
-            });
+                p.galley(Pos2::new(x0 + icon_w, head.center().y - text.size().y / 2.0), text, tcol);
+                if hresp.hovered() && !is_master {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+            }
+            if !is_master {
+                drag_to_move(ui, st, &hresp, id, width);
+            }
+            // (A click anywhere on the strip selects it: handled once, below.)
+            if feeds_sel {
+                ui.label(RichText::new("▶ routes here").size(8.5).color(theme::OK)).on_hover_text(format!("Routes into {}", sel.name));
+            }
             let (bar, _) = ui.allocate_exact_size(Vec2::new(width, 3.0), Sense::hover());
             ui.painter().rect_filled(bar, 1.0, theme::rgb(m.color));
-            let name = ui.add(egui::Label::new(RichText::new(&m.name).small().strong()).truncate().sense(Sense::click()));
-            if name.clicked() {
-                st.ui.mixer = id;
+            // Name: double-click renames in place; right-click for rename, icon, move.
+            let rename_key = egui::Id::new("mixer.rename");
+            if ui.data(|d| d.get_temp::<Id>(rename_key)) == Some(id) {
+                let buf_key = egui::Id::new(("mixer.rename.buf", id));
+                let mut text: String = ui.data(|d| d.get_temp(buf_key)).unwrap_or_else(|| m.name.clone());
+                let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width - 6.0).font(egui::TextStyle::Small));
+                r.request_focus();
+                if r.changed() {
+                    ui.data_mut(|d| d.insert_temp(buf_key, text.clone()));
+                }
+                let done = r.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                if done || cancel {
+                    ui.data_mut(|d| {
+                        d.remove::<Id>(rename_key);
+                        d.remove::<String>(buf_key);
+                    });
+                    let name = text.trim().to_string();
+                    if !cancel && !name.is_empty() && name != m.name {
+                        rename_channel(st, id, name);
+                    }
+                }
+            } else {
+                let name = ui.add(egui::Label::new(RichText::new(&m.name).small().strong()).truncate().sense(Sense::click())).on_hover_text("Double-click to rename, right-click for icon / move");
+                if name.double_clicked() && !is_master {
+                    ui.data_mut(|d| d.insert_temp(rename_key, id));
+                }
+                name.context_menu(|ui| strip_menu(ui, st, m, is_master));
+                hresp.context_menu(|ui| strip_menu(ui, st, m, is_master));
             }
             if !vca {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let mut pan = m.pan;
-                    let r = knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", widgets::pan_fmt);
-                    widgets::apply(st, &r, "Pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.pan = pan));
-                    r.context_menu(|ui| learn_menu(ui, st, Target::MixerPan(id)));
-                    let mut w = m.width;
-                    let r = knob(ui, &mut w, 0.0, 2.0, 1.0, "sep", widgets::pct);
-                    widgets::apply(st, &r, "Stereo separation", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.width = w));
-                });
+                // Pan above separation, each centred.
+                let mut pan = m.pan;
+                let r = knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", widgets::pan_fmt);
+                widgets::apply(st, &r, "Pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.pan = pan));
+                r.context_menu(|ui| learn_menu(ui, st, Target::MixerPan(id)));
+                let mut w = m.width;
+                let r = knob(ui, &mut w, 0.0, 2.0, 1.0, "sep", widgets::pct);
+                widgets::apply(st, &r, "Stereo separation", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.width = w));
             }
-            // Meter + fader fill the strip.
-            let fader_h = (height - if vca { 110.0 } else { 222.0 }).max(50.0);
-            ui.horizontal(|ui| {
-                ui.add_space(if is_master { 12.0 } else { 6.0 });
+            // Meter, fader and its dB scale, centred as one group; they fill the strip's height.
+            let fader_h = (height - if vca { 110.0 } else { 272.0 }).max(50.0);
+            const GROUP_W: f32 = 12.0 + 4.0 + 18.0 + 2.0 + 24.0;
+            centred_row(ui, width, GROUP_W, |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
                 let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));
                 widgets::meter(ui, l, rr, fader_h);
+                ui.add_space(4.0);
                 let mut v = m.volume;
                 let r = widgets::fader(ui, &mut v, 2.0, fader_h);
                 widgets::apply(st, &r, "Volume", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.volume = v));
                 r.context_menu(|ui| learn_menu(ui, st, Target::MixerVolume(id)));
+                ui.add_space(2.0);
+                widgets::fader_scale(ui, 2.0, fader_h);
             });
+            // The fader's level in dB (what you balance with) and the current peak.
             let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));
             let pk = dragon_engine::dsp::gain_to_db(l.max(rr).max(1e-6));
-            ui.label(RichText::new(format!("{:.1} {}", dragon_engine::dsp::gain_to_db(m.volume), if pk < -99.0 { "-∞".into() } else { format!("{pk:.0}") })).size(9.0).monospace().color(theme::meter_color(l.max(rr))));
-            ui.horizontal(|ui| {
+            let vol = dragon_engine::dsp::gain_to_db(m.volume);
+            ui.label(RichText::new(if vol < -99.0 { "-∞ dB".to_string() } else { format!("{vol:+.1} dB") }).size(11.0).monospace().strong().color(theme::TEXT)).on_hover_text("Fader level");
+            ui.label(RichText::new(if pk < -99.0 { "peak -∞".to_string() } else { format!("peak {pk:.1}") }).size(9.0).monospace().color(theme::meter_color(l.max(rr))));
+            let solo_w = if is_master { 0.0 } else { 3.0 + 22.0 };
+            centred_row(ui, width, 16.0 + solo_w, |ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                ui.add_space(if is_master { 18.0 } else { 10.0 });
                 let (lr, lresp) = ui.allocate_exact_size(Vec2::new(16.0, 16.0), Sense::click());
                 ui.painter().circle_filled(lr.center(), 5.5, if m.muted { theme::GRID_BAR } else { theme::OK });
                 ui.painter().circle_stroke(lr.center(), 6.5, Stroke::new(1.0_f32, theme::BG));
@@ -228,7 +496,7 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
         .inner
     });
     if !resp.inner && resp.response.contains_pointer() && ui.input(|i| i.pointer.primary_clicked()) && !ui.ctx().is_being_dragged(egui::Id::new(("mixer.jack", id))) {
-        st.ui.mixer = id;
+        select_strip(ui, st, id, all);
     }
     resp.response.rect
 }
@@ -357,6 +625,7 @@ fn route_arrow(ui: &mut Ui, st: &mut State, sel: &MixerChannel, target: &MixerCh
         Route::None => theme::GRID_BAR,
         Route::Main => theme::ACCENT_2,
         Route::Send(_) => theme::PLAYHEAD,
+        Route::Sidechain => SIDECHAIN_COL,
     };
     if possible {
         let c = rect.center();
@@ -376,17 +645,25 @@ fn route_arrow(ui: &mut Ui, st: &mut State, sel: &MixerChannel, target: &MixerCh
         return false;
     }
     let on_arrow = r.hovered();
+    let srcs = sources(st);
+    let who = if srcs.len() > 1 { format!("{} selected tracks", srcs.len()) } else { sel.name.clone() };
     let r = r.on_hover_text(match route {
-        Route::None => format!("Route {} ➡ {}", sel.name, target.name),
-        Route::Main => format!("{} ➡ {} (main output) – click to remove", sel.name, target.name),
-        Route::Send(l) => format!("{} ➡ {} at {:.1} dB – click to remove", sel.name, target.name, dragon_engine::dsp::gain_to_db(l)),
+        Route::None => format!("Route {who} ➡ {} (right-click: only / sidechain)", target.name),
+        Route::Main => format!("{who} ➡ {} (main output) – click to remove", target.name),
+        Route::Send(l) => format!("{who} ➡ {} at {:.1} dB – click to remove", target.name, dragon_engine::dsp::gain_to_db(l)),
+        Route::Sidechain => format!("{who} ➡ {} as sidechain only (not heard there) – click to remove", target.name),
     });
     if r.clicked() {
-        toggle_route(st, sel.id, tid);
+        toggle_routes(st, &srcs, tid);
     }
     r.context_menu(|ui| {
-        if ui.button("Route to this track only").clicked() {
-            route_only(st, sel.id, tid);
+        let plural = if srcs.len() > 1 { "selected tracks" } else { "this track" };
+        if ui.button(format!("Route {plural} to this track only")).clicked() {
+            route_only(st, &srcs, tid);
+            ui.close_menu();
+        }
+        if ui.button(format!("Sidechain {plural} to this track")).on_hover_text("Sidechain material only: not heard in this track's mix; its compressor / gate / other sidechain effect listens to it").clicked() {
+            sidechain_to(st, &srcs, tid);
             ui.close_menu();
         }
         if let Route::Send(_) = route {

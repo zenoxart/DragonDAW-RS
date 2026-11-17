@@ -37,6 +37,8 @@ pub struct MixPool {
     shared: Arc<Shared>,
     workers: usize,
     enabled: AtomicBool,
+    /// Use the workers whatever the load (tests and benchmarks).
+    always: AtomicBool,
     /// One `run` at a time owns the workers; a concurrent caller (an export or analysis render next to
     /// the live audio thread) runs its job on its own thread instead.
     busy: AtomicBool,
@@ -59,7 +61,7 @@ impl MixPool {
             let sh = shared.clone();
             let _ = std::thread::Builder::new().name(format!("dragon-mix-{k}")).spawn(move || worker(sh));
         }
-        MixPool { shared, workers, enabled: AtomicBool::new(true), busy: AtomicBool::new(false) }
+        MixPool { shared, workers, enabled: AtomicBool::new(true), always: AtomicBool::new(false), busy: AtomicBool::new(false) }
     }
 
     /// The shared pool: one worker per spare core (the audio thread is the last one), at most 15.
@@ -82,6 +84,16 @@ impl MixPool {
     }
 
     /// Turns parallel mixing on or off (off: everything runs on the calling thread).
+    /// Use the workers on every block, not only under load (the renderer otherwise switches the
+    /// parallel mixer on only when the insert chains need more than a quarter of the block's time).
+    pub fn set_always(&self, on: bool) {
+        self.always.store(on, Ordering::Relaxed);
+    }
+
+    pub fn always(&self) -> bool {
+        self.always.load(Ordering::Relaxed)
+    }
+
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::Relaxed);
     }
@@ -169,6 +181,7 @@ impl Drop for MixPool {
 
 fn worker(sh: Arc<Shared>) {
     crate::dsp::denormal::flush_to_zero();
+    promote_to_audio_priority();
     let mut seen = sh.generation.load(Ordering::SeqCst);
     loop {
         // Wait for a new generation: spin a little (blocks come every few ms while playing), then sleep.
@@ -210,6 +223,55 @@ fn worker(sh: Arc<Shared>) {
             }
         }
         sh.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Raises the calling thread to the audio thread's priority class, so the OS does not pause a worker in
+/// the middle of a strip the audio thread is waiting for. Failures are ignored (normal priority then).
+fn promote_to_audio_priority() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadPriority(h: *mut std::ffi::c_void, p: i32) -> i32;
+        }
+        #[link(name = "avrt")]
+        extern "system" {
+            fn AvSetMmThreadCharacteristicsW(task: *const u16, index: *mut u32) -> *mut std::ffi::c_void;
+        }
+        let task: Vec<u16> = "Pro Audio\0".encode_utf16().collect();
+        let mut index = 0u32;
+        // SAFETY: plain Win32 calls on the current thread with valid arguments.
+        unsafe {
+            AvSetMmThreadCharacteristicsW(task.as_ptr(), &mut index);
+            SetThreadPriority(GetCurrentThread(), 15); // THREAD_PRIORITY_TIME_CRITICAL
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos: u32, rel: i32) -> i32;
+        }
+        // SAFETY: sets this thread's QoS class (QOS_CLASS_USER_INTERACTIVE).
+        unsafe {
+            pthread_set_qos_class_self_np(0x21, 0);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        #[repr(C)]
+        struct SchedParam {
+            sched_priority: i32,
+        }
+        extern "C" {
+            fn pthread_self() -> usize;
+            fn pthread_setschedparam(t: usize, policy: i32, p: *const SchedParam) -> i32;
+        }
+        // SAFETY: SCHED_FIFO (1) for this thread; refused without the right to (then nothing changes).
+        unsafe {
+            pthread_setschedparam(pthread_self(), 1, &SchedParam { sched_priority: 70 });
+        }
     }
 }
 

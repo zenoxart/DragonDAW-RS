@@ -212,6 +212,9 @@ impl DragonApp {
         }
         self.st.autosave_tick();
         self.st.poll_auto_balance();
+        if self.st.session.latency_moved() {
+            self.st.session.force_recompile();
+        }
         self.st.audio_watchdog();
         // Keep the watchdog running while the window is idle.
         ctx.request_repaint_after(std::time::Duration::from_millis(500));

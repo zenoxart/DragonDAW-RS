@@ -24,6 +24,7 @@ pub mod project;
 pub mod quests;
 pub mod rack;
 pub mod reference;
+pub mod track_icons;
 pub mod transport;
 pub mod video;
 pub mod widgets;

@@ -94,6 +94,8 @@ pub enum Editor {
     PianoRoll,
     /// The channel rack (number keys mute / solo channels there).
     Rack,
+    /// The mixer (Alt+Left / Right move the selected tracks there).
+    Mixer,
 }
 
 /// Copied clips (with their track index) or notes.
@@ -108,6 +110,10 @@ pub struct UiState {
     pub channel: Option<Id>,
     pub piano_channel: Option<Id>,
     pub mixer: Id,
+    /// Mixer tracks selected together with `mixer` (Ctrl / Shift + click); routing applies to all of them.
+    pub mixer_sel: Vec<Id>,
+    /// The playlist track last clicked (its header).
+    pub track: Option<Id>,
     pub clips: Vec<Id>,
     pub notes: Vec<usize>,
     pub tool: Tool,
@@ -218,6 +224,8 @@ impl UiState {
             channel: p.channels.first().map(|c| c.id),
             piano_channel: p.channels.first().map(|c| c.id),
             mixer: p.mixer.master.id,
+            mixer_sel: Vec::new(),
+            track: None,
             clips: Vec::new(),
             notes: Vec::new(),
             tool: Tool::Draw,
@@ -422,7 +430,7 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
 impl State {
     pub fn new(ctx: AppContext, settings: Settings) -> Self {
         let kit = default_kit(&ctx.paths);
-        let mut session = Session::new(starter_project(&kit), None);
+        let mut session = Session::new(Project::empty(), None);
         session.history.limit = settings.undo_limit;
         let song = session.compile(48000.0);
         let audio = Audio::start(&settings.device, song);
@@ -742,7 +750,13 @@ impl State {
 
     // ------------------------------------------------------------------------------------ files
 
+    /// File → New: a fully empty project.
     pub fn new_project(&mut self) {
+        self.replace_session(Session::new(Project::empty(), None));
+    }
+
+    /// File → New with demo beat: drums, bass, lead, a reverb bus and a limiter on the master.
+    pub fn new_demo_project(&mut self) {
         self.replace_session(Session::new(starter_project(&self.kit), None));
     }
 
@@ -1273,8 +1287,11 @@ impl State {
         let mut edits: Vec<(EditorKey, Vec<(u32, f64)>)> = Vec::new();
         self.ui.native_editors.retain(|key @ (owner, ins)| {
             let (open, e) = match ins {
-                Some(i) => pool.effect_by_id(*i).and_then(|e| e.lock().ok().map(|mut g| (g.idle(), g.take_param_edits()))).unwrap_or((false, Vec::new())),
-                None => pool.instrument_by_id(*owner).and_then(|e| e.lock().ok().map(|mut g| (g.idle(), g.take_param_edits()))).unwrap_or((false, Vec::new())),
+                // try_lock: while the audio thread is processing the plugin, its GUI idles next frame
+                // (the UI never makes the audio thread wait).
+                // Busy (locked) counts as still open; a processor that is gone closes its editor.
+                Some(i) => pool.effect_by_id(*i).map(|e| e.try_lock().map(|mut g| (g.idle(), g.take_param_edits())).unwrap_or((true, Vec::new()))).unwrap_or((false, Vec::new())),
+                None => pool.instrument_by_id(*owner).map(|e| e.try_lock().map(|mut g| (g.idle(), g.take_param_edits())).unwrap_or((true, Vec::new()))).unwrap_or((false, Vec::new())),
             };
             if !e.is_empty() {
                 edits.push((*key, e));
@@ -1508,6 +1525,7 @@ mod tests {
     fn control_surface_moves_faders_and_toggles_tracks() {
         use dragon_engine::midi::McuAction;
         let mut st = State::new(redhive_client_framework::AppContext::new("en"), Settings { show_splash: false, ..Settings::default() });
+        st.new_demo_project();
         let t0 = st.session.project.tracks[0].clone();
         assert!(st.apply_mcu(McuAction::Fader { strip: 0, value: 0.75 }));
         st.session.end_gesture();

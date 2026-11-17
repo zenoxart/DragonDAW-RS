@@ -71,6 +71,12 @@ fn main() -> eframe::Result {
             st.crash = crashed;
             // DRAGON_OPEN_FX=<effect id> adds that stock effect to the master and opens its editor
             // (used for documentation screenshots).
+            // DRAGON_STARTUP_COMMANDS=<id>,<id>… runs commands at startup (e.g. "file.new_demo,view.mixer").
+            if let Ok(list) = std::env::var("DRAGON_STARTUP_COMMANDS") {
+                for id in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    commands::execute(&mut st, id, &cc.egui_ctx);
+                }
+            }
             if let Ok(id) = std::env::var("DRAGON_OPEN_FX") {
                 st.open_effect_on_master(&id);
             }

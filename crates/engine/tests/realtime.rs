@@ -128,6 +128,7 @@ fn render_does_not_allocate_while_playing() {
 
 #[test]
 fn two_hundred_stock_effects_run_in_real_time() {
+    let _turn = TIMING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let p = busy_project(dir.path(), 20, 10);
     let count: usize = p.mixer.all().map(|m| m.inserts.len()).sum();
@@ -203,6 +204,7 @@ fn parallel_mixer_matches_sequential() {
     let p = busy_project(dir.path(), 8, 4);
     let render = |parallel: bool| {
         dragon_engine::mixpool::MixPool::global().set_enabled(parallel);
+        dragon_engine::mixpool::MixPool::global().set_always(parallel);
         let cache = SampleCache::default();
         let mut fx = Pool::new();
         let mut r = offline_renderer(&p, &cache, 48000.0, &mut fx);
@@ -212,6 +214,7 @@ fn parallel_mixer_matches_sequential() {
             r.render(a, b, &[]);
         }
         dragon_engine::mixpool::MixPool::global().set_enabled(true);
+        dragon_engine::mixpool::MixPool::global().set_always(false);
         (l, rr)
     };
     let (sl, sr) = render(false);
@@ -292,6 +295,7 @@ fn silent_tail_cost() {
 /// audio: the CPU stays flat when a sound stops.
 #[test]
 fn silent_tails_do_not_spike_the_cpu() {
+    let _turn = TIMING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if cfg!(debug_assertions) {
         return;
     }
@@ -304,7 +308,9 @@ fn silent_tails_do_not_spike_the_cpu() {
             let mut e = dragon_engine::effects::create(def.id, rate, &def.defaults()).unwrap();
             let mut seed = 1u32;
             let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
-            let mut busy = std::time::Duration::ZERO;
+            // The fastest block of each phase: a denormal slowdown hits every block, preemption by other
+            // threads (tests run side by side) does not.
+            let mut busy = std::time::Duration::MAX;
             for _ in 0..40 {
                 for k in 0..n {
                     seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -313,21 +319,21 @@ fn silent_tails_do_not_spike_the_cpu() {
                 }
                 let t = std::time::Instant::now();
                 e.process(&mut l, &mut r, None);
-                busy += t.elapsed();
+                busy = busy.min(t.elapsed());
             }
             let blocks = (12.0 * rate) as usize / n;
             let last = (2.0 * rate) as usize / n;
-            let mut tail = std::time::Duration::ZERO;
+            let mut tail = std::time::Duration::MAX;
             for b in 0..blocks {
                 l.fill(0.0);
                 r.fill(0.0);
                 let t = std::time::Instant::now();
                 e.process(&mut l, &mut r, None);
                 if b >= blocks - last {
-                    tail += t.elapsed();
+                    tail = tail.min(t.elapsed());
                 }
             }
-            let (busy, tail) = (busy.as_secs_f64() / 40.0, tail.as_secs_f64() / last as f64);
+            let (busy, tail) = (busy.as_secs_f64(), tail.as_secs_f64());
             if tail > busy * 3.0 + 20e-6 {
                 slow.push(format!("{} busy {:.1} us tail {:.1} us", def.id, busy * 1e6, tail * 1e6));
             }
@@ -337,6 +343,9 @@ fn silent_tails_do_not_spike_the_cpu() {
     .join()
     .unwrap();
 }
+
+/// Timing tests take turns (run side by side they would measure each other).
+static TIMING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Boom {
     blocks: usize,
@@ -391,6 +400,7 @@ fn a_panicking_effect_is_caught_and_named() {
         std::thread::spawn(move || {
             let _ = dir;
             dragon_engine::mixpool::MixPool::global().set_enabled(parallel);
+            dragon_engine::mixpool::MixPool::global().set_always(parallel);
             let cache = SampleCache::default();
             let mut fx = Pool::with_plugins(Box::new(BoomFactory));
             let mut r = offline_renderer(&p, &cache, 48000.0, &mut fx);
@@ -407,6 +417,7 @@ fn a_panicking_effect_is_caught_and_named() {
                 }
             }
             dragon_engine::mixpool::MixPool::global().set_enabled(true);
+            dragon_engine::mixpool::MixPool::global().set_always(false);
             let _ = tx.send((caught, dragon_engine::fault::take()));
         });
         let (caught, fault) = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the render did not hang");
@@ -505,4 +516,123 @@ fn playback_stress_never_panics() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Recompiling while playing (a knob drag recompiles every 40 ms) does not click: a sustained tone through
+/// a track with an EQ, compressor and delay, the song swapped every 40 ms with a slightly different EQ
+/// gain and fader, shows no discontinuity in the output.
+#[test]
+fn recompiles_while_playing_do_not_click() {
+    let dir = tempfile::tempdir().unwrap();
+    let rate = 48000.0f32;
+    let src = dir.path().join("tone.wav");
+    let s: Vec<f32> = (0..(rate as usize * 4)).map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 220.0 / rate).sin() * 0.4).collect();
+    dragon_engine::samples::write_wav(&src, &s, &s, rate as u32, dragon_engine::samples::BitDepth::Float32, false, false).unwrap();
+    let mut p = Project::empty();
+    p.bpm = 120.0;
+    let t = p.add_track("Tone");
+    let id = p.next_id();
+    p.track_mut(t).unwrap().clips.push(Clip { id, name: "tone".into(), start: 0.0, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: src, ..Default::default() }) });
+    let m = p.track(t).unwrap().mixer;
+    for fx in ["eq", "compressor", "delay"] {
+        let iid = p.next_id();
+        let def = dragon_engine::effects::find(fx).unwrap();
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: fx.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+    }
+    let cache = SampleCache::default();
+    let stretch = dragon_engine::render::StretchCache::default();
+    let mut pool = Pool::new();
+    let mut r = offline_renderer(&p, &cache, rate, &mut pool);
+    r.play(PlayMode::Song);
+    let mut out = Vec::new();
+    let (mut l, mut rr) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+    // 3 s in 10 ms blocks; a recompile every 4th block (40 ms) with a small change.
+    for b in 0..300 {
+        if b % 4 == 0 && b > 20 {
+            let k = (b / 4) as f32;
+            let eq = &mut p.mixer.get_mut(m).unwrap().inserts[0];
+            eq.params.insert("b3_gain".into(), (k * 0.37).sin() * 3.0);
+            p.mixer.get_mut(m).unwrap().volume = 0.7 + (k * 0.21).sin() * 0.05;
+            let song = dragon_engine::render::Song::compile(&p, &mut dragon_engine::render::CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate });
+            let _old = r.set_song(std::sync::Arc::new(song));
+        }
+        r.render(&mut l, &mut rr, &[]);
+        out.extend_from_slice(&l);
+    }
+    // Clicks: the second difference of a 220 Hz tone is tiny; a step stands out. Skip the clip's start.
+    let body = &out[(rate * 0.5) as usize..];
+    let peak = body.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let worst = body.windows(3).map(|w| (w[2] - 2.0 * w[1] + w[0]).abs()).fold(0.0f32, f32::max);
+    // A pure 220 Hz sine of amplitude A has a second difference of at most A·(2π·220/48000)² ≈ 0.0008·A.
+    assert!(peak > 0.05, "the tone plays ({peak})");
+    assert!(worst < peak * 0.01, "discontinuity {worst} at peak {peak}");
+}
+
+/// Edges that commonly click: an audio clip starting and ending in the middle of a waveform, a sampler
+/// retriggered on its own still-sounding note (voice stealing), short notes cut by their note-off.
+/// The largest step in the output must stay far below the signal (a de-click fade at every edge).
+#[test]
+fn clip_and_note_edges_do_not_click() {
+    let dir = tempfile::tempdir().unwrap();
+    let rate = 48000.0f32;
+    let tone = |name: &str, hz: f32| {
+        let p = dir.path().join(name);
+        let s: Vec<f32> = (0..(rate as usize * 2)).map(|i| (i as f32 * 2.0 * std::f32::consts::PI * hz / rate).sin() * 0.5).collect();
+        dragon_engine::samples::write_wav(&p, &s, &s, rate as u32, dragon_engine::samples::BitDepth::Float32, false, false).unwrap();
+        p
+    };
+    let worst_step = |p: &Project| {
+        let cache = SampleCache::default();
+        let mut pool = Pool::new();
+        let mut r = offline_renderer(p, &cache, rate, &mut pool);
+        r.play(PlayMode::Song);
+        let mut out = Vec::new();
+        let (mut l, mut rr) = (vec![0.0f32; 256], vec![0.0f32; 256]);
+        for _ in 0..(rate as usize * 3 / 256) {
+            r.render(&mut l, &mut rr, &[]);
+            out.extend_from_slice(&l);
+        }
+        let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        // A 110 Hz sine's sample-to-sample step is at most 2π·110/48000·A ≈ 0.0144·A; a click jumps by A.
+        let step = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        (step, peak)
+    };
+    // 1. Audio clip cut in the middle of the wave at both ends (offset start, end mid-cycle).
+    let mut p = Project::empty();
+    let t = p.add_track("A");
+    let id = p.next_id();
+    p.track_mut(t).unwrap().clips.push(Clip {
+        id,
+        name: "a".into(),
+        start: 0.5,
+        length: 1.37,
+        muted: false,
+        color: Rgb::default(),
+        kind: ClipKind::Audio(AudioClip { source: tone("a.wav", 110.0), offset: 0.0123, ..Default::default() }),
+    });
+    let (step, peak) = worst_step(&p);
+    assert!(peak > 0.2 && step < peak * 0.05, "audio clip edges: step {step} at peak {peak}");
+    // 2. Sampler retriggered on its own ringing note, and notes cut short.
+    let mut p = Project::empty();
+    let ch = p.add_channel("S", Instrument::Sampler(SamplerParams { path: tone("s.wav", 110.0), ..Default::default() }));
+    let pat = p.patterns[0].id;
+    let notes: Vec<Note> = (0..12).map(|k| Note { pitch: 60, start: k * PPQ / 3, length: PPQ / 5 + (k % 3) * PPQ / 2, ..Note::default() }).collect();
+    p.patterns[0].channels.insert(ch, PatternChannel { steps: vec![], notes });
+    let t = p.add_track("P");
+    let id = p.next_id();
+    p.track_mut(t).unwrap().clips.push(Clip { id, name: "p".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+    let (step, peak) = worst_step(&p);
+    assert!(peak > 0.2 && step < peak * 0.05, "sampler retriggers and note-offs: step {step} at peak {peak}");
+    // 3. The synth: legato overlaps and voice stealing at polyphony 1.
+    let mut p = Project::empty();
+    let ch = p.add_channel("Syn", Instrument::Synth(SynthParams { polyphony: 1, ..Default::default() }));
+    let pat = p.patterns[0].id;
+    let notes: Vec<Note> = (0..12).map(|k| Note { pitch: 40 + (k as u8 * 5) % 12, start: k * PPQ / 3, length: PPQ / 2, ..Note::default() }).collect();
+    p.patterns[0].channels.insert(ch, PatternChannel { steps: vec![], notes });
+    let t = p.add_track("P");
+    let id = p.next_id();
+    p.track_mut(t).unwrap().clips.push(Clip { id, name: "p".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+    let (step, peak) = worst_step(&p);
+    // The default synth is a saw: its own wave has a full-scale step per cycle, so judge against that.
+    assert!(peak > 0.05 && step < peak * 2.2, "synth stealing: step {step} at peak {peak}");
 }
