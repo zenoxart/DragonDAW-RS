@@ -88,6 +88,57 @@ pub fn delete_clips(p: &mut Project, ids: &[Id]) {
 }
 
 /// Shuffle edit: moves every clip on the track that starts at or after `from` by `delta` beats.
+/// Moves the clips `ids` (all on the track `from`) onto a new track right below it, in an edit group with
+/// it and routed to the same mixer channel. The source track joins the group (or brings its group).
+/// Returns the new track.
+pub fn clips_to_grouped_track(p: &mut Project, from: Id, ids: &[Id]) -> Option<Id> {
+    let fi = p.tracks.iter().position(|t| t.id == from)?;
+    if !p.tracks[fi].clips.iter().any(|c| ids.contains(&c.id)) {
+        return None;
+    }
+    let group = match p.tracks[fi].group {
+        Some(g) => g,
+        None => {
+            let g = p.next_id();
+            p.tracks[fi].group = Some(g);
+            g
+        }
+    };
+    let id = p.next_id();
+    let src = &p.tracks[fi];
+    let n = p.tracks.iter().filter(|t| t.group == Some(group)).count() + 1;
+    let mut t = Track {
+        id,
+        name: format!("{} {n}", src.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ')),
+        color: src.color,
+        height: src.height,
+        muted: src.muted,
+        solo: src.solo,
+        armed: false,
+        input: src.input,
+        monitor: src.monitor,
+        mixer: src.mixer,
+        clips: Vec::new(),
+        takes: Vec::new(),
+        show_takes: false,
+        group: Some(group),
+        pinned: false,
+    };
+    let src = &mut p.tracks[fi];
+    let mut k = 0;
+    while k < src.clips.len() {
+        if ids.contains(&src.clips[k].id) {
+            t.clips.push(src.clips.remove(k));
+        } else {
+            k += 1;
+        }
+    }
+    // Right below the last track of its group.
+    let at = p.tracks.iter().rposition(|x| x.group == Some(group)).map(|i| i + 1).unwrap_or(fi + 1);
+    p.tracks.insert(at, t);
+    Some(id)
+}
+
 pub fn shuffle(p: &mut Project, track: Id, from: f64, delta: f64) {
     if let Some(t) = p.track_mut(track) {
         for c in t.clips.iter_mut().filter(|c| c.start >= from - 1e-9) {

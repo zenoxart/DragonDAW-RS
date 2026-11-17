@@ -13,7 +13,109 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         meters(ui, st);
         ui.separator();
+        master_chain(ui, st);
+        ui.separator();
         super::reference::show(ui, st);
+    });
+}
+
+/// The master's effect chain: a signal-flow strip (click a block to open it, its switch bypasses it) and
+/// the full slot list (add, drag to reorder, chains, sidechains) as in the mixer.
+fn master_chain(ui: &mut Ui, st: &mut State) {
+    let meters = st.audio.meters().snapshot();
+    let all: Vec<dragon_engine::model::MixerChannel> = std::iter::once(st.session.project.mixer.master.clone()).chain(st.session.project.mixer.channels.iter().cloned()).collect();
+    let master = all[0].clone();
+    ui.heading("Master chain");
+    flow(ui, st, &master, &meters);
+    ui.add_space(6.0);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(380.0);
+            super::mixer::insert_panel(ui, st, &master, &all, &meters);
+        });
+    });
+}
+
+/// IN → effect → effect → … → OUT, one block per insert.
+fn flow(ui: &mut Ui, st: &mut State, master: &dragon_engine::model::MixerChannel, meters: &dragon_engine::render::MeterValues) {
+    let mid = master.id;
+    let pill = |ui: &mut Ui, text: &str| {
+        egui::Frame::NONE.fill(egui::Color32::from_white_alpha(14)).stroke(Stroke::new(1.0_f32, egui::Color32::from_white_alpha(30))).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+            ui.label(RichText::new(text).strong().size(12.0));
+        });
+    };
+    let arrow = |ui: &mut Ui| {
+        let (r, _) = ui.allocate_exact_size(Vec2::new(26.0, 56.0), egui::Sense::hover());
+        let y = r.center().y;
+        let p = ui.painter();
+        p.line_segment([Pos2::new(r.left() + 3.0, y), Pos2::new(r.right() - 4.0, y)], Stroke::new(1.5_f32, theme::TEXT_DIM));
+        p.line_segment([Pos2::new(r.right() - 9.0, y - 4.0), Pos2::new(r.right() - 4.0, y)], Stroke::new(1.5_f32, theme::TEXT_DIM));
+        p.line_segment([Pos2::new(r.right() - 9.0, y + 4.0), Pos2::new(r.right() - 4.0, y)], Stroke::new(1.5_f32, theme::TEXT_DIM));
+    };
+    egui::ScrollArea::horizontal().id_salt("master.flow").max_height(64.0).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_height(60.0);
+            ui.spacing_mut().item_spacing.x = 0.0;
+            pill(ui, "IN");
+            for ins in &master.inserts {
+                arrow(ui);
+                let iid = ins.id;
+                let def = dragon_engine::effects::find(&ins.effect);
+                let cat = def.map(|d| d.category).unwrap_or("Plugin");
+                let col = super::mixer::category_color(cat);
+                let name = match &ins.plugin {
+                    Some(p) => p.name.clone(),
+                    None => def.map(|d| d.name.to_string()).unwrap_or_else(|| ins.effect.clone()),
+                };
+                let (r, resp) = ui.allocate_exact_size(Vec2::new(132.0, 56.0), egui::Sense::click());
+                let p = ui.painter();
+                let on = ins.enabled;
+                p.rect_filled(r, 6.0, if resp.hovered() { theme::PANEL.gamma_multiply(1.4) } else { theme::PANEL });
+                p.rect_stroke(r, 6.0, Stroke::new(1.0_f32, col.gamma_multiply(if on { 0.8 } else { 0.25 })), egui::StrokeKind::Inside);
+                p.rect_filled(egui::Rect::from_min_size(r.min, Vec2::new(r.width(), 4.0)), egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, if on { col } else { theme::GRID_BAR });
+                p.text(Pos2::new(r.left() + 8.0, r.top() + 12.0), egui::Align2::LEFT_TOP, &name, egui::FontId::proportional(12.0), if on { theme::TEXT } else { theme::TEXT_DIM });
+                let gr = meters.gain_reduction.get(&iid).copied().unwrap_or(0.0);
+                let info = if !on {
+                    "bypassed".to_string()
+                } else if gr > 0.05 {
+                    format!("−{gr:.1} dB")
+                } else {
+                    cat.to_lowercase()
+                };
+                p.text(Pos2::new(r.left() + 8.0, r.bottom() - 8.0), egui::Align2::LEFT_BOTTOM, info, egui::FontId::monospace(10.0), if gr > 0.05 && on { theme::WARN } else { theme::TEXT_DIM });
+                // Bypass switch in the corner.
+                let sw = egui::Rect::from_center_size(Pos2::new(r.right() - 14.0, r.bottom() - 14.0), Vec2::splat(16.0));
+                let sresp = ui.interact(sw, egui::Id::new(("master.flow.on", iid)), egui::Sense::click()).on_hover_text(if on { "Bypass" } else { "Switch on" });
+                p.circle_stroke(sw.center(), 6.0, Stroke::new(1.5_f32, if on { theme::OK } else { theme::TEXT_DIM }));
+                p.line_segment([sw.center() - Vec2::new(0.0, 7.0), sw.center() - Vec2::new(0.0, 2.0)], Stroke::new(1.5_f32, if on { theme::OK } else { theme::TEXT_DIM }));
+                if sresp.clicked() {
+                    st.session.edit("Bypass effect", |p| {
+                        if let Some(i) = p.mixer.master.inserts.iter_mut().find(|i| i.id == iid) {
+                            i.enabled = !i.enabled;
+                        }
+                    });
+                } else if resp.clicked() && !st.ui.effect_windows.contains(&(mid, iid)) {
+                    st.ui.effect_windows.push((mid, iid));
+                }
+                resp.on_hover_text("Click to open; the switch bypasses it").context_menu(|ui| {
+                    if ui.button("Open").clicked() {
+                        if !st.ui.effect_windows.contains(&(mid, iid)) {
+                            st.ui.effect_windows.push((mid, iid));
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Remove").clicked() {
+                        st.session.edit("Remove effect", |p| p.mixer.master.inserts.retain(|i| i.id != iid));
+                        ui.close_menu();
+                    }
+                });
+            }
+            arrow(ui);
+            let tp = meters.true_peak;
+            pill(ui, &if meters.momentary > -69.0 { format!("OUT  {tp:+.1} dBTP") } else { "OUT".into() });
+            ui.add_space(10.0);
+            super::mixer::add_effect_menu(ui, st, mid, "＋ Add effect", None);
+        });
     });
 }
 

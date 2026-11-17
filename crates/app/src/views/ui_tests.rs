@@ -1583,3 +1583,43 @@ fn export_window_presets_and_result() {
     assert!(files.iter().any(|f| f.ends_with("Untitled.wav") && f.exists()), "{files:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Cut a clip, drag one piece below the last track: it lands on a new track grouped with its own track and
+/// routed to the same mixer channel; one undo puts everything back.
+#[test]
+fn a_cut_piece_dragged_below_the_tracks_gets_a_grouped_track() {
+    let mut h = Harness::new();
+    let pat = h.st.session.project.patterns[0].id;
+    let t0 = h.st.session.project.tracks[0].id;
+    h.st.session.edit("setup", |p| {
+        p.tracks.truncate(1);
+        p.tracks[0].clips.clear();
+        super::playlist::place_pattern(p, t0, pat, 0.0, 8.0);
+        let c = p.tracks[0].clips[0].id;
+        dragon_engine::edit::split_clip(p, t0, c, 4.0);
+    });
+    let undo_depth = h.st.session.history.undo_len();
+    h.st.ui.tool = Tool::Draw;
+    h.st.ui.pl_x = 0.0;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
+    let x = t.left() + 6.0 * h.st.ui.playlist_zoom;
+    let from = Pos2::new(x, t.top() + row_h / 2.0);
+    let to = Pos2::new(x, t.top() + row_h + 30.0);
+    assert!(to.y < t.bottom(), "room below the track");
+    h.drag(playlist, from, to, PointerButton::Primary, Modifiers::NONE);
+    let p = &h.st.session.project;
+    assert_eq!(p.tracks.len(), 2, "a new track");
+    let (a, b) = (&p.tracks[0], &p.tracks[1]);
+    assert!(a.group.is_some() && a.group == b.group, "grouped with its track");
+    assert_eq!(a.mixer, b.mixer, "routed to the same mixer channel");
+    assert_eq!(a.clips.iter().map(|c| c.start).collect::<Vec<_>>(), vec![0.0]);
+    assert_eq!(b.clips.iter().map(|c| c.start).collect::<Vec<_>>(), vec![4.0], "the dragged piece, on time");
+    h.st.session.compile(48000.0);
+    // One undo step.
+    assert_eq!(h.st.session.history.undo_len(), undo_depth + 1);
+    h.st.session.undo();
+    assert_eq!(h.st.session.project.tracks.len(), 1);
+    assert_eq!(h.st.session.project.tracks[0].clips.len(), 2);
+}

@@ -36,6 +36,10 @@ impl History {
         self.revision += 1;
     }
 
+    /// How many steps can be undone.
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
     pub fn undo(&mut self, current: &mut Project) -> Option<String> {
         let (label, prev) = self.undo.pop()?;
         let now = std::mem::replace(current, prev);

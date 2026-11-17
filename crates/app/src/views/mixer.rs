@@ -743,7 +743,7 @@ fn effect_name(ins: &Insert) -> String {
 }
 
 /// The selected insert: effect slots, routing and options.
-fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChannel], meters: &dragon_engine::render::MeterValues) {
+pub(super) fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChannel], meters: &dragon_engine::render::MeterValues) {
     let id = m.id;
     let master = all[0].id;
     let is_master = id == master;

@@ -436,6 +436,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.label(RichText::new(format!("{} tracks", tracks.len())).small().color(theme::TEXT_DIM));
     });
 
+    if st.ui.pl_drag.is_none() {
+        ui.data_mut(|dd| dd.remove::<bool>(egui::Id::new("pl.spawned")));
+    }
+    // While clips are dragged: below the last track, a new grouped track awaits them.
+    if let (Some(d), Some(pos)) = (st.ui.pl_drag, ui.input(|i| i.pointer.interact_pos())) {
+        if matches!(d.kind, DragKind::Move { .. }) && pos.y > content_bottom + 4.0 && timeline.contains(pos) && !ui.data(|dd| dd.get_temp::<bool>(egui::Id::new("pl.spawned")).unwrap_or(false)) {
+            let zone = Rect::from_min_max(Pos2::new(timeline.left() + 2.0, content_bottom + 2.0), Pos2::new(timeline.right() - 2.0, (content_bottom + 56.0).min(timeline.bottom())));
+            let p = ui.painter();
+            p.rect_filled(zone, 6.0, theme::ACCENT.gamma_multiply(0.12));
+            p.extend(egui::Shape::dashed_line(&[zone.left_top(), zone.right_top(), zone.right_bottom(), zone.left_bottom(), zone.left_top()], Stroke::new(1.5_f32, theme::ACCENT), 6.0, 4.0));
+            let mixer = st.session.project.track(d.track).and_then(|t| st.session.project.mixer.get(t.mixer)).map(|m| m.name.clone()).unwrap_or_default();
+            p.text(zone.center(), egui::Align2::CENTER_CENTER, format!("＋  New track, grouped – still routed to {mixer}"), egui::FontId::proportional(13.0), theme::TEXT);
+        }
+    }
+    ui.ctx().data_mut(|dd| dd.insert_temp(egui::Id::new("pl.content_bottom"), content_bottom));
+
     // ----- interaction
     let hover = resp.hover_pos();
     let row_at = |y: f32| rows.iter().position(|r| y >= r.y && y < r.y + r.h);
@@ -637,6 +653,16 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         }
                     }
                 });
+                // Dragged below the last track: the clips go onto a new track grouped with theirs, routed to
+                // the same mixer channel.
+                // Once per drag (afterwards the clips move between tracks as usual).
+                let spawned = egui::Id::new("pl.spawned");
+                if target_row.is_none() && pos.y > content_bottom + 4.0 && pos.y < timeline.bottom() && !ui.data(|dd| dd.get_temp::<bool>(spawned).unwrap_or(false)) {
+                    st.session.gesture("Move clips", |p| {
+                        dragon_engine::edit::clips_to_grouped_track(p, d.track, &ids);
+                    });
+                    ui.data_mut(|dd| dd.insert_temp(spawned, true));
+                }
                 let anchor_track = st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == d.clip)).map(|t| t.id);
                 if let (Some(dr), Some(t)) = (&mut st.ui.pl_drag, anchor_track) {
                     dr.track = t;
@@ -1191,11 +1217,36 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
         if resp.lost_focus() {
             st.session.end_gesture();
         }
-        if widgets::toggle(ui, t.muted, "M", theme::WARN).on_hover_text("Mute").clicked() {
-            st.session.edit("Mute track", |p| p.track_mut(tid).iter_mut().for_each(|t| t.muted = !t.muted));
+        // Grouped tracks mute and solo together.
+        let group = t.group;
+        let in_group = move |x: &Track| x.id == tid || (group.is_some() && x.group == group);
+        if widgets::toggle(ui, t.muted, "M", theme::WARN).on_hover_text(if group.is_some() { "Mute (the whole group)" } else { "Mute" }).clicked() {
+            let on = !t.muted;
+            st.session.edit("Mute track", |p| p.tracks.iter_mut().filter(|x| in_group(x)).for_each(|x| x.muted = on));
         }
-        if widgets::toggle(ui, t.solo, "S", theme::OK).on_hover_text("Solo").clicked() {
-            st.session.edit("Solo track", |p| p.track_mut(tid).iter_mut().for_each(|t| t.solo = !t.solo));
+        if widgets::toggle(ui, t.solo, "S", theme::OK).on_hover_text(if group.is_some() { "Solo (the whole group)" } else { "Solo" }).clicked() {
+            let on = !t.solo;
+            st.session.edit("Solo track", |p| p.tracks.iter_mut().filter(|x| in_group(x)).for_each(|x| x.solo = on));
+        }
+        if let Some(g) = group {
+            let others: Vec<String> = st.session.project.tracks.iter().filter(|x| x.group == Some(g) && x.id != tid).map(|x| x.name.clone()).collect();
+            let mixer = st.session.project.mixer.get(t.mixer).map(|m| m.name.clone()).unwrap_or_default();
+            let chip = ui.add(egui::Label::new(RichText::new("🔗").small().color(theme::ACCENT_2)).sense(Sense::click()));
+            let chip = chip.on_hover_text(format!("Grouped with {} – routed to {mixer}; mute / solo together. Click to ungroup.", others.join(", ")));
+            if chip.clicked() {
+                st.session.edit("Ungroup track", |p| {
+                    if let Some(x) = p.track_mut(tid) {
+                        x.group = None;
+                    }
+                    // A group of one is no group.
+                    let left: Vec<Id> = p.tracks.iter().filter(|x| x.group == Some(g)).map(|x| x.id).collect();
+                    if left.len() == 1 {
+                        if let Some(x) = p.track_mut(left[0]) {
+                            x.group = None;
+                        }
+                    }
+                });
+            }
         }
         if widgets::toggle(ui, t.armed, "⚫", theme::REC).on_hover_text("Arm for recording").clicked() {
             st.session.edit("Arm track", |p| p.track_mut(tid).iter_mut().for_each(|t| t.armed = !t.armed));
