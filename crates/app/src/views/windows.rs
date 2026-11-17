@@ -421,6 +421,13 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             }
         });
     }
+    // Tabs: the controls, or the effect's Hammerstein graph with the current settings.
+    if super::hammerstein::tabs(ui, egui::Id::new(("fx.tab", m, i)), ccol) {
+        ui.separator();
+        let bpm = st.session.project.bpm;
+        super::hammerstein::view(ui, &ins, bpm, egui::Id::new(("fx.hammerstein", m, i)), ccol);
+        return;
+    }
     ui.separator();
     if let Some(pl) = &ins.plugin {
         plugin_params(ui, st, pl.clone(), PluginSlot::Insert(m, i));

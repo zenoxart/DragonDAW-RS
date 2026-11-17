@@ -18,6 +18,7 @@
 //! | [`export`] | Offline bounce (WAV/FLAC), stems, normalisation, dither |
 //! | [`midi`] | MIDI file import/export, MIDI messages, MIDI learn mapping |
 //! | [`analysis`] | Tempo and key detection |
+//! | [`hammerstein`] | Hammerstein kernels of an effect (exponential sweep, Novak) |
 //! | [`device`] | Audio/MIDI devices, real-time engine, recording (feature `device`) |
 //! | [`plugins`] | CLAP and VST3 hosting (feature `plugins`) |
 
@@ -30,6 +31,7 @@ pub mod edit;
 pub mod effects;
 pub mod export;
 pub mod fault;
+pub mod hammerstein;
 pub mod history;
 pub mod instruments;
 pub mod midi;
