@@ -212,14 +212,14 @@ pub struct SampleCache {
 
 impl SampleCache {
     pub fn set_base(&self, base: Option<PathBuf>) {
-        *self.base.lock().unwrap() = base;
+        *self.base.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = base;
     }
 
     pub fn resolve(&self, path: &Path) -> PathBuf {
         if path.is_absolute() {
             return path.to_path_buf();
         }
-        match &*self.base.lock().unwrap() {
+        match &*self.base.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
             Some(b) => b.join(path),
             None => path.to_path_buf(),
         }
@@ -229,34 +229,34 @@ impl SampleCache {
     pub fn get(&self, path: &Path, rate: u32) -> Result<Arc<AudioData>> {
         let full = self.resolve(path);
         let key = (full.clone(), rate);
-        if let Some(d) = self.inner.lock().unwrap().get(&key) {
+        if let Some(d) = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
             return Ok(d.clone());
         }
         let raw = decode(&full)?;
         let d = Arc::new(if raw.rate == rate { raw } else { resample(&raw, rate) });
-        self.inner.lock().unwrap().insert(key, d.clone());
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, d.clone());
         Ok(d)
     }
 
     /// Already-loaded audio (never blocks on disk).
     pub fn peek(&self, path: &Path, rate: u32) -> Option<Arc<AudioData>> {
         let full = self.resolve(path);
-        self.inner.lock().unwrap().get(&(full, rate)).cloned()
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(full, rate)).cloned()
     }
 
     /// Registers audio that does not come from a file on disk yet (e.g. a recording in progress).
     pub fn insert(&self, path: &Path, data: Arc<AudioData>) {
         let full = self.resolve(path);
-        self.inner.lock().unwrap().insert((full, data.rate), data);
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((full, data.rate), data);
     }
 
     pub fn forget(&self, path: &Path) {
         let full = self.resolve(path);
-        self.inner.lock().unwrap().retain(|(p, _), _| *p != full);
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(p, _), _| *p != full);
     }
 
     pub fn clear(&self) {
-        self.inner.lock().unwrap().clear();
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     }
 }
 

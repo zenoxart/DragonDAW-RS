@@ -44,7 +44,13 @@ impl NullEngine {
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                         }
                     }
-                    r.render(&mut l, &mut rr, &[]);
+                    // Same guard as the device callback: a failing effect is reported, the app recovers.
+                    dragon_engine::fault::set_in_audio(true);
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.render(&mut l, &mut rr, &[])));
+                    dragon_engine::fault::set_in_audio(false);
+                    if let Err(p) = res {
+                        dragon_engine::fault::report(dragon_engine::fault::current(), dragon_engine::fault::message(&*p));
+                    }
                     if let Ok(mut t) = t2.lock() {
                         *t = SharedTransport { state: r.transport, at: Instant::now() };
                     }
@@ -90,7 +96,7 @@ impl Audio {
     pub fn transport(&self) -> SharedTransport {
         match self {
             Audio::Device(e) => e.transport(),
-            Audio::Null(n, _) => *n.transport.lock().unwrap(),
+            Audio::Null(n, _) => *n.transport.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         }
     }
 

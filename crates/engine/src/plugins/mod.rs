@@ -147,7 +147,7 @@ pub fn scan_isolated(exe: &Path, format: PluginFormat, path: &Path, timeout: std
 pub(crate) fn library(path: &Path) -> Result<Arc<libloading::Library>> {
     static LIBS: OnceLock<Mutex<HashMap<PathBuf, Arc<libloading::Library>>>> = OnceLock::new();
     let libs = LIBS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut g = libs.lock().unwrap();
+    let mut g = libs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(l) = g.get(path) {
         return Ok(l.clone());
     }

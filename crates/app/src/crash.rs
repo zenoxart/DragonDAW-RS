@@ -58,6 +58,16 @@ pub fn install(local: &Path) {
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
         let bt = std::backtrace::Backtrace::force_capture();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|x| x.as_secs()).unwrap_or(0);
+        if dragon_engine::fault::in_audio() {
+            // Caught inside the audio engine: the app keeps running and rebuilds the engine. Logged, not a
+            // crash report.
+            let text = format!("{secs}: audio fault in insert {:?}: {msg} at {at}\n{bt}\n", dragon_engine::fault::current());
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(d.join("audio-faults.txt")) {
+                let _ = f.write_all(text.as_bytes());
+            }
+            return;
+        }
         let text = format!("Dragon DAW {} crashed\nthread: {thread}\nmessage: {msg}\nat: {at}\n\n{bt}\n", env!("CARGO_PKG_VERSION"));
         let _ = std::fs::write(d.join(format!("crash-{secs}.txt")), &text);
         let _ = std::fs::write(d.join("last-crash.txt"), &text);

@@ -96,7 +96,7 @@ fn entry(path: &Path) -> Result<*const clap_plugin_entry> {
     if entry.is_null() {
         return Err(EngineError::Plugin("null clap_entry".into()));
     }
-    let mut inited = INIT.get_or_init(|| Mutex::new(HashSet::new())).lock().unwrap();
+    let mut inited = INIT.get_or_init(|| Mutex::new(HashSet::new())).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !inited.contains(&bin) {
         let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default();
         // SAFETY: calling the plugin's entry per the CLAP spec.

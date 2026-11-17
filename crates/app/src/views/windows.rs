@@ -742,13 +742,13 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
     };
     let (params, values): (Vec<_>, Vec<_>) = match &inst {
         Ok(e) => {
-            let g = e.lock().unwrap();
+            let g = e.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let ps = g.plugin_params();
             let vs = ps.iter().map(|p| g.plugin_param(p.id).unwrap_or(p.default)).collect();
             (ps, vs)
         }
         Err(i) => {
-            let g = i.lock().unwrap();
+            let g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let ps = g.plugin_params();
             let vs = ps.iter().map(|p| g.plugin_param(p.id).unwrap_or(p.default)).collect();
             (ps, vs)
@@ -769,12 +769,12 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
     let open_gui = |st: &mut State, ui: &Ui| -> bool {
         let (ok, err) = match &inst {
             Ok(e) => {
-                let mut g = e.lock().unwrap();
+                let mut g = e.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let ok = g.editor(true);
                 (ok, g.editor_error())
             }
             Err(i) => {
-                let mut g = i.lock().unwrap();
+                let mut g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let ok = g.editor(true);
                 (ok, g.editor_error())
             }
@@ -802,8 +802,8 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
             ui.label(RichText::new("Plugin window open").color(theme::OK));
             if ui.button("Close plugin window").clicked() {
                 match &inst {
-                    Ok(e) => e.lock().unwrap().editor(false),
-                    Err(i) => i.lock().unwrap().editor(false),
+                    Ok(e) => e.lock().unwrap_or_else(std::sync::PoisonError::into_inner).editor(false),
+                    Err(i) => i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).editor(false),
                 };
                 st.ui.native_editors.retain(|k| *k != key);
             }
@@ -812,8 +812,8 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
             let mut fs: bool = ui.data(|d| d.get_temp(fs_id)).unwrap_or(false);
             if ui.toggle_value(&mut fs, "⛶ Full screen").on_hover_text("Plugin window full screen (editors that can resize fill it)").changed() {
                 let now = match &inst {
-                    Ok(e) => e.lock().unwrap().editor_fullscreen(fs),
-                    Err(i) => i.lock().unwrap().editor_fullscreen(fs),
+                    Ok(e) => e.lock().unwrap_or_else(std::sync::PoisonError::into_inner).editor_fullscreen(fs),
+                    Err(i) => i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).editor_fullscreen(fs),
                 };
                 ui.data_mut(|d| d.insert_temp(fs_id, now));
             }

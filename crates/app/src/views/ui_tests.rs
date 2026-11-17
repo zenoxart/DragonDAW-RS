@@ -329,7 +329,7 @@ impl Effect for FakePlugin {
         (!self.0.allow.load(AtOrd::Relaxed)).then(|| "the editor refused to attach".to_string())
     }
     fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
-        std::mem::take(&mut *self.0.edit.lock().unwrap())
+        std::mem::take(&mut *self.0.edit.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 }
 
@@ -374,9 +374,9 @@ fn plugin_window_opens_the_plugins_own_gui_by_itself() {
     assert_eq!(gui.opened.load(AtOrd::Relaxed), 1, "opened once, not every frame");
     assert!(h.st.ui.native_editors.contains(&(m, Some(iid))));
     // A knob turned in the plugin's window is stored in the project as one undo step.
-    gui.edit.lock().unwrap().push((7, 0.9));
+    gui.edit.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((7, 0.9));
     h.idle(windows_and_pump, 2);
-    gui.edit.lock().unwrap().push((7, 0.95));
+    gui.edit.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((7, 0.95));
     h.idle(windows_and_pump, 2);
     let stored = |h: &Harness| h.st.session.project.mixer.master.inserts.iter().find(|x| x.id == iid).unwrap().plugin.as_ref().unwrap().params.get(&7).copied();
     assert_eq!(stored(&h), Some(0.95));

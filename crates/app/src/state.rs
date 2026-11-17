@@ -467,6 +467,22 @@ impl State {
     /// for 2 s (a driver hang, the device unplugged or switched), the engine is restarted on the configured
     /// (or default) device and playback continues where it was. A lost device is retried every 5 s.
     pub fn audio_watchdog(&mut self) {
+        // Effects whose output blew up (NaN / infinity) were silenced and reset by the engine: say which.
+        let nan = dragon_engine::fault::take_nan();
+        if !nan.is_empty() {
+            let p = &self.session.project;
+            let names: Vec<String> = nan
+                .iter()
+                .filter_map(|(id, _)| {
+                    std::iter::once(&p.mixer.master)
+                        .chain(p.mixer.channels.iter())
+                        .find_map(|c| c.inserts.iter().find(|x| x.id == *id).map(|x| format!("{} on {}", dragon_engine::effects::find(&x.effect).map(|d| d.name).unwrap_or(x.effect.as_str()), c.name)))
+                })
+                .collect();
+            if !names.is_empty() {
+                self.toast(format!("{} produced invalid audio and was reset", names.join(", ")), Severity::Warning);
+            }
+        }
         let now = Instant::now();
         let (count, failed) = match self.audio.health() {
             Some(h) => (h.callbacks.load(std::sync::atomic::Ordering::Relaxed), h.failed.load(std::sync::atomic::Ordering::Relaxed)),
@@ -480,10 +496,37 @@ impl State {
         let stalled = device && now.duration_since(self.audio_watch.1) > std::time::Duration::from_secs(2);
         let lost_retry = !device && self.audio_watch.3;
         let cooled = self.audio_watch.2.is_none_or(|t| now.duration_since(t) > std::time::Duration::from_secs(5));
-        if !((failed || stalled || lost_retry) && cooled) {
+        // A fault caught in the engine is handled at once (the effect is bypassed before the restart).
+        let faulted = dragon_engine::fault::pending();
+        if !((failed || stalled || lost_retry) && cooled) && !faulted {
             return;
         }
         let t = self.audio.transport().state;
+        // A caught fault in an effect: bypass that insert so it cannot fail again on every restart.
+        let fault = dragon_engine::fault::take();
+        if let Some((id, msg)) = &fault {
+            let found = id.and_then(|id| {
+                let p = &self.session.project;
+                std::iter::once(&p.mixer.master).chain(p.mixer.channels.iter()).find_map(|c| c.inserts.iter().find(|x| x.id == id).map(|x| (c.name.clone(), x.effect.clone(), x.plugin.is_some())))
+            });
+            match (id, found) {
+                (Some(iid), Some((chan, effect, _))) => {
+                    let iid = *iid;
+                    self.session.edit("Bypass failing effect", |p| {
+                        for c in std::iter::once(&mut p.mixer.master).chain(p.mixer.channels.iter_mut()) {
+                            for x in &mut c.inserts {
+                                if x.id == iid {
+                                    x.enabled = false;
+                                }
+                            }
+                        }
+                    });
+                    let name = dragon_engine::effects::find(&effect).map(|d| d.name.to_string()).unwrap_or(effect);
+                    self.toast(format!("{name} on {chan} failed ({msg}) – bypassed it and restarted the audio. Details: audio-faults.txt"), Severity::Error);
+                }
+                _ => self.toast(format!("The audio engine hit an error ({msg}) and was restarted. Details: audio-faults.txt"), Severity::Error),
+            }
+        }
         let rate = self.audio.rate() as f32;
         let song = self.session.compile(rate);
         // Close the old stream before opening the device again.
@@ -496,7 +539,9 @@ impl State {
             if t.playing && !t.recording {
                 self.audio.send(dragon_engine::device::Command::Play(t.mode));
             }
-            self.toast(format!("Audio output stopped responding – restarted ({})", self.audio.describe()), Severity::Warning);
+            if fault.is_none() {
+                self.toast(format!("Audio output stopped responding – restarted ({})", self.audio.describe()), Severity::Warning);
+            }
         } else if !lost_retry {
             self.toast("Audio output lost – retrying every few seconds", Severity::Error);
         }

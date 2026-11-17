@@ -23,6 +23,8 @@ struct Shared {
     active: AtomicUsize,
     sleep: Mutex<()>,
     wake: Condvar,
+    /// A job's panic on a worker, passed on to the caller.
+    failed: Mutex<Option<Box<dyn std::any::Any + Send>>>,
     quit: AtomicBool,
 }
 
@@ -50,6 +52,7 @@ impl MixPool {
             active: AtomicUsize::new(0),
             sleep: Mutex::new(()),
             wake: Condvar::new(),
+            failed: Mutex::new(None),
             quit: AtomicBool::new(false),
         });
         for k in 0..workers {
@@ -111,8 +114,14 @@ impl MixPool {
             sh.wake.notify_all();
         }
         // The caller works too.
+        let mut failed = None;
         while let Some(i) = take(sh, generation, count) {
-            job(i);
+            // A panicking job still counts as done (or the caller would wait forever); the first panic
+            // is passed on to the caller once every index is finished.
+            if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(i))) {
+                crate::fault::report(crate::fault::current(), crate::fault::message(&*p));
+                failed.get_or_insert(p);
+            }
             sh.done.fetch_add(1, Ordering::SeqCst);
         }
         let mut spins = 0u32;
@@ -128,6 +137,10 @@ impl MixPool {
         }
         *sh.job.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.busy.store(false, Ordering::Release);
+        let worker_failed = sh.failed.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(p) = failed.or(worker_failed) {
+            std::panic::resume_unwind(p);
+        }
     }
 }
 
@@ -155,6 +168,7 @@ impl Drop for MixPool {
 }
 
 fn worker(sh: Arc<Shared>) {
+    crate::dsp::denormal::flush_to_zero();
     let mut seen = sh.generation.load(Ordering::SeqCst);
     loop {
         // Wait for a new generation: spin a little (blocks come every few ms while playing), then sleep.
@@ -183,7 +197,15 @@ fn worker(sh: Arc<Shared>) {
             while let Some(i) = take(&sh, g, count) {
                 // SAFETY: `run` of generation `g` keeps the closure alive until every taken index is done
                 // and no worker is active.
-                unsafe { (*f)(i) };
+                crate::fault::set_in_audio(true);
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { (*f)(i) }));
+                crate::fault::set_in_audio(false);
+                if let Err(p) = r {
+                    // Name the failing insert from this thread, then hand the panic to the caller.
+                    crate::fault::report(crate::fault::current(), crate::fault::message(&*p));
+                    let mut slot = sh.failed.lock().unwrap_or_else(|e| e.into_inner());
+                    slot.get_or_insert(p);
+                }
                 sh.done.fetch_add(1, Ordering::SeqCst);
             }
         }
@@ -194,6 +216,28 @@ fn worker(sh: Arc<Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panicking_job_does_not_hang_the_pool() {
+        let pool = MixPool::new(3);
+        let hits: Vec<AtomicUsize> = (0..16).map(|_| AtomicUsize::new(0)).collect();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.run(16, &|i| {
+                hits[i].fetch_add(1, Ordering::SeqCst);
+                if i == 5 {
+                    panic!("job 5");
+                }
+            })
+        }));
+        assert!(r.is_err(), "the panic reaches the caller");
+        assert!(hits.iter().all(|h| h.load(Ordering::SeqCst) == 1), "every other job still ran once");
+        // Still usable.
+        let n = AtomicUsize::new(0);
+        pool.run(10, &|_| {
+            n.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(n.load(Ordering::SeqCst), 10);
+    }
 
     #[test]
     fn concurrent_callers_are_safe() {

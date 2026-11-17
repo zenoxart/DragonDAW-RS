@@ -222,7 +222,7 @@ impl AudioEngine {
                 let ich = icfg.channels().max(1);
                 let icfg2 = cpal::StreamConfig { channels: ich, sample_rate: cpal::SampleRate(rate), buffer_size: buffer };
                 let ib = input_buf.clone();
-                *ib.lock().unwrap() = vec![VecDeque::with_capacity(rate as usize); ich as usize];
+                *ib.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = vec![VecDeque::with_capacity(rate as usize); ich as usize];
                 let err = |e| tracing::warn!("input stream: {e}");
                 let stream = match icfg.sample_format() {
                     cpal::SampleFormat::F32 => dev.build_input_stream(&icfg2, move |d: &[f32], _: &_| push_input(&ib, d, ich as usize, |x| x), err, None),
@@ -308,7 +308,22 @@ impl AudioEngine {
             for (slot, v) in refs.iter_mut().zip(inputs.iter()) {
                 *slot = v.as_slice();
             }
-            renderer.render(&mut l[..n], &mut r[..n], &refs[..k]);
+            // A panic inside the render (a bug in an effect or instrument) must not take the app down:
+            // play silence, report which insert failed and let the app rebuild the engine.
+            if hb.failed.load(std::sync::atomic::Ordering::Relaxed) {
+                l[..n].fill(0.0);
+                r[..n].fill(0.0);
+            } else {
+                crate::fault::set_in_audio(true);
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| renderer.render(&mut l[..n], &mut r[..n], &refs[..k])));
+                crate::fault::set_in_audio(false);
+                if let Err(p) = res {
+                    crate::fault::report(crate::fault::current(), crate::fault::message(&*p));
+                    hb.failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                    l[..n].fill(0.0);
+                    r[..n].fill(0.0);
+                }
+            }
             hb.callbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // Recording: hand input to the recorder once the count-in is over.
             let st = renderer.transport;
@@ -429,11 +444,11 @@ impl AudioEngine {
     }
 
     pub fn transport(&self) -> SharedTransport {
-        *self.transport.lock().unwrap()
+        *self.transport.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn is_recording(&self) -> bool {
-        *self.recording.lock().unwrap()
+        *self.recording.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Starts recording the given targets (armed tracks).

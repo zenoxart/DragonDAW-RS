@@ -29,6 +29,7 @@ pub mod dsp;
 pub mod edit;
 pub mod effects;
 pub mod export;
+pub mod fault;
 pub mod history;
 pub mod instruments;
 pub mod midi;

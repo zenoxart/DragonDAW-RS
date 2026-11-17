@@ -1,6 +1,7 @@
 //! DSP building blocks: biquads, one-pole filters, envelopes, LFOs, delay lines, a noise source and
 //! level conversions. Everything is allocation-free after construction.
 
+pub mod denormal;
 pub mod loudness;
 pub mod oversample;
 pub mod spectrum;

@@ -56,6 +56,17 @@ pub const DMOD_SOURCES: &[&str] = &["Off", "LFO 1", "LFO 2", "Envelope"];
 pub const DMOD_TARGETS: &[&str] = &["Time", "Feedback", "Low cut", "High cut", "Drive", "Pitch", "Width", "Mix"];
 const DMOD_N: usize = 4;
 
+/// Soft limit for feedback loops: unity below ~1, approaching ±4 above.
+#[inline]
+fn loop_limit(x: f32) -> f32 {
+    let a = x.abs();
+    if a <= 1.0 {
+        x
+    } else {
+        x.signum() * (1.0 + 3.0 * ((a - 1.0) / 3.0).tanh())
+    }
+}
+
 /// Two-stage allpass diffuser (smears each repeat, Timeless "diffusion").
 #[derive(Clone)]
 struct Diffuser {
@@ -242,8 +253,10 @@ impl Effect for Delay {
                 let p2 = (phase + 0.5).fract();
                 let a = line.read((d + phase * win).min(line.len() as f32 - 4.0));
                 let b = line.read((d + p2 * win).min(line.len() as f32 - 4.0));
-                let wa = (std::f32::consts::PI * phase).sin();
-                let wb = (std::f32::consts::PI * p2).sin();
+                // sin² windows: the two weights always sum to 1 (sin windows reach 1.41, which a frozen
+                // loop would compound every pass).
+                let wa = (std::f32::consts::PI * phase).sin().powi(2);
+                let wb = (std::f32::consts::PI * p2).sin().powi(2);
                 a * wa + b * wb
             };
             let yl = read(&self.lines[0], dl, self.shift_phase);
@@ -268,11 +281,16 @@ impl Effect for Delay {
                 fl2 = (fl2 * 1.2).tanh() / 1.2;
                 fr2 = (fr2 * 1.2).tanh() / 1.2;
             }
+            // The resonant peak (up to +12 dB), cross feedback and modulated feedback can make the loop gain
+            // exceed 1: a soft limiter in the loop (transparent below full scale, bounded at ±4) keeps the
+            // repeats from running away.
+            fl2 = loop_limit(fl2);
+            fr2 = loop_limit(fr2);
             // Freeze: the loop keeps its content and takes no new input.
             let (il, ir) = if self.freeze { (0.0, 0.0) } else { (l[i], r[i]) };
             if self.freeze {
-                self.lines[0].write(yl);
-                self.lines[1].write(yr);
+                self.lines[0].write(loop_limit(yl));
+                self.lines[1].write(loop_limit(yr));
             } else if self.mode == 1 {
                 // Ping-pong: the left input feeds the left line, feedback crosses sides.
                 self.lines[0].write((il + ir) * 0.5 + fr2);
@@ -613,6 +631,33 @@ pub fn tremolo_def() -> EffectDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Freeze with pitch-shifted repeats: the frozen loop keeps its level instead of growing every pass
+    /// (it ran away to infinity before).
+    #[test]
+    fn frozen_pitched_delay_stays_bounded() {
+        let mut p = std::collections::BTreeMap::new();
+        for (k, v) in [("sync", 0.0), ("time", 40.0), ("feedback", 0.9), ("pitch", 7.0), ("mix", 1.0), ("reso", 1.0)] {
+            p.insert(k.to_string(), v);
+        }
+        let mut e = crate::effects::create("delay", 48000.0, &p).unwrap();
+        let (mut l, mut r) = (vec![0.0f32; 1024], vec![0.0f32; 1024]);
+        let mut peak = 0.0f32;
+        for b in 0..500 {
+            if b == 20 {
+                e.set_param("freeze", 1.0);
+            }
+            for k in 0..1024 {
+                let x = if b < 20 { ((k * 7919 + b * 13) % 1000) as f32 / 1000.0 - 0.5 } else { 0.0 };
+                l[k] = x;
+                r[k] = x;
+            }
+            e.process(&mut l, &mut r, None);
+            peak = l.iter().chain(r.iter()).fold(peak, |m, x| m.max(x.abs()));
+            assert!(peak.is_finite());
+        }
+        assert!(peak < 8.0, "frozen loop grew to {peak}");
+    }
 
     /// The delay's modulation matrix: a square LFO routed to the feedback changes how long the echoes of a
     /// burst ring; a slot without a source does nothing.

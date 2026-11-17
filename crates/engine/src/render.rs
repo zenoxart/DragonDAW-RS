@@ -258,11 +258,11 @@ pub struct StretchCache {
 
 impl StretchCache {
     fn get(&self, key: &str, make: impl FnOnce() -> AudioData) -> Arc<AudioData> {
-        if let Some(d) = self.inner.lock().unwrap().get(key) {
+        if let Some(d) = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(key) {
             return d.clone();
         }
         let d = Arc::new(make());
-        self.inner.lock().unwrap().insert(key.to_string(), d.clone());
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.to_string(), d.clone());
         d
     }
 }
@@ -344,7 +344,7 @@ impl Song {
                     continue;
                 };
                 {
-                    let mut g = e.lock().unwrap();
+                    let mut g = e.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     match &ins.plugin {
                         None => {
                             if let Some(def) = effects::find(&ins.effect) {
@@ -509,7 +509,7 @@ impl Song {
             let inst = cx.pool.instrument(c, rate, cx.cache);
             match &inst {
                 Some(i) => {
-                    let mut g = i.lock().unwrap();
+                    let mut g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     g.update(&c.instrument, cx.cache);
                     if let Instrument::Plugin(pl) = &c.instrument {
                         for (id, v) in &pl.params {
@@ -522,7 +522,7 @@ impl Song {
             // The sampler takes the channel envelope.
             if let (Some(i), Instrument::Sampler(_)) = (&inst, &c.instrument) {
                 // Envelope is applied through a dedicated hook on the sampler.
-                let mut g = i.lock().unwrap();
+                let mut g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 g.set_param("__env_enabled", if c.envelope.enabled { 1.0 } else { 0.0 });
                 for (k, v) in [
                     ("__env_delay", c.envelope.delay),
@@ -967,6 +967,15 @@ struct StripSlot {
     dry: (Vec<f32>, Vec<f32>),
 }
 
+/// Telemetry floats one strip's chain may report per block (the largest displays send a few thousand).
+const TELE_ROOM: usize = 16384;
+
+impl StripSlot {
+    fn with_room() -> Self {
+        StripSlot { gr: Vec::with_capacity(64), tele: Vec::with_capacity(64), tele_data: Vec::with_capacity(TELE_ROOM), dry: (Vec::with_capacity(AUTOMATION_BLOCK), Vec::with_capacity(AUTOMATION_BLOCK)) }
+    }
+}
+
 pub struct Renderer {
     /// Modulation state per (insert, route).
     mod_runs: HashMap<(Id, usize), ModRun>,
@@ -1166,13 +1175,21 @@ impl Renderer {
 
     /// Renders `out_l.len()` frames. `input` holds the device input channels (planar) for monitoring.
     pub fn render(&mut self, out_l: &mut [f32], out_r: &mut [f32], input: &[&[f32]]) {
+        // Denormals in decaying tails cost 10 – 100× (random CPU overloads): flush them on this thread.
+        crate::dsp::denormal::flush_to_zero();
+        crate::fault::set_current(None);
         let started = std::time::Instant::now();
         let total = out_l.len();
         let mut done = 0;
         while done < total {
             let n = (total - done).min(AUTOMATION_BLOCK);
-            let ins: Vec<&[f32]> = input.iter().map(|c| if c.len() >= done + n { &c[done..done + n] } else { &c[0..0] }).collect();
-            self.render_block(&mut out_l[done..done + n], &mut out_r[done..done + n], &ins);
+            // Input channel slices for this chunk, without allocating (up to 32 channels).
+            let mut ins: [&[f32]; 32] = [&[]; 32];
+            let k = input.len().min(32);
+            for (slot, c) in ins.iter_mut().zip(input.iter()) {
+                *slot = if c.len() >= done + n { &c[done..done + n] } else { &c[0..0] };
+            }
+            self.render_block(&mut out_l[done..done + n], &mut out_r[done..done + n], &ins[..k]);
             done += n;
         }
         let budget = total as f32 / self.rate;
@@ -1204,7 +1221,7 @@ impl Renderer {
                 LiveEvent::NoteOff { channel, note } => {
                     if let Some(&ci) = song.channel_index.get(&channel) {
                         if let Some(i) = &song.channels[ci].instrument {
-                            i.lock().unwrap().note_off(note);
+                            i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).note_off(note);
                         }
                         self.live_notes.retain(|x| *x != (ci, note));
                     }
@@ -1263,7 +1280,7 @@ impl Renderer {
                     // Loop wrap: release everything that was playing.
                     for c in &song.channels {
                         if let Some(i) = &c.instrument {
-                            i.lock().unwrap().choke(0.004);
+                            i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).choke(0.004);
                         }
                     }
                 }
@@ -1356,7 +1373,7 @@ impl Renderer {
                     }
                     Target::InsertParam { insert, param, .. } => {
                         if let Some(&(si, ii)) = song.insert_index.get(insert) {
-                            song.strips[si].inserts[ii].effect.lock().unwrap().set_param(param, v);
+                            song.strips[si].inserts[ii].effect.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_param(param, v);
                         }
                     }
                     Target::InsertMix { insert, .. } => {
@@ -1366,7 +1383,7 @@ impl Renderer {
                     Target::SynthCutoff(id) | Target::SynthResonance(id) => {
                         if let Some(&ci) = song.channel_index.get(id) {
                             if let Some(i) = &song.channels[ci].instrument {
-                                i.lock().unwrap().set_param(if matches!(lane.target, Target::SynthCutoff(_)) { "cutoff" } else { "resonance" }, v);
+                                i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_param(if matches!(lane.target, Target::SynthCutoff(_)) { "cutoff" } else { "resonance" }, v);
                             }
                         }
                     }
@@ -1375,11 +1392,11 @@ impl Renderer {
                         let mut digits = [0u8; 10];
                         let key = u32_str(*param, &mut digits);
                         match insert.and_then(|i| song.insert_index.get(&i)) {
-                            Some(&(si, ii)) => song.strips[si].inserts[ii].effect.lock().unwrap().set_param(key, v),
+                            Some(&(si, ii)) => song.strips[si].inserts[ii].effect.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_param(key, v),
                             None => {
                                 if let Some(&ci) = song.channel_index.get(channel) {
                                     if let Some(i) = &song.channels[ci].instrument {
-                                        i.lock().unwrap().set_param(key, v);
+                                        i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_param(key, v);
                                     }
                                 }
                             }
@@ -1395,13 +1412,19 @@ impl Renderer {
         sc.gr.clear();
         sc.tele.clear();
         sc.tele_data.clear();
-        // Sizes grow once per song (not per block).
+        // Sizes grow once per song (not per block): room for every strip's reports.
+        if sc.tele_data.capacity() < TELE_ROOM * 4 {
+            sc.tele_data.reserve(TELE_ROOM * 4);
+            sc.tele.reserve(1024);
+            sc.gr.reserve(1024);
+        }
         if sc.ins_mix.len() < song.ins_total {
             sc.ins_mix.resize(song.ins_total, (1.0, 1.0));
         }
         if sc.par.len() < song.strips.len() {
             sc.par.resize(song.strips.len(), false);
-            sc.slots.resize_with(song.strips.len(), Default::default);
+            // Room for everything a chain reports, so no block ever grows these on the audio thread.
+            sc.slots.resize_with(song.strips.len(), StripSlot::with_room);
             sc.par_list.reserve(song.strips.len());
         }
         let pool = crate::mixpool::MixPool::global();
@@ -1451,7 +1474,8 @@ impl Renderer {
                                 continue;
                             }
                             let (mix, mix0) = mixes[base[si] + ii];
-                            let mut e = ins.effect.lock().unwrap();
+                            crate::fault::set_current(Some(ins.id));
+                            let mut e = ins.effect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             e.set_position(b0, playing);
                             if mix >= 0.999 && mix0 >= 0.999 {
                                 e.process(bl, br, None);
@@ -1467,6 +1491,7 @@ impl Renderer {
                                     br[k] = slot.dry.1[k] * (1.0 - m) + br[k] * m;
                                 }
                             }
+                            guard_finite(&mut **e, ins.id, bl, br);
                             let g = e.gain_reduction();
                             if g > 0.01 {
                                 slot.gr.push((ins.id, g));
@@ -1520,7 +1545,7 @@ impl Renderer {
                         let sc = has_sc.then_some((sc_buf.0.as_slice(), sc_buf.1.as_slice()));
                         let mix = insert_mix.get(&ins.id).copied().unwrap_or(ins.mix);
                         let mix0 = self.ramps.start((Ramps::MIX, ins.id, 0), [mix, 0.0])[0];
-                        let mut e = ins.effect.lock().unwrap();
+                        let mut e = ins.effect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         // Modulation: each route moves its parameter once per block.
                         if !ins.mods.is_empty() {
                             let dt = n as f32 / self.rate;
@@ -1560,6 +1585,7 @@ impl Renderer {
                             }
                         }
                         e.set_position(b0, playing);
+                        crate::fault::set_current(Some(ins.id));
                         if mix >= 0.999 && mix0 >= 0.999 {
                             e.process(bl, br, sc);
                         } else {
@@ -1574,6 +1600,7 @@ impl Renderer {
                                 br[k] = dry_buf.1[k] * (1.0 - m) + br[k] * m;
                             }
                         }
+                        guard_finite(&mut **e, ins.id, bl, br);
                         let g = e.gain_reduction();
                         if g > 0.01 {
                             gr.push((ins.id, g));
@@ -1771,13 +1798,13 @@ impl Renderer {
             for (k, o) in song.channels.iter().enumerate() {
                 if k != ci && o.cut_group == c.cut_by {
                     if let Some(i) = &o.instrument {
-                        i.lock().unwrap().choke(0.01);
+                        i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).choke(0.01);
                     }
                 }
             }
         }
         if let Some(i) = &c.instrument {
-            let mut g = i.lock().unwrap();
+            let mut g = i.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if c.cut_self && !on.slide {
                 g.choke(0.005);
             }
@@ -1864,7 +1891,7 @@ impl Renderer {
                     if e.on {
                         self.trigger(song, e.chan, NoteOn { note: e.note, velocity: e.velocity, pan: e.pan, detune: e.detune, slide: e.slide });
                     } else if let Some(inst) = &song.channels[e.chan].instrument {
-                        inst.lock().unwrap().note_off(e.note);
+                        inst.lock().unwrap_or_else(std::sync::PoisonError::into_inner).note_off(e.note);
                     }
                 }
                 i += 1;
@@ -1886,7 +1913,7 @@ impl Renderer {
             cl.iter_mut().for_each(|x| *x = 0.0);
             cr.iter_mut().for_each(|x| *x = 0.0);
             {
-                let mut g = inst.lock().unwrap();
+                let mut g = inst.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if g.active_voices() == 0 {
                     continue;
                 }
@@ -2006,6 +2033,22 @@ fn gain_line_db(points: &[GainPoint], beat: f64) -> f32 {
 }
 
 /// Builds a fresh renderer for offline work.
+/// After an insert: if its output is not finite (NaN / infinity – a blown-up filter or feedback loop),
+/// silence the block and reset the effect so it cannot poison everything after it (and every later
+/// block), and report the insert.
+#[inline]
+fn guard_finite(e: &mut dyn Effect, id: Id, l: &mut [f32], r: &mut [f32]) {
+    // NaN fails every comparison, infinity fails `< BIG`: one pass, vectorised.
+    const BIG: f32 = 1.0e20;
+    let ok = l.iter().chain(r.iter()).fold(true, |ok, x| ok & (x.abs() < BIG));
+    if !ok {
+        l.fill(0.0);
+        r.fill(0.0);
+        e.reset();
+        crate::fault::report_nan(id);
+    }
+}
+
 pub fn offline_renderer(p: &Project, cache: &SampleCache, rate: f32, pool: &mut Pool) -> Renderer {
     let stretch = StretchCache::default();
     let song = Song::compile(p, &mut CompileContext { cache, stretch: &stretch, pool, rate });

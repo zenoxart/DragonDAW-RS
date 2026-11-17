@@ -73,7 +73,7 @@ fn factory(path: &Path) -> Result<ComPtr<IPluginFactory>> {
         #[cfg(target_os = "linux")]
         if let Ok(f) = lib.get::<unsafe extern "system" fn(*mut c_void) -> bool>(b"ModuleEntry\0") {
             static ENTERED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> = std::sync::OnceLock::new();
-            let mut set = ENTERED.get_or_init(Default::default).lock().unwrap();
+            let mut set = ENTERED.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if set.insert(bin.clone()) && !f(std::ptr::null_mut()) {
                 return Err(EngineError::Plugin("ModuleEntry failed".into()));
             }

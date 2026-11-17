@@ -390,7 +390,8 @@ impl Effect for PitchCorrect {
                 let tap = |buf: &[f32], ms: f32| {
                     let d = (ms * 0.001 * self.rate).min(n as f32 - 2.0);
                     let p = (self.dbl_pos as f32 - d).rem_euclid(n as f32);
-                    let (k, f) = (p.floor() as usize, p.fract());
+                    // `rem_euclid` can return exactly `n` for a value just below 0 (rounding): wrap the index.
+                    let (k, f) = (p.floor() as usize % n, p.fract());
                     buf[k] * (1.0 - f) + buf[(k + 1) % n] * f
                 };
                 let a = tap(&self.dbl[0], 14.0 + 1.5 * sway);

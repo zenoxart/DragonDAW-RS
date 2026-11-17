@@ -611,3 +611,109 @@ mod tests {
         assert_eq!(c.format(2.0), "C");
     }
 }
+
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+
+    /// Every effect with random settings (all parameters at once), random block sizes and random input
+    /// levels – silence, quiet, loud and clipping – never panics and never outputs NaN or infinity.
+    #[test]
+    fn random_settings_stay_finite() {
+        let rounds: usize = std::env::var("DRAGON_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(if cfg!(debug_assertions) { 6 } else { 60 });
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut bad = Vec::new();
+        for def in registry() {
+            'rounds: for round in 0..rounds {
+                let rate = [44100.0, 48000.0, 96000.0][(rnd() % 3) as usize];
+                let params: BTreeMap<String, f32> = def.params.iter().map(|p| (p.id.to_string(), p.denormalize((rnd() % 1001) as f32 / 1000.0))).collect();
+                let mut e = create(def.id, rate, &params).unwrap();
+                e.set_tempo(60.0 + (rnd() % 140) as f64);
+                let (mut l, mut r) = (vec![0.0f32; 2048], vec![0.0f32; 2048]);
+                for b in 0..30 {
+                    let n = 1 + (rnd() % 2048) as usize;
+                    let level = [0.0, 1e-4, 0.3, 1.0, 4.0][(rnd() % 5) as usize];
+                    for k in 0..n {
+                        l[k] = ((rnd() % 2001) as f32 / 1000.0 - 1.0) * level;
+                        r[k] = ((rnd() % 2001) as f32 / 1000.0 - 1.0) * level;
+                    }
+                    // Knob moves while it runs.
+                    if b % 7 == 3 {
+                        let p = &def.params[(rnd() % def.params.len() as u64) as usize];
+                        e.set_param(p.id, p.denormalize((rnd() % 1001) as f32 / 1000.0));
+                    }
+                    e.set_position((b * 2) as f64 * 0.37, true);
+                    let (scl, scr) = (l[..n].to_vec(), r[..n].to_vec());
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.process(&mut l[..n], &mut r[..n], Some((&scl, &scr)))));
+                    let why = match res {
+                        Err(p) => Some(format!("panic {}", crate::fault::message(&*p))),
+                        Ok(()) => l[..n].iter().chain(r[..n].iter()).find(|x| !x.is_finite()).map(|x| format!("output {x}")),
+                    };
+                    if let Some(w) = why {
+                        let set: Vec<String> = def.params.iter().map(|p| format!("{}={}", p.id, params[p.id])).collect();
+                        bad.push(format!("{} round {round} block {b} ({n} @ {rate}, level {level}): {w}\n   {}", def.id, set.join(" ")));
+                        break 'rounds;
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod runaway {
+    use super::*;
+
+    /// No setting makes an effect's feedback run away: after loud input then a long silence, the output
+    /// stays bounded (well under +60 dB over the input) – a slow runaway the short fuzz cannot see.
+    #[test]
+    fn no_feedback_runaway() {
+        let rounds: usize = std::env::var("DRAGON_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(if cfg!(debug_assertions) { 1 } else { 4 });
+        let mut seed = 0x1234_5678_9abc_def1u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut bad = Vec::new();
+        for def in registry() {
+            for round in 0..rounds {
+                let rate = 48000.0;
+                let mut params: BTreeMap<String, f32> = def.params.iter().map(|p| (p.id.to_string(), p.denormalize((rnd() % 1001) as f32 / 1000.0))).collect();
+                // Push every feedback-like control to its maximum half of the time.
+                for p in def.params {
+                    if (p.id.contains("feedback") || p.id.contains("reso") || p.id == "fb" || p.id.ends_with("_fb")) && rnd() % 2 == 0 {
+                        params.insert(p.id.to_string(), p.max);
+                    }
+                }
+                let mut e = create(def.id, rate, &params).unwrap();
+                let (mut l, mut r) = (vec![0.0f32; 1024], vec![0.0f32; 1024]);
+                let mut peak = 0.0f32;
+                // 1 s of loud noise, then 8 s of silence.
+                for b in 0..((9.0 * rate) as usize / 1024) {
+                    let loud = b < (rate as usize / 1024);
+                    for k in 0..1024 {
+                        l[k] = if loud { ((rnd() % 2001) as f32 / 1000.0 - 1.0) * 0.9 } else { 0.0 };
+                        r[k] = if loud { ((rnd() % 2001) as f32 / 1000.0 - 1.0) * 0.9 } else { 0.0 };
+                    }
+                    e.process(&mut l, &mut r, None);
+                    peak = l.iter().chain(r.iter()).fold(peak, |m, x| if x.is_finite() { m.max(x.abs()) } else { f32::INFINITY });
+                }
+                if peak > 1000.0 {
+                    let set: Vec<String> = def.params.iter().map(|p| format!("{}={}", p.id, params[p.id])).collect();
+                    bad.push(format!("{} round {round}: peak {peak}\n   {}", def.id, set.join(" ")));
+                    break;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+}

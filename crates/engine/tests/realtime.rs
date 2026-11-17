@@ -49,12 +49,14 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         if WATCH.with(|w| w.get()) {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
+            trace();
         }
         System.dealloc(p, l)
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
         if WATCH.with(|w| w.get()) {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
+            trace();
         }
         System.realloc(p, l, n)
     }
@@ -101,12 +103,14 @@ fn render_does_not_allocate_while_playing() {
     for _ in 0..40 {
         r.render(&mut l[..1024], &mut rr[..1024], &[]);
     }
+    // With two input channels (a connected recording device), as the live callback passes them.
+    let input = (vec![0.01f32; 4096], vec![-0.01f32; 4096]);
     TRACE_ON.store(std::env::var_os("DRAGON_ALLOC_TRACE").is_some(), Ordering::Relaxed);
     ALLOCS.store(0, Ordering::Relaxed);
     WATCH.with(|w| w.set(true));
     for k in 0..200 {
         let n = [64, 256, 1024, 4096][k % 4];
-        r.render(&mut l[..n], &mut rr[..n], &[]);
+        r.render(&mut l[..n], &mut rr[..n], &[&input.0[..n], &input.1[..n]]);
     }
     WATCH.with(|w| w.set(false));
     let n = ALLOCS.load(Ordering::Relaxed);
@@ -235,4 +239,270 @@ fn first_block_cost() {
             println!("{:20} first {:?} later {:?}", def.id, first, second);
         }
     }
+}
+
+/// Diagnostic (run with --ignored --nocapture): per effect, cost per block while audio plays vs in the
+/// silent tail after it (where decaying filters and reverbs produce denormal numbers).
+#[test]
+#[ignore]
+fn silent_tail_cost() {
+    if std::env::var_os("DRAGON_FTZ").is_some() {
+        dragon_engine::dsp::denormal::flush_to_zero();
+    }
+    let rate = 48000.0;
+    let n = 256;
+    for def in dragon_engine::effects::registry() {
+        let mut e = dragon_engine::effects::create(def.id, rate, &def.defaults()).unwrap();
+        let mut seed = 1u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+        let mut busy = std::time::Duration::ZERO;
+        for _ in 0..40 {
+            for k in 0..n {
+                l[k] = noise() * 0.5;
+                r[k] = noise() * 0.5;
+            }
+            let t = std::time::Instant::now();
+            e.process(&mut l, &mut r, None);
+            busy += t.elapsed();
+        }
+        // 20 s of silence; measure the last 2 s.
+        let blocks = (20.0 * rate) as usize / n;
+        let mut tail = std::time::Duration::ZERO;
+        for b in 0..blocks {
+            l.fill(0.0);
+            r.fill(0.0);
+            let t = std::time::Instant::now();
+            e.process(&mut l, &mut r, None);
+            if b >= blocks - (2.0 * rate) as usize / n {
+                tail += t.elapsed();
+            }
+        }
+        let tail_blocks = (2.0 * rate) as usize / n;
+        let busy_per = busy.as_secs_f64() / 40.0;
+        let tail_per = tail.as_secs_f64() / tail_blocks as f64;
+        println!("{:16} busy {:7.1} us  tail {:7.1} us  x{:.1}", def.id, busy_per * 1e6, tail_per * 1e6, tail_per / busy_per.max(1e-9));
+    }
+}
+
+/// With denormals flushed (as every render does), no effect's silent tail costs much more than processing
+/// audio: the CPU stays flat when a sound stops.
+#[test]
+fn silent_tails_do_not_spike_the_cpu() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    std::thread::spawn(|| {
+        dragon_engine::dsp::denormal::flush_to_zero();
+        let rate = 48000.0;
+        let n = 256;
+        let mut slow = Vec::new();
+        for def in dragon_engine::effects::registry() {
+            let mut e = dragon_engine::effects::create(def.id, rate, &def.defaults()).unwrap();
+            let mut seed = 1u32;
+            let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+            let mut busy = std::time::Duration::ZERO;
+            for _ in 0..40 {
+                for k in 0..n {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    l[k] = ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.5;
+                    r[k] = -l[k];
+                }
+                let t = std::time::Instant::now();
+                e.process(&mut l, &mut r, None);
+                busy += t.elapsed();
+            }
+            let blocks = (12.0 * rate) as usize / n;
+            let last = (2.0 * rate) as usize / n;
+            let mut tail = std::time::Duration::ZERO;
+            for b in 0..blocks {
+                l.fill(0.0);
+                r.fill(0.0);
+                let t = std::time::Instant::now();
+                e.process(&mut l, &mut r, None);
+                if b >= blocks - last {
+                    tail += t.elapsed();
+                }
+            }
+            let (busy, tail) = (busy.as_secs_f64() / 40.0, tail.as_secs_f64() / last as f64);
+            if tail > busy * 3.0 + 20e-6 {
+                slow.push(format!("{} busy {:.1} us tail {:.1} us", def.id, busy * 1e6, tail * 1e6));
+            }
+        }
+        assert!(slow.is_empty(), "tails slower than audio: {slow:?}");
+    })
+    .join()
+    .unwrap();
+}
+
+struct Boom {
+    blocks: usize,
+}
+
+impl dragon_engine::effects::Effect for Boom {
+    fn set_param(&mut self, _: &str, _: f32) {}
+    fn reset(&mut self) {}
+    fn process(&mut self, _l: &mut [f32], _r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        self.blocks += 1;
+        if self.blocks == 10 {
+            panic!("boom in a plugin");
+        }
+    }
+}
+
+struct BoomFactory;
+
+impl dragon_engine::render::PluginFactory for BoomFactory {
+    fn create_effect(&mut self, _: &PluginRef, _: f32, _: usize) -> Option<Box<dyn dragon_engine::effects::Effect>> {
+        Some(Box::new(Boom { blocks: 0 }))
+    }
+    fn create_instrument(&mut self, _: &PluginRef, _: f32, _: usize) -> Option<Box<dyn dragon_engine::instruments::InstrumentVoice>> {
+        None
+    }
+}
+
+/// An effect that panics inside the render (here a plugin, on its 10th block) is caught where the audio
+/// callback catches it, the failing insert is reported by id, and – with the mixer running in parallel or
+/// not – nothing hangs; the poisoned effect lock does not panic again on the next render.
+#[test]
+fn a_panicking_effect_is_caught_and_named() {
+    let dir = tempfile::tempdir().unwrap();
+    for parallel in [false, true] {
+        let mut p = busy_project(dir.path(), 8, 1);
+        let m = p.tracks[3].mixer;
+        let bad = p.next_id();
+        let plugin = PluginRef { format: PluginFormat::Clap, path: "boom.clap".into(), id: "boom".into(), name: "Boom".into(), state: Vec::new(), params: Default::default() };
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert {
+            id: bad,
+            effect: String::new(),
+            enabled: true,
+            mix: 1.0,
+            params: Default::default(),
+            sidechain: None,
+            plugin: Some(plugin),
+            preset: String::new(),
+            mods: Vec::new(),
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            let _ = dir;
+            dragon_engine::mixpool::MixPool::global().set_enabled(parallel);
+            let cache = SampleCache::default();
+            let mut fx = Pool::with_plugins(Box::new(BoomFactory));
+            let mut r = offline_renderer(&p, &cache, 48000.0, &mut fx);
+            r.play(PlayMode::Song);
+            let (mut l, mut rr) = (vec![0.0f32; 512], vec![0.0f32; 512]);
+            let mut caught = 0;
+            for _ in 0..30 {
+                dragon_engine::fault::set_in_audio(true);
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.render(&mut l, &mut rr, &[])));
+                dragon_engine::fault::set_in_audio(false);
+                if let Err(p) = res {
+                    dragon_engine::fault::report(dragon_engine::fault::current(), dragon_engine::fault::message(&*p));
+                    caught += 1;
+                }
+            }
+            dragon_engine::mixpool::MixPool::global().set_enabled(true);
+            let _ = tx.send((caught, dragon_engine::fault::take()));
+        });
+        let (caught, fault) = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the render did not hang");
+        assert_eq!(caught, 1, "parallel {parallel}: one panic, later blocks render on");
+        let (id, msg) = fault.expect("reported");
+        assert_eq!(id, Some(bad), "parallel {parallel}: the failing insert is named");
+        assert!(msg.contains("boom"), "{msg}");
+    }
+}
+
+/// Playback under the conditions the app creates, at random: uneven buffer sizes (1 … 2048 frames, as
+/// some drivers deliver), recompiles with random parameter values on random inserts (knob moves),
+/// seeks, loops on and off, stop / play, live notes, and 44.1 / 48 / 96 kHz. Nothing may panic and
+/// the output must stay finite.
+#[test]
+fn playback_stress_never_panics() {
+    let dir = tempfile::tempdir().unwrap();
+    let iters: usize = std::env::var("DRAGON_STRESS").ok().and_then(|v| v.parse().ok()).unwrap_or(if cfg!(debug_assertions) { 150 } else { 1500 });
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut failures = Vec::new();
+    for rate in [44100.0f32, 48000.0, 96000.0] {
+        let mut p = busy_project(dir.path(), 6, 5);
+        let synth = p.add_channel("Synth", Instrument::Synth(SynthParams::default()));
+        let pat = p.patterns[0].id;
+        p.patterns[0].channels.insert(synth, PatternChannel { steps: vec![], notes: (0..16).map(|k| Note { pitch: 48 + (k * 5 % 24) as u8, start: k * PPQ / 2, length: PPQ / 2, ..Note::default() }).collect() });
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "p".into(), start: 0.0, length: 32.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+        let cache = SampleCache::default();
+        let stretch = dragon_engine::render::StretchCache::default();
+        let mut pool = Pool::new();
+        let mut r = offline_renderer(&p, &cache, rate, &mut pool);
+        r.play(PlayMode::Song);
+        let mut buf = (vec![0.0f32; 2048], vec![0.0f32; 2048]);
+        for it in 0..iters {
+            match rnd() % 20 {
+                0..=3 => {
+                    // A knob move: random value on a random insert's parameter, then a recompile.
+                    let chans: Vec<Id> = p.mixer.channels.iter().filter(|c| !c.inserts.is_empty()).map(|c| c.id).collect();
+                    let c = chans[(rnd() % chans.len() as u64) as usize];
+                    let ch = p.mixer.get_mut(c).unwrap();
+                    let k = (rnd() % ch.inserts.len() as u64) as usize;
+                    let ins = &mut ch.inserts[k];
+                    if let Some(def) = dragon_engine::effects::find(&ins.effect) {
+                        let prm = &def.params[(rnd() % def.params.len() as u64) as usize];
+                        let n = (rnd() % 1001) as f32 / 1000.0;
+                        ins.params.insert(prm.id.to_string(), prm.denormalize(n));
+                    }
+                    let song = dragon_engine::render::Song::compile(&p, &mut dragon_engine::render::CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate });
+                    let _old = r.set_song(std::sync::Arc::new(song));
+                }
+                4 => r.seek((rnd() % 4000) as f64 / 100.0 - 1.0),
+                5 => {
+                    p.loop_enabled = !p.loop_enabled;
+                    let a = (rnd() % 32) as f64;
+                    p.loop_range = Some(dragon_engine::model::Range::new(a, a + 0.25 + (rnd() % 16) as f64));
+                    let song = dragon_engine::render::Song::compile(&p, &mut dragon_engine::render::CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate });
+                    let _old = r.set_song(std::sync::Arc::new(song));
+                }
+                6 => {
+                    r.stop();
+                    r.play(PlayMode::Song);
+                }
+                7 => r.push_live(dragon_engine::render::LiveEvent::NoteOn { channel: synth, note: 40 + (rnd() % 40) as u8, velocity: 0.8 }),
+                8 => r.push_live(dragon_engine::render::LiveEvent::NoteOff { channel: synth, note: 40 + (rnd() % 40) as u8 }),
+                _ => {}
+            }
+            let n = match rnd() % 6 {
+                0 => 1 + (rnd() % 16) as usize,
+                1 => 2048,
+                _ => 1 + (rnd() % 1024) as usize,
+            };
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.render(&mut buf.0[..n], &mut buf.1[..n], &[])));
+            match res {
+                Err(e) => {
+                    failures.push(format!("{rate} Hz, iteration {it}, block {n}: panic {}", dragon_engine::fault::message(&*e)));
+                    break;
+                }
+                Ok(()) => {
+                    if let Some(x) = buf.0[..n].iter().chain(buf.1[..n].iter()).find(|x| !x.is_finite()) {
+                        failures.push(format!("{rate} Hz, iteration {it}, block {n}: output {x}"));
+                        break;
+                    }
+                    // An insert that blew up (silenced and reset by the renderer): name it.
+                    for (id, times) in dragon_engine::fault::take_nan() {
+                        let what = p.mixer.all().flat_map(|c| c.inserts.iter()).find(|x| x.id == id).map(|x| format!("{} {:?}", x.effect, x.params)).unwrap_or_default();
+                        failures.push(format!("{rate} Hz, iteration {it}: insert {id} blew up {times}x: {what}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
