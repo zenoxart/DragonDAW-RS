@@ -40,6 +40,33 @@ pub fn view_meta(key: &str) -> Option<(&'static str, ViewRole, DockSide)> {
     })
 }
 
+/// The hint at the top left: which control is being touched, where, and its value (FL Studio's hint
+/// bar). Stays for a moment after the last touch, then fades.
+fn hint_bar(ui: &mut egui::Ui, st: &crate::state::State) {
+    let Some((source, name, value, at)) = &st.ui.hint else { return };
+    let age = at.elapsed().as_secs_f32();
+    if age > 4.0 {
+        return;
+    }
+    if age > 2.5 {
+        ui.ctx().request_repaint();
+    } else {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+    }
+    let alpha = if age > 2.5 { 1.0 - (age - 2.5) / 1.5 } else { 1.0 };
+    egui::Frame::NONE.fill(egui::Color32::from_white_alpha((12.0 * alpha) as u8)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(8, 1)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if !source.is_empty() {
+                ui.label(egui::RichText::new(source).small().color(theme::TEXT_DIM.gamma_multiply(alpha)));
+                ui.label(egui::RichText::new("›").small().color(theme::TEXT_DIM.gamma_multiply(alpha)));
+            }
+            ui.label(egui::RichText::new(name).color(theme::TEXT.gamma_multiply(alpha)));
+            ui.label(egui::RichText::new(value).monospace().strong().color(theme::ACCENT_2.gamma_multiply(alpha)));
+        });
+    });
+}
+
 fn tool_side(key: &str) -> Option<DockSide> {
     match view_meta(key) {
         Some((_, ViewRole::ToolWindow, side)) => Some(side),
@@ -79,6 +106,8 @@ impl DragonApp {
             for node in &tree {
                 menu_node(ui, node, &mut clicked);
             }
+            ui.add_space(12.0);
+            hint_bar(ui, &self.st);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(self.st.session.title()).color(theme::TEXT_DIM));
             });

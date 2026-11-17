@@ -157,6 +157,9 @@ pub struct UiState {
     pub album_lufs: Vec<(Id, f32)>,
     /// The Audio Repair tab.
     pub repair: crate::views::repair::RepairUi,
+    /// The control being touched (hovered or turned) and its value, for the hint at the top left:
+    /// (where, what, value, when).
+    pub hint: Option<(String, String, String, Instant)>,
     pub preview_started: Option<Instant>,
     pub clipboard: Option<Clipboard>,
     /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
@@ -267,6 +270,7 @@ impl UiState {
             start_screen: false,
             album_lufs: Vec::new(),
             repair: Default::default(),
+            hint: None,
             preview_started: None,
             clipboard: None,
             last_undo: None,
@@ -1298,24 +1302,69 @@ impl State {
 }
 
 impl State {
+    /// Shows `name: value` of `source` in the hint at the top left (any control, stock or plugin).
+    pub fn hint(&mut self, source: &str, name: &str, value: String) {
+        self.ui.hint = Some((source.to_string(), name.to_string(), value, Instant::now()));
+    }
+
     /// Services open native plugin editors (window events, plugin timers); drops the closed ones.
     pub fn pump_plugin_editors(&mut self) -> bool {
         let pool = &self.session.pool;
         // Parameter edits made in the plugins' own windows, to store in the project.
         let mut edits: Vec<(EditorKey, Vec<(u32, f64)>)> = Vec::new();
+        // The last parameter turned in a plugin's own window (for the hint).
+        let mut touched: Option<(EditorKey, String, f64)> = None;
+        let last = &mut None::<(String, f64)>;
         self.ui.native_editors.retain(|key @ (owner, ins)| {
             let (open, e) = match ins {
                 // try_lock: while the audio thread is processing the plugin, its GUI idles next frame
                 // (the UI never makes the audio thread wait).
                 // Busy (locked) counts as still open; a processor that is gone closes its editor.
-                Some(i) => pool.effect_by_id(*i).map(|e| e.try_lock().map(|mut g| (g.idle(), g.take_param_edits())).unwrap_or((true, Vec::new()))).unwrap_or((false, Vec::new())),
-                None => pool.instrument_by_id(*owner).map(|e| e.try_lock().map(|mut g| (g.idle(), g.take_param_edits())).unwrap_or((true, Vec::new()))).unwrap_or((false, Vec::new())),
+                Some(i) => pool
+                    .effect_by_id(*i)
+                    .map(|e| {
+                        e.try_lock()
+                            .map(|mut g| {
+                                let ed = g.take_param_edits();
+                                if let Some((id, v)) = ed.last() {
+                                    *last = g.plugin_params().into_iter().find(|p| p.id == *id).map(|p| (p.name, *v));
+                                }
+                                (g.idle(), ed)
+                            })
+                            .unwrap_or((true, Vec::new()))
+                    })
+                    .unwrap_or((false, Vec::new())),
+                None => pool
+                    .instrument_by_id(*owner)
+                    .map(|e| {
+                        e.try_lock()
+                            .map(|mut g| {
+                                let ed = g.take_param_edits();
+                                if let Some((id, v)) = ed.last() {
+                                    *last = g.plugin_params().into_iter().find(|p| p.id == *id).map(|p| (p.name, *v));
+                                }
+                                (g.idle(), ed)
+                            })
+                            .unwrap_or((true, Vec::new()))
+                    })
+                    .unwrap_or((false, Vec::new())),
             };
             if !e.is_empty() {
                 edits.push((*key, e));
+                if let Some((n, v)) = last.take() {
+                    touched = Some((*key, n, v));
+                }
             }
             open
         });
+        if let Some(((owner, ins), name, v)) = touched {
+            let source = match ins {
+                Some(i) => self.session.project.mixer.get(owner).and_then(|c| c.inserts.iter().find(|x| x.id == i)).and_then(|x| x.plugin.as_ref()).map(|p| p.name.clone()),
+                None => self.session.project.channel(owner).map(|c| c.name.clone()),
+            }
+            .unwrap_or_default();
+            self.hint(&source, &name, format!("{:.0} %", v * 100.0));
+        }
         if edits.is_empty() {
             if self.ui.plugin_edit_run.is_some_and(|(t, _)| t.elapsed() > std::time::Duration::from_millis(400)) {
                 self.ui.plugin_edit_run = None;

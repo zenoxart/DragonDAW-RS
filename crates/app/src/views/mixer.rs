@@ -469,6 +469,9 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 ui.add_space(4.0);
                 let mut v = m.volume;
                 let r = widgets::fader(ui, &mut v, 2.0, fader_h);
+                if r.hovered() || r.dragged() {
+                    st.hint(&m.name, "Volume", format!("{:+.1} dB", dragon_engine::dsp::gain_to_db(v.max(1e-6))));
+                }
                 widgets::apply(st, &r, "Volume", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.volume = v));
                 r.context_menu(|ui| learn_menu(ui, st, Target::MixerVolume(id)));
                 ui.add_space(2.0);

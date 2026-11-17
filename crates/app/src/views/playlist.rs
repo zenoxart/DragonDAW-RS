@@ -447,7 +447,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             p.rect_filled(zone, 6.0, theme::ACCENT.gamma_multiply(0.12));
             p.extend(egui::Shape::dashed_line(&[zone.left_top(), zone.right_top(), zone.right_bottom(), zone.left_bottom(), zone.left_top()], Stroke::new(1.5_f32, theme::ACCENT), 6.0, 4.0));
             let mixer = st.session.project.track(d.track).and_then(|t| st.session.project.mixer.get(t.mixer)).map(|m| m.name.clone()).unwrap_or_default();
-            p.text(zone.center(), egui::Align2::CENTER_CENTER, format!("＋  New track, grouped – still routed to {mixer}"), egui::FontId::proportional(13.0), theme::TEXT);
+            p.text(zone.center(), egui::Align2::CENTER_CENTER, format!("+  New track, grouped – still routed to {mixer}"), egui::FontId::proportional(13.0), theme::TEXT);
         }
     }
     ui.ctx().data_mut(|dd| dd.insert_temp(egui::Id::new("pl.content_bottom"), content_bottom));

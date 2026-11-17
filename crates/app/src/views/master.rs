@@ -117,7 +117,7 @@ fn flow(ui: &mut Ui, st: &mut State, master: &dragon_engine::model::MixerChannel
             let tp = meters.true_peak;
             pill(ui, &if meters.momentary > -69.0 { format!("OUT  {tp:+.1} dBTP") } else { "OUT".into() });
             ui.add_space(10.0);
-            super::mixer::add_effect_menu(ui, st, mid, "＋ Add effect", None);
+            super::mixer::add_effect_menu(ui, st, mid, "+ Add effect", None);
         });
     });
 }

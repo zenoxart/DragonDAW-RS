@@ -127,7 +127,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         });
     }
     ui.horizontal(|ui| {
-        if ui.button("＋ Add songs…").on_hover_text("Each mixdown gets its own track and mixer channel, one after the other").clicked() {
+        if ui.button("+ Add songs…").on_hover_text("Each mixdown gets its own track and mixer channel, one after the other").clicked() {
             if let Some(files) = rfd::FileDialog::new().add_filter("Audio", dragon_engine::samples::EXTENSIONS).pick_files() {
                 add_songs(st, &files, album);
             }
@@ -147,7 +147,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             }
         }
-        if ui.button("＋ Group bus").on_hover_text("A bus between some songs and the album bus (for songs that need their own treatment)").clicked() {
+        if ui.button("+ Group bus").on_hover_text("A bus between some songs and the album bus (for songs that need their own treatment)").clicked() {
             let n = groups(st, album).len() + 1;
             st.session.edit("Group bus", |p| {
                 let g = crate::modes::bus(p, &format!("Group {n}"), "bus");

@@ -462,6 +462,11 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
     let tele = st.audio.meters().snapshot().fx_data.get(&i).cloned().unwrap_or_else(|| vec![-1.0]);
     let (edits, _) = super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) });
+    if let Some((k, v)) = edits.last() {
+        if let Some(prm) = def.params.iter().find(|p| p.id == k.as_str()) {
+            st.hint(def.name, prm.name, prm.format(*v));
+        }
+    }
     if !edits.is_empty() {
         st.session.gesture(def.name, |p| {
             with_insert(p, m, i, |x| {
@@ -489,6 +494,9 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             let prm = t.prm;
             let key = prm.id.to_string();
             let v = t.value;
+            if t.resp.hovered() || t.resp.dragged() || t.resp.changed() {
+                st.hint(def.name, prm.name, prm.format(v));
+            }
             match prm.kind {
                 ParamKind::Choice(_) | ParamKind::Toggle => {
                     if t.resp.changed() {
@@ -883,6 +891,9 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
                 }
                 let mut val = pl.params.get(&prm.id).copied().unwrap_or(v) as f32;
                 let r = ui.add(egui::Slider::new(&mut val, 0.0..=1.0).text(&prm.name));
+                if r.hovered() || r.dragged() {
+                    st.hint(&pl.name, &prm.name, format!("{:.0} %", val * 100.0));
+                }
                 let pid = prm.id;
                 widgets::apply(st, &r, "Plugin parameter", |p| {
                     let r = match slot {
