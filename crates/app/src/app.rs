@@ -214,6 +214,7 @@ impl DragonApp {
         }
         self.st.autosave_tick();
         self.st.poll_auto_balance();
+        crate::views::album::poll(&mut self.st);
         if self.st.session.latency_moved() {
             self.st.session.force_recompile();
         }

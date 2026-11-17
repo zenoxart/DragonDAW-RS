@@ -153,6 +153,8 @@ pub struct UiState {
     pub browser_sel: Option<PathBuf>,
     /// The start screen is showing.
     pub start_screen: bool,
+    /// The album songs' last measured loudness (mixer channel, LUFS).
+    pub album_lufs: Vec<(Id, f32)>,
     pub preview_started: Option<Instant>,
     pub clipboard: Option<Clipboard>,
     /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
@@ -261,6 +263,7 @@ impl UiState {
             editor: Editor::Playlist,
             browser_sel: None,
             start_screen: false,
+            album_lufs: Vec::new(),
             preview_started: None,
             clipboard: None,
             last_undo: None,
@@ -342,6 +345,8 @@ pub struct State {
     pub open_guard: Option<u32>,
     /// Mixer auto-balance running in the background: progress (‰) and the result when done.
     pub balance_job: Option<BalanceJob>,
+    /// Album loudness matching running in the background.
+    pub album_job: Option<BalanceJob>,
     /// Audio watchdog: the callback count last seen, when it last moved, the last restart, and whether the
     /// device was lost (then it is retried until it comes back).
     pub audio_watch: (u64, Instant, Option<Instant>, bool),
@@ -468,6 +473,7 @@ impl State {
             open_guard: None,
             audio_watch: (0, Instant::now(), None, false),
             balance_job: None,
+            album_job: None,
         };
         st.open_midi();
         st.session.force_recompile();

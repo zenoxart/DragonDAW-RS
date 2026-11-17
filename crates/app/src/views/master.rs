@@ -12,6 +12,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         meters(ui, st);
         ui.separator();
+        if st.session.project.mode == "album" {
+            super::album::show(ui, st);
+            ui.separator();
+        }
         master_chain(ui, st);
         ui.separator();
         super::reference::show(ui, st);

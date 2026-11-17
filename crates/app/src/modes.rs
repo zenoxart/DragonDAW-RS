@@ -181,7 +181,15 @@ fn icon(p: &egui::Painter, r: Rect, mode: Mode, c: Color32) {
             // A microphone.
             let head = Rect::from_center_size(ctr - Vec2::new(0.0, u * 0.25), Vec2::new(u * 0.55, u * 0.9));
             p.rect_stroke(head, u * 0.27, s, egui::StrokeKind::Middle);
-            p.add(egui::Shape::line((0..=16).map(|k| { let a = std::f32::consts::PI * k as f32 / 16.0; Pos2::new(ctr.x - u * 0.5 * a.cos(), ctr.y + u * 0.05 + u * 0.45 * a.sin()) }).collect(), s));
+            p.add(egui::Shape::line(
+                (0..=16)
+                    .map(|k| {
+                        let a = std::f32::consts::PI * k as f32 / 16.0;
+                        Pos2::new(ctr.x - u * 0.5 * a.cos(), ctr.y + u * 0.05 + u * 0.45 * a.sin())
+                    })
+                    .collect(),
+                s,
+            ));
             p.line_segment([ctr + Vec2::new(0.0, u * 0.5), ctr + Vec2::new(0.0, u * 0.8)], s);
             p.line_segment([ctr + Vec2::new(-u * 0.3, u * 0.8), ctr + Vec2::new(u * 0.3, u * 0.8)], s);
         }

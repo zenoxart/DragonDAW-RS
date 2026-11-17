@@ -1,5 +1,6 @@
 //! The editors and panels of Dragon DAW.
 
+pub mod album;
 pub mod automation;
 pub mod browser;
 pub mod envelope;
