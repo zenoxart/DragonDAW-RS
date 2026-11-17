@@ -155,6 +155,8 @@ pub struct UiState {
     pub start_screen: bool,
     /// The album songs' last measured loudness (mixer channel, LUFS).
     pub album_lufs: Vec<(Id, f32)>,
+    /// The Audio Repair tab.
+    pub repair: crate::views::repair::RepairUi,
     pub preview_started: Option<Instant>,
     pub clipboard: Option<Clipboard>,
     /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
@@ -264,6 +266,7 @@ impl UiState {
             browser_sel: None,
             start_screen: false,
             album_lufs: Vec::new(),
+            repair: Default::default(),
             preview_started: None,
             clipboard: None,
             last_undo: None,

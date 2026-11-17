@@ -35,6 +35,7 @@ pub fn view_meta(key: &str) -> Option<(&'static str, ViewRole, DockSide)> {
         "dragon.history" => ("History", ViewRole::ToolWindow, DockSide::Right),
         "dragon.plugins" => ("Plugins", ViewRole::Document, DockSide::Left),
         "dragon.options" => ("Options", ViewRole::Document, DockSide::Left),
+        "dragon.repair" => ("Audio repair", ViewRole::Document, DockSide::Left),
         _ => return None,
     })
 }
@@ -215,6 +216,7 @@ impl DragonApp {
         self.st.autosave_tick();
         self.st.poll_auto_balance();
         crate::views::album::poll(&mut self.st);
+        crate::views::repair::poll(&mut self.st);
         if self.st.session.latency_moved() {
             self.st.session.force_recompile();
         }
@@ -279,6 +281,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             "dragon.history" => views::project::history(ui, st),
             "dragon.plugins" => views::plugins::show(ui, st),
             "dragon.options" => views::options::show(ui, st),
+            "dragon.repair" => views::repair::show(ui, st),
             other => {
                 ui.label(format!("The view '{other}' is not part of Dragon DAW. Close this tab or reset the layout (View › Reset layout)."));
             }

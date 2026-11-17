@@ -49,7 +49,12 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let mut st = state::State::new(ctx, settings);
             // The start screen, unless a project was given or the start is scripted.
-            st.ui.start_screen = st.settings.show_start && open.is_none() && crashed.is_none() && std::env::var_os("DRAGON_STARTUP_COMMANDS").is_none() && std::env::var_os("DRAGON_OPEN_FX").is_none();
+            st.ui.start_screen = st.settings.show_start
+                && open.is_none()
+                && crashed.is_none()
+                && std::env::var_os("DRAGON_STARTUP_COMMANDS").is_none()
+                && std::env::var_os("DRAGON_OPEN_FX").is_none()
+                && std::env::var_os("DRAGON_OPEN_REPAIR").is_none();
             match (open, &crashed) {
                 // The last run died opening this very project: ask first instead of crashing again.
                 (Some(p), Some(c)) if c.project.as_deref() == Some(p.as_path()) && !safe_flag => {}
@@ -67,6 +72,14 @@ fn main() -> eframe::Result {
             }
             if let Ok(id) = std::env::var("DRAGON_OPEN_FX") {
                 st.open_effect_on_master(&id);
+            }
+            // DRAGON_OPEN_REPAIR=<audio file> puts the file on a track and opens it in Audio Repair.
+            if let Ok(path) = std::env::var("DRAGON_OPEN_REPAIR") {
+                let path = std::path::PathBuf::from(path);
+                st.add_audio_clip_at(&path, None, 0.0);
+                if let Some(cid) = st.ui.clips.first().copied() {
+                    views::repair::open(&mut st, cid);
+                }
             }
             Ok(Box::new(app::DragonApp::new(cc, st)))
         }),

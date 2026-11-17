@@ -40,6 +40,7 @@ pub mod model;
 pub mod project_io;
 pub mod reference;
 pub mod render;
+pub mod repair;
 pub mod samples;
 pub mod surround;
 pub mod time;

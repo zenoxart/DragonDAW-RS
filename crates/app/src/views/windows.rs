@@ -1257,6 +1257,30 @@ fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
     });
 }
 
+/// The clip's file as a waveform (for the clip window).
+fn clip_wave(ui: &mut Ui, st: &mut State, path: &std::path::Path) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(200.0), 60.0), egui::Sense::hover());
+    let p = ui.painter_at(r);
+    p.rect_filled(r, 4.0, theme::BG);
+    let Ok(d) = st.session.cache.get(path, st.audio.rate()) else { return };
+    let cols = r.width() as usize;
+    let mid = r.center().y;
+    for c in 0..cols {
+        let (a, b) = (c * d.frames() / cols.max(1), ((c + 1) * d.frames() / cols.max(1)).min(d.frames()));
+        let step = ((b - a) / 32).max(1);
+        let (mut lo, mut hi) = (0.0f32, 0.0f32);
+        let mut i = a;
+        while i < b {
+            let v = 0.5 * (d.l[i] + d.r[i]);
+            lo = lo.min(v);
+            hi = hi.max(v);
+            i += step;
+        }
+        let x = r.left() + c as f32 + 0.5;
+        p.line_segment([egui::pos2(x, mid - hi * r.height() * 0.48), egui::pos2(x, mid - lo * r.height() * 0.48)], egui::Stroke::new(1.0_f32, theme::ACCENT_2));
+    }
+}
+
 fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
     let Some((tid, clip)) = st.session.project.tracks.iter().find_map(|t| t.clips.iter().find(|c| c.id == cid).map(|c| (t.id, c.clone()))) else {
         st.ui.clip_window = None;
@@ -1269,6 +1293,17 @@ fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
         }
     };
     ui.label(RichText::new(a.source.display().to_string()).small().color(theme::TEXT_DIM));
+    // Preview and the way into Audio Repair.
+    ui.horizontal(|ui| {
+        if ui.button("▶ Preview").on_hover_text("Hear the clip's file").clicked() {
+            st.preview(&a.source);
+        }
+        let b = egui::Button::new(RichText::new("Audio repair…").strong()).fill(theme::ACCENT.gamma_multiply(0.5));
+        if ui.add(b).on_hover_text("Open the clip in Audio Repair: de-noise, de-hum, de-click, de-clip, distortion repair, de-reverb, spectral editing and note (pitch) editing").clicked() {
+            super::repair::open(st, cid);
+        }
+    });
+    clip_wave(ui, st, &a.source);
     let mut name = clip.name.clone();
     if ui.text_edit_singleline(&mut name).changed() {
         st.session.gesture("Rename clip", |p| set(p, &|c| c.name = name.clone()));
