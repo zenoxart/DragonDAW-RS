@@ -1,25 +1,20 @@
-//! Splash screen. Plays the animated logo generated with Higgsfield AI (`assets/splash.gif`) when it is
-//! present next to the executable or in the source tree; otherwise draws an animated logo procedurally.
+//! Splash screen: the Dragon DAW logo (from the original Dragon DAW) rising out of a red glow.
 
 use crate::theme;
-use egui::{Color32, Pos2, Stroke, TextureHandle, Vec2};
-use std::time::{Duration, Instant};
+use egui::{Color32, Pos2, Stroke, Vec2};
+use std::time::Instant;
 
 const SHOW_FOR: f32 = 2.6;
 const FADE: f32 = 0.5;
 
 pub struct Splash {
-    frames: Vec<(TextureHandle, Duration)>,
-    total: Duration,
     start: Instant,
     reduced_motion: bool,
 }
 
 impl Splash {
-    pub fn new(ctx: &egui::Context, reduced_motion: bool) -> Self {
-        let frames = crate::gif_anim::GifAnim::load(ctx, "splash.gif").map(|a| a.frames).unwrap_or_default();
-        let total = frames.iter().map(|f| f.1).sum();
-        Splash { frames, total, start: Instant::now(), reduced_motion }
+    pub fn new(_ctx: &egui::Context, reduced_motion: bool) -> Self {
+        Splash { start: Instant::now(), reduced_motion }
     }
 
     /// Draws the splash; returns `false` when it is finished.
@@ -32,36 +27,33 @@ impl Splash {
         let alpha = if t > SHOW_FOR { 1.0 - (t - SHOW_FOR) / FADE } else { 1.0 };
         let screen = ctx.screen_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("dragon.splash")));
-        painter.rect_filled(screen, 0.0, theme::BG.gamma_multiply(alpha));
+        painter.rect_filled(screen, 0.0, Color32::from_rgb(0x14, 0x0a, 0x08).gamma_multiply(alpha));
         let c = screen.center() - Vec2::new(0.0, 30.0);
-        let size = screen.width().min(screen.height()) * 0.36;
-        if !self.frames.is_empty() {
-            let mut at = if self.reduced_motion { Duration::ZERO } else { Duration::from_secs_f32(t) };
-            if !self.total.is_zero() {
-                at = Duration::from_nanos((at.as_nanos() % self.total.as_nanos()) as u64);
-            }
-            let mut idx = 0;
-            for (i, (_, d)) in self.frames.iter().enumerate() {
-                if at < *d {
-                    idx = i;
-                    break;
-                }
-                at -= *d;
-            }
-            let tex = &self.frames[idx].0;
-            let rect = egui::Rect::from_center_size(c, Vec2::splat(size));
-            painter.image(tex.id(), rect, egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE.gamma_multiply(alpha));
-        } else {
-            draw_logo(&painter, c, size * 0.5, if self.reduced_motion { 0.0 } else { t }, alpha);
+        let size = screen.width().min(screen.height()) * 0.5;
+        // Rise in: scale up from 85 % and fade in over the first half second.
+        let rise = if self.reduced_motion { 1.0 } else { (t / 0.6).clamp(0.0, 1.0) };
+        let ease = 1.0 - (1.0 - rise).powi(3);
+        let glow = if self.reduced_motion { 0.6 } else { 0.55 + 0.25 * (t * 2.4).sin() };
+        // A soft glow: many faint discs, the outer ones fainter.
+        for k in (0..28).rev() {
+            let q = k as f32 / 27.0;
+            let rr = size * (0.3 + 0.55 * q);
+            painter.circle_filled(c, rr, Color32::from_rgba_unmultiplied(200, 34, 16, (5.0 * glow * alpha * ease * (1.0 - q)) as u8));
         }
-        let ty = c.y + size * 0.62;
-        painter.text(Pos2::new(c.x, ty), egui::Align2::CENTER_TOP, "DRAGON DAW", egui::FontId::proportional(30.0), Color32::WHITE.gamma_multiply(alpha));
+        let s = size * (0.85 + 0.15 * ease);
+        let rect = egui::Rect::from_center_size(c, Vec2::splat(s));
+        match crate::brand::logo(ctx) {
+            Some(tex) => {
+                painter.image(tex.id(), rect, egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE.gamma_multiply(alpha * ease));
+            }
+            None => draw_logo(&painter, c, s * 0.5, t, alpha * ease),
+        }
         painter.text(
-            Pos2::new(c.x, ty + 38.0),
+            Pos2::new(c.x, rect.bottom() + 8.0),
             egui::Align2::CENTER_TOP,
-            format!("record · make beats · mix · master   v{}", env!("CARGO_PKG_VERSION")),
-            egui::FontId::proportional(13.0),
-            theme::TEXT_DIM.gamma_multiply(alpha),
+            format!("DAW  ·  record · make beats · mix · master   v{}", env!("CARGO_PKG_VERSION")),
+            egui::FontId::proportional(14.0),
+            theme::TEXT_DIM.gamma_multiply(alpha * ease),
         );
         ctx.request_repaint();
         true
@@ -98,14 +90,15 @@ pub fn draw_logo(p: &egui::Painter, c: Pos2, r: f32, t: f32, alpha: f32) {
     p.add(egui::Shape::line(pts, Stroke::new(2.5_f32, theme::PLAYHEAD.gamma_multiply(alpha))));
 }
 
-/// The small brand mark in the menu bar.
+/// The small brand mark in the menu bar: the dragon's head.
 pub fn logo(ui: &mut egui::Ui, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
-    let p = ui.painter_at(rect);
-    p.add(egui::Shape::convex_polygon(hexagon(rect.center(), size * 0.48, 0.0), theme::ACCENT, Stroke::new(1.0_f32, theme::ACCENT_2)));
-    let c = rect.center();
-    let w = size * 0.28;
-    p.line_segment([Pos2::new(c.x - w, c.y), Pos2::new(c.x - w * 0.4, c.y - w * 0.8)], Stroke::new(1.5_f32, Color32::WHITE));
-    p.line_segment([Pos2::new(c.x - w * 0.4, c.y - w * 0.8), Pos2::new(c.x + w * 0.2, c.y + w * 0.8)], Stroke::new(1.5_f32, Color32::WHITE));
-    p.line_segment([Pos2::new(c.x + w * 0.2, c.y + w * 0.8), Pos2::new(c.x + w, c.y)], Stroke::new(1.5_f32, Color32::WHITE));
+    match crate::brand::mark(ui.ctx()) {
+        Some(tex) => {
+            ui.add(egui::Image::new(&tex).fit_to_exact_size(Vec2::splat(size)).corner_radius(4.0));
+        }
+        None => {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+            draw_logo(&ui.painter_at(rect), rect.center(), size * 0.45, 0.0, 1.0);
+        }
+    }
 }

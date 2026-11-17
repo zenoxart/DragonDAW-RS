@@ -1,7 +1,7 @@
 //! Command palette, toasts, crash recovery and the about box.
 
 use crate::state::State;
-use crate::{splash, theme};
+use crate::theme;
 use egui::RichText;
 use redhive_client_framework::widgets::{severity_color, severity_icon};
 use redhive_contracts::ui::Severity;
@@ -114,13 +114,14 @@ pub fn about(ctx: &egui::Context, st: &mut State) {
     }
     let mut open = true;
     egui::Window::new("About Dragon DAW").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(260.0, 120.0), egui::Sense::hover());
-        splash::draw_logo(&ui.painter_at(rect), rect.center(), 50.0, ui.input(|i| i.time) as f32, 1.0);
+        if let Some(tex) = crate::brand::logo(ctx) {
+            ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(220.0, 220.0)).corner_radius(10.0));
+        }
         ui.heading(format!("Dragon DAW {}", env!("CARGO_PKG_VERSION")));
         ui.label("Record, make beats, mix and master – fully offline.");
         ui.label("Built on the Red Hive desktop framework (egui).");
         ui.label(RichText::new("Copyright © ZenoxArt · Apache License 2.0").small());
-        ui.label(RichText::new("Splash animation generated with Higgsfield AI.").small().color(theme::TEXT_DIM));
+        ui.label(RichText::new("Logo and startup sound from the original Dragon DAW.").small().color(theme::TEXT_DIM));
         ctx.request_repaint();
     });
     st.ui.about = open;

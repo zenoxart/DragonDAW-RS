@@ -714,6 +714,8 @@ fn shown(prm: &ParamInfo, v: f32) -> String {
 
 const GAP: f32 = 6.0;
 const SECTION_PAD: f32 = 16.0;
+/// Where `show` leaves the narrowest width its panel needs (read by the editor window for its minimum size).
+pub const NEED_KEY: &str = "fx.panel.need";
 /// The output column's width in a column layout.
 const COLUMN_OUT: f32 = 192.0;
 
@@ -738,6 +740,13 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
         // Pack the sections into rows that fit the editor's width; a section wider than that wraps its
         // own controls.
         let avail = ui.available_width().max(200.0);
+        // The narrowest the panel can go without cutting a control: its widest cell (or a column row).
+        let mut need = panel.sections.iter().flat_map(|s| s.ctls.iter()).map(|c| cell_width(ui, def, c) + SECTION_PAD).fold(0.0f32, f32::max);
+        if columns(def.id) {
+            let n = panel.sections.len().saturating_sub(1) as f32;
+            need = need.max(130.0 * n + 8.0 * (n - 1.0).max(0.0));
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(NEED_KEY.into(), need + 16.0));
         let widths: Vec<f32> = panel
             .sections
             .iter()
@@ -747,16 +756,19 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                 (cells.max(title) + SECTION_PAD).min(avail)
             })
             .collect();
-        let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
-        let mut used = 0.0;
+        // First fit: a section goes into the first row it fits in, so small sections fill the gaps.
+        let mut rows: Vec<Vec<usize>> = Vec::new();
+        let mut used: Vec<f32> = Vec::new();
         for (k, w) in widths.iter().enumerate() {
-            let need = if rows.last().is_some_and(|r| r.is_empty()) { *w } else { used + 8.0 + w };
-            if need > avail && !rows.last().is_some_and(|r| r.is_empty()) {
-                rows.push(vec![k]);
-                used = *w;
-            } else {
-                rows.last_mut().unwrap().push(k);
-                used = need;
+            match used.iter().position(|u| u + 8.0 + w <= avail) {
+                Some(r) => {
+                    rows[r].push(k);
+                    used[r] += 8.0 + w;
+                }
+                None => {
+                    rows.push(vec![k]);
+                    used.push(*w);
+                }
             }
         }
         let mut draw = |ui: &mut Ui, k: usize, inner: f32, accent: Color32, dim: bool| {

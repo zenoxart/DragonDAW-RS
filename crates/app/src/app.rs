@@ -11,6 +11,8 @@ pub struct DragonApp {
     pub st: State,
     dock: DockManager,
     splash: Option<Splash>,
+    /// The startup sound has played (or was skipped).
+    sound_played: bool,
     styled: bool,
     quit_confirmed: bool,
     confirm_quit: bool,
@@ -52,7 +54,7 @@ impl DragonApp {
         let dock = DockManager::load(&st.ctx.paths);
         let splash = st.settings.show_splash.then(|| Splash::new(&cc.egui_ctx, st.settings.reduced_motion));
         cc.egui_ctx.set_zoom_factor(st.settings.ui_scale.clamp(0.6, 2.5));
-        DragonApp { st, dock, splash, styled: false, quit_confirmed: false, confirm_quit: false, last_compile: std::time::Instant::now() }
+        DragonApp { st, dock, splash, sound_played: false, styled: false, quit_confirmed: false, confirm_quit: false, last_compile: std::time::Instant::now() }
     }
 
     fn run_command(&mut self, id: &str, ctx: &egui::Context) {
@@ -71,7 +73,7 @@ impl DragonApp {
         let mut clicked = None;
         egui::menu::bar(ui, |ui| {
             ui.add_space(4.0);
-            crate::splash::logo(ui, 18.0);
+            crate::splash::logo(ui, 22.0);
             ui.add_space(4.0);
             for node in &tree {
                 menu_node(ui, node, &mut clicked);
@@ -363,6 +365,16 @@ impl eframe::App for DragonApp {
         if let Some(s) = &mut self.splash {
             if !s.show(ctx) {
                 self.splash = None;
+            }
+        }
+        // The Dragon startup sound, once the splash is gone (as in the original Dragon DAW).
+        if self.splash.is_none() && !self.sound_played {
+            self.sound_played = true;
+            if self.st.settings.startup_sound && std::env::var_os("DRAGON_STARTUP_COMMANDS").is_none() {
+                if let Some(p) = crate::brand::startup_sound(&self.st.ctx.paths.local) {
+                    self.st.preview(&p);
+                    self.st.ui.browser_sel = None;
+                }
             }
         }
 

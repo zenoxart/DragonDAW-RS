@@ -29,6 +29,8 @@ pub struct Settings {
     pub undo_limit: usize,
     pub ui_scale: f32,
     pub show_splash: bool,
+    /// Plays the Dragon startup sound when the app opens.
+    pub startup_sound: bool,
     pub reduced_motion: bool,
     pub follow_playhead: bool,
     /// Mackie Control surface: MIDI input and (optional) output for motor faders and LEDs.
@@ -48,6 +50,7 @@ impl Default for Settings {
             undo_limit: 200,
             ui_scale: 1.0,
             show_splash: true,
+            startup_sound: true,
             reduced_motion: false,
             follow_playhead: true,
             mackie_input: None,

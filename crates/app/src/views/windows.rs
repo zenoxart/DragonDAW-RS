@@ -28,7 +28,28 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
             let wide = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_some_and(|x| x.effect == "multiband");
             w.default_width(if wide { 980.0 } else { 600.0 }).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
         };
-        w.show(ctx, |ui| effect_editor(ui, st, m, i));
+        // The smallest the window may get: wide enough for the panel's widest control and tall enough for
+        // all of the editor (as measured last frame), within the screen.
+        let need_id = egui::Id::new(("fx.need", m, i));
+        if !full {
+            if let Some([need_w, need_h, win_w]) = ctx.data(|d| d.get_temp::<[f32; 3]>(need_id)) {
+                let screen = ctx.screen_rect();
+                let max_h = screen.height() - 120.0;
+                // Too tall for the screen: as wide as the screen allows, so the sections pack into fewer rows.
+                let grow = if need_h > max_h && win_w < screen.width() - 41.0 { screen.width() - 40.0 } else { 0.0 };
+                w = w.min_width(need_w.max(grow).clamp(480.0, screen.width() - 40.0)).min_height(need_h.min(max_h));
+            }
+        }
+        let panel_need = egui::Id::new(super::fx_panel::NEED_KEY);
+        ctx.data_mut(|d| d.remove::<f32>(panel_need));
+        let mut measured = [0.0f32; 2];
+        let shown = w.show(ctx, |ui| {
+            effect_editor(ui, st, m, i);
+            measured = [ui.ctx().data(|d| d.get_temp::<f32>(panel_need)).unwrap_or(0.0) + 24.0, ui.min_rect().height() + 8.0];
+        });
+        if let Some(r) = shown {
+            ctx.data_mut(|d| d.insert_temp(need_id, [measured[0], measured[1], r.response.rect.width()]));
+        }
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
             st.ui.effect_windows.retain(|w| *w != (m, i));
             if st.ui.fx_fullscreen == Some((m, i)) {

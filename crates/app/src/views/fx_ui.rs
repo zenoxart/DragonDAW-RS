@@ -118,12 +118,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "dragon_particle" => 240.0,
         _ => 170.0,
     };
-    // Wide windows (full screen) get a taller display in proportion.
-    let mut height = (base * (w / 520.0).clamp(1.0, 2.2)).min(ui.available_height().max(base));
-    if h.def.id == "multiband" {
-        // The band columns below need the room.
-        height = height.min(250.0);
-    }
+    let height = hero_height(h.def.id, base, w, ui.available_height(), ui.ctx().screen_rect().height());
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, height), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
     if let Some((x, y)) = xy_params(h.def.id) {
@@ -2069,6 +2064,16 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 // ------------------------------------------------------------------------------------------------ multiband
 
+/// The display's height: taller in wide windows (full screen), at most 30 % of the screen so the
+/// controls keep their room, and short for the multiband (its band columns need the space).
+pub(crate) fn hero_height(id: &str, base: f32, w: f32, avail_h: f32, screen_h: f32) -> f32 {
+    let mut height = (base * (w / 520.0).clamp(1.0, 2.2)).min(avail_h.max(base));
+    if id == "multiband" {
+        height = height.min(250.0);
+    }
+    height.min((screen_h * 0.3).max(base))
+}
+
 /// Where the multiband display draws: the plot, its dB scale (0 dB at the top, −60 dB at the bottom) and
 /// each band's frequency span.
 struct MbGeom {
@@ -2713,7 +2718,7 @@ mod tests {
         };
         frame(vec![], &mut area, &mut got);
         let w = area.width().max(260.0);
-        let height = (220.0 * (w / 520.0).clamp(1.0, 2.2)).min(area.height().max(220.0));
+        let height = hero_height("orbit", 220.0, w, area.height(), 400.0);
         let (field, shapes, modes) = orbit_layout(Rect::from_min_size(area.min, egui::vec2(w, height)));
         let click = |at: Pos2, area: &mut Rect, got: &mut Vec<(String, f32)>| {
             frame(vec![egui::Event::PointerMoved(at)], area, got);
@@ -2757,7 +2762,7 @@ mod tests {
         };
         frame(vec![], &mut area, &mut got);
         let w = area.width().max(260.0);
-        let height = (230.0 * (w / 520.0).clamp(1.0, 2.2)).min(area.height().max(230.0));
+        let height = hero_height("drum_bus", 230.0, w, area.height(), 400.0);
         let (track, _) = ns_fader(Rect::from_min_size(area.min, egui::vec2(w, height)));
         let from = Pos2::new(track.center().x, track.bottom());
         let to = Pos2::new(track.center().x, track.bottom() - track.height() * 0.75);
