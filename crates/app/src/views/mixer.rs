@@ -212,6 +212,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     cables(ui, st, &all, &rects, &meters);
                     // Where each strip is (tests and tooling).
                     ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.rects"), rects.clone()));
+                    // A click on empty mixer space (or Escape) deselects: the cables disappear.
+                    let area = ui.clip_rect();
+                    let empty_click = ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| area.contains(p) && !rects.iter().any(|r| r.1.contains(p))));
+                    let escape = ui.ui_contains_pointer() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    if empty_click || escape {
+                        st.ui.mixer_sel.clear();
+                    }
                     ui.vertical(|ui| {
                         if ui.add(egui::Button::new(RichText::new("+\ninsert").small()).min_size(Vec2::new(46.0, 40.0))).on_hover_text("Add a mixer insert").clicked() {
                             st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
@@ -495,6 +502,23 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
         })
         .inner
     });
+    // An effect slot dragged onto this strip: copied here with its settings (Shift: moved).
+    if !vca {
+        if let Some(payload) = resp.response.dnd_hover_payload::<SlotDrag>() {
+            if payload.mixer != id {
+                ui.painter().rect_stroke(resp.response.rect, 4.0, Stroke::new(2.0_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
+            }
+        }
+        if let Some(payload) = resp.response.dnd_release_payload::<SlotDrag>() {
+            if payload.mixer != id {
+                let shift = ui.input(|i| i.modifiers.shift);
+                let done = st.session.edit(if shift { "Move effect to track" } else { "Copy effect to track" }, |p| crate::chains::copy_insert(p, payload.mixer, payload.index, id, None, shift));
+                if done.is_none() {
+                    st.toast("That track's effect slots are full", redhive_contracts::ui::Severity::Warning);
+                }
+            }
+        }
+    }
     if !resp.inner && resp.response.contains_pointer() && ui.input(|i| i.pointer.primary_clicked()) && !ui.ctx().is_being_dragged(egui::Id::new(("mixer.jack", id))) {
         select_strip(ui, st, id, all);
     }
@@ -537,23 +561,25 @@ fn cables(ui: &mut Ui, st: &mut State, all: &[MixerChannel], rects: &[(Id, egui:
     let time = ui.input(|i| i.time) as f32;
     let reduced = st.settings.reduced_motion;
     let mut animate = false;
-    // Dim cables first, the selected insert's on top.
-    let mut list: Vec<(Id, Id, bool, f32)> = Vec::new();
-    for c in all.iter().filter(|c| c.kind == ChannelKind::Audio && c.id != master) {
+    // Only the selected channel's cables, in and out – none until a channel is selected.
+    let chosen = !st.ui.mixer_sel.is_empty();
+    let mut list: Vec<(Id, Id, bool, f32, bool)> = Vec::new();
+    for c in all.iter().filter(|c| chosen && c.kind == ChannelKind::Audio && c.id != master) {
         if let Some(t) = main_target(c, master) {
-            list.push((c.id, t, true, 1.0));
+            list.push((c.id, t, true, 1.0, false));
         }
         for s in &c.sends {
-            list.push((c.id, s.target, false, s.level));
+            list.push((c.id, s.target, false, s.level, s.sidechain_only));
         }
     }
-    list.sort_by_key(|(a, b, _, _)| *a == sel || *b == sel);
-    for (src, dst, main, level) in list {
+    list.retain(|(a, b, ..)| *a == sel || *b == sel);
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.cables.drawn"), list.len()));
+    for (src, dst, main, level, side) in list {
         let (Some(ra), Some(rb)) = (rect_of(src), rect_of(dst)) else { continue };
         let a = jacks(ra).0;
         let b = jacks(rb).1;
         let hot = src == sel || dst == sel;
-        let color = all.iter().find(|c| c.id == src).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT);
+        let color = if side { SIDECHAIN_COL } else { all.iter().find(|c| c.id == src).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT) };
         let col = if hot { color } else { color.gamma_multiply(0.35) };
         let w = if main { 2.6 } else { 1.6 + 1.6 * level };
         let pts = cable(&p, a, b, col, if hot { w } else { w * 0.8 }, floor);
@@ -743,7 +769,10 @@ fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChann
         return;
     }
     ui.add_space(4.0);
-    ui.label(RichText::new("EFFECT SLOTS").small().color(theme::TEXT_DIM));
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("EFFECT SLOTS").small().color(theme::TEXT_DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| chain_menus(ui, st, m));
+    });
     let mut drop: Option<(usize, usize)> = None;
     for (k, ins) in m.inserts.iter().enumerate() {
         let iid = ins.id;
@@ -825,6 +854,11 @@ fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChann
         if let Some(payload) = row.response.dnd_release_payload::<SlotDrag>() {
             if payload.mixer == id && payload.index != k {
                 drop = Some((payload.index, k));
+            } else if payload.mixer != id {
+                let shift = ui.input(|i| i.modifiers.shift);
+                st.session.edit(if shift { "Move effect to track" } else { "Copy effect to track" }, |p| {
+                    crate::chains::copy_insert(p, payload.mixer, payload.index, id, Some(k), shift);
+                });
             }
         }
         if row.response.dnd_hover_payload::<SlotDrag>().is_some() {
@@ -926,11 +960,66 @@ fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChann
     options(ui, st, m, all);
 }
 
+/// "Save chain" and "Load chain" for the selected track's effects (`.dragonchain` files in the projects
+/// folder's "Mixer chains").
+fn chain_menus(ui: &mut Ui, st: &mut State, m: &MixerChannel) {
+    let id = m.id;
+    let dir = crate::chains::dir(&st.ctx.paths.projects);
+    ui.menu_button("Load chain ▾", |ui| {
+        let chains = crate::chains::list(&dir);
+        if chains.is_empty() {
+            ui.label(RichText::new("No saved chains yet – \"Save chain\" stores this track's effects").small().color(theme::TEXT_DIM));
+        }
+        for (label, path) in chains {
+            ui.menu_button(&label, |ui| {
+                for (replace, text) in [(true, "Replace this track's effects"), (false, "Add after this track's effects")] {
+                    if ui.button(text).clicked() {
+                        match crate::chains::load(&path) {
+                            Ok(c) => {
+                                let n = st.session.edit(if replace { "Load effect chain" } else { "Add effect chain" }, |p| crate::chains::apply(p, id, &c, replace));
+                                st.toast(format!("{} effect{} from \"{}\"", n, if n == 1 { "" } else { "s" }, c.name), redhive_contracts::ui::Severity::Success);
+                            }
+                            Err(e) => st.toast(format!("Could not read the chain: {e}"), redhive_contracts::ui::Severity::Error),
+                        }
+                        ui.close_menu();
+                    }
+                }
+            });
+        }
+        ui.separator();
+        if ui.button("Open the chains folder").clicked() {
+            let _ = std::fs::create_dir_all(&dir);
+            crate::chains::reveal(&dir);
+            ui.close_menu();
+        }
+    });
+    let name_key = egui::Id::new(("mixer.chain.name", id));
+    ui.menu_button("Save chain", |ui| {
+        let mut name: String = ui.data(|d| d.get_temp(name_key)).unwrap_or_else(|| format!("{} chain", m.name));
+        ui.label(RichText::new("Name").small());
+        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0));
+        ui.data_mut(|d| d.insert_temp(name_key, name.clone()));
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.label(RichText::new(format!("{} effect{} with all settings; plugins keep their state", m.inserts.len(), if m.inserts.len() == 1 { "" } else { "s" })).small().color(theme::TEXT_DIM));
+        if (ui.add_enabled(!m.inserts.is_empty() && !name.trim().is_empty(), egui::Button::new("Save")).clicked() || enter) && !m.inserts.is_empty() {
+            // Third-party plugins: their current state goes into the chain.
+            st.capture_plugin_states();
+            let inserts = st.session.project.mixer.get(id).map(|c| c.inserts.clone()).unwrap_or_default();
+            match crate::chains::save(&dir, &crate::chains::Chain { name: name.trim().to_string(), inserts }) {
+                Ok(p) => st.toast(format!("Saved {}", p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()), redhive_contracts::ui::Severity::Success),
+                Err(e) => st.toast(format!("Could not save the chain: {e}"), redhive_contracts::ui::Severity::Error),
+            }
+            ui.data_mut(|d| d.remove::<String>(name_key));
+            ui.close_menu();
+        }
+    });
+}
+
 /// Drag payload for reordering effect slots.
 #[derive(Clone, Copy)]
-struct SlotDrag {
-    mixer: Id,
-    index: usize,
+pub(super) struct SlotDrag {
+    pub mixer: Id,
+    pub index: usize,
 }
 
 fn slot_menu(ui: &mut Ui, st: &mut State, id: Id, iid: Id, k: usize, m: &MixerChannel, all: &[MixerChannel]) {

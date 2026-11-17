@@ -119,12 +119,18 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         _ => 170.0,
     };
     // Wide windows (full screen) get a taller display in proportion.
-    let height = (base * (w / 520.0).clamp(1.0, 2.2)).min(ui.available_height().max(base));
+    let mut height = (base * (w / 520.0).clamp(1.0, 2.2)).min(ui.available_height().max(base));
+    if h.def.id == "multiband" {
+        // The band columns below need the room.
+        height = height.min(250.0);
+    }
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, height), egui::Sense::click_and_drag());
     let edits = interact(ui, r, &resp, h);
     if let Some((x, y)) = xy_params(h.def.id) {
         let name = |id: Option<&str>| id.and_then(|id| h.def.params.iter().find(|p| p.id == id)).map(|p| p.name).unwrap_or("-");
         let _ = resp.clone().on_hover_text(format!("Drag: left / right = {}, up / down = {} (Shift = fine, double-click resets)", name(x), name(y)));
+    } else if h.def.id == "multiband" {
+        let _ = resp.clone().on_hover_text("Drag a crossover sideways, a band up / down for its threshold (Shift = fine, double-click resets)");
     } else if !hit_regions(h.def.id, r).is_empty() {
         let _ = resp.clone().on_hover_text("Drag a control up / down (Shift = fine), wheel, double-click resets");
     }
@@ -133,7 +139,8 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     match h.def.id {
         "eq" => eq(&p, r, h, col),
         "filter" => filter(&p, r, h, col),
-        "compressor" | "limiter" | "gate" | "deesser" | "multiband" => dynamics(&p, r, h, col),
+        "compressor" | "limiter" | "gate" | "deesser" => dynamics(&p, r, h, col),
+        "multiband" => multiband(&p, r, h, col),
         "transient" => transient(&p, r, h, col),
         "delay" => delay(&p, r, h, col),
         "reverb" => {
@@ -507,13 +514,13 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
         }
-        "compressor" | "gate" | "deesser" | "multiband" => {
+        "multiband" => multiband_interact(ui, r, resp, h, pos, &mut out),
+        "compressor" | "gate" | "deesser" => {
             let sq = square(r);
             if resp.dragged() && sq.expand(10.0).contains(resp.interact_pointer_pos().unwrap_or(pos)) {
                 let lo = if h.def.id == "gate" { -80.0 } else { -60.0 };
                 let db = (-60.0 + (pos.x - sq.left()) / sq.width() * 60.0).clamp(lo, 0.0);
-                let id = if h.def.id == "multiband" { "b2_thr" } else { "threshold" };
-                out.push((id.into(), (db * 2.0).round() / 2.0));
+                out.push(("threshold".into(), (db * 2.0).round() / 2.0));
             }
             if sq.contains(pos) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -931,7 +938,6 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let (thr, ratio, knee, makeup) = match h.def.id {
         "limiter" => (h.v("ceiling") - h.v("gain"), 100.0, 0.0, h.v("gain")),
         "gate" => (h.v("threshold"), 1.0 / h.v("ratio").clamp(1.0, 8.0), h.v("knee"), 0.0),
-        "multiband" => (h.v("b2_thr"), h.v("b2_ratio"), h.v("b2_knee"), h.v("b2_gain")),
         "deesser" => (h.v("threshold"), 1.0 + h.v("range") / 6.0, 0.0, 0.0),
         _ => (h.v("threshold"), h.v("ratio"), h.v("knee"), h.v("makeup")),
     };
@@ -1008,12 +1014,6 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             h.v("freq_hi") / 1000.0,
             h.v("range")
         ),
-        "multiband" => {
-            let n = h.v("bands").round() as usize + 1;
-            let xs: Vec<String> = ["x1", "x2", "x3"].iter().take(n.saturating_sub(1)).map(|x| format!("{:.0} Hz", h.v(x))).collect();
-            let mode = dragon_engine::effects::dynamics::MB_PHASE.get(h.v("phase").round() as usize).copied().unwrap_or("Crossover");
-            format!("{n} bands · {} · {mode} · band 2 shown", if xs.is_empty() { "full range".into() } else { xs.join(" / ") })
-        }
         _ => {
             let style = dragon_engine::effects::dynamics::COMP_STYLES.get(h.v("style").round() as usize).copied().unwrap_or("Clean");
             let look = if h.v("lookahead") > 0.05 { format!(" · look-ahead {:.1} ms", h.v("lookahead")) } else { String::new() };
@@ -2060,6 +2060,224 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             p.text(Pos2::new(face.right() - 6.0, face.bottom() - 4.0), egui::Align2::RIGHT_BOTTOM, format!("in {hz:.0} Hz > out {out:.0} Hz"), egui::FontId::monospace(9.5), theme::TEXT_DIM);
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------------ multiband
+
+/// Where the multiband display draws: the plot, its dB scale (0 dB at the top, −60 dB at the bottom) and
+/// each band's frequency span.
+struct MbGeom {
+    plot: Rect,
+    /// (left, right) x of each active band.
+    spans: Vec<(f32, f32)>,
+    /// x of each active crossover.
+    xs: Vec<f32>,
+}
+
+impl MbGeom {
+    fn new(r: Rect, h: &Hero) -> Self {
+        let plot = Rect::from_min_max(Pos2::new(r.left() + 30.0, r.top() + 20.0), Pos2::new(r.right() - 8.0, r.bottom() - 34.0));
+        let n = mb_count(h);
+        let xs: Vec<f32> = ["x1", "x2", "x3"].iter().take(n - 1).map(|x| fx(plot, h.v(x))).collect();
+        let mut edges = vec![plot.left()];
+        edges.extend(xs.iter().copied());
+        edges.push(plot.right());
+        let spans = edges.windows(2).map(|w| (w[0], w[1].max(w[0]))).collect();
+        MbGeom { plot, spans, xs }
+    }
+    fn y(&self, db: f32) -> f32 {
+        self.plot.top() + (-db / 60.0).clamp(0.0, 1.0) * self.plot.height()
+    }
+    fn band_at(&self, x: f32) -> usize {
+        self.spans.iter().position(|(_, b)| x < *b).unwrap_or(self.spans.len().saturating_sub(1))
+    }
+}
+
+fn mb_count(h: &Hero) -> usize {
+    (h.v("bands").round() as usize + 1).clamp(1, 4)
+}
+
+fn hz_label(f: f32) -> String {
+    if f >= 1000.0 {
+        let k = f / 1000.0;
+        if (k - k.round()).abs() < 0.05 {
+            format!("{:.0}k", k)
+        } else {
+            format!("{k:.1}k")
+        }
+    } else {
+        format!("{f:.0}")
+    }
+}
+
+/// Multiband dynamics in the McDSP MC404 manner: one coloured column per band across a log-frequency axis,
+/// each with its live level, its threshold line and its gain change over the top; drag a crossover
+/// sideways, a band up / down for its threshold.
+fn multiband(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
+    use super::fx_panel::BAND_COLORS;
+    p.rect_filled(r, 6.0, Color32::from_rgb(0x0f, 0x11, 0x15));
+    let g = MbGeom::new(r, h);
+    let small = egui::FontId::proportional(9.0);
+    let grid = Stroke::new(1.0_f32, Color32::from_white_alpha(12));
+    for db in [-12.0f32, -24.0, -36.0, -48.0] {
+        let y = g.y(db);
+        p.line_segment([Pos2::new(g.plot.left(), y), Pos2::new(g.plot.right(), y)], grid);
+        p.text(Pos2::new(g.plot.left() - 4.0, y), egui::Align2::RIGHT_CENTER, format!("{db:.0}"), small.clone(), theme::TEXT_DIM);
+    }
+    p.text(Pos2::new(g.plot.left() - 4.0, g.plot.top()), egui::Align2::RIGHT_CENTER, "0", small.clone(), theme::TEXT_DIM);
+    for f in [50.0f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
+        let x = fx(g.plot, f);
+        p.line_segment([Pos2::new(x, g.plot.top()), Pos2::new(x, g.plot.bottom())], grid);
+        p.text(Pos2::new(x + 3.0, g.plot.bottom() - 2.0), egui::Align2::LEFT_BOTTOM, hz_label(f), small.clone(), Color32::from_white_alpha(60));
+    }
+    let live = h.tele.len() >= 8;
+    let t = h.t();
+    let soloed = (1..=g.spans.len()).any(|n| h.v(&format!("b{n}_solo")) > 0.5);
+    for (k, &(a, b)) in g.spans.iter().enumerate() {
+        let n = k + 1;
+        let c = BAND_COLORS[k % BAND_COLORS.len()];
+        let off = h.v(&format!("b{n}_bypass")) > 0.5 || (soloed && h.v(&format!("b{n}_solo")) < 0.5) || !h.enabled;
+        let c = if off { Color32::from_gray(90) } else { c };
+        let col_r = Rect::from_x_y_ranges(a + 1.0..=b - 1.0, g.plot.y_range());
+        p.rect_filled(col_r, 2.0, c.gamma_multiply(0.07));
+        // The band's level, as a bar in the middle of its column.
+        let lvl = if live { h.tele[k] } else { -34.0 + 9.0 * (t * (1.3 + 0.4 * k as f32) + k as f32).sin() };
+        let bw = ((b - a) * 0.34).clamp(4.0, 26.0);
+        let bar = Rect::from_x_y_ranges(col_r.center().x - bw / 2.0..=col_r.center().x + bw / 2.0, g.y(lvl.max(-60.0))..=g.plot.bottom());
+        p.rect_filled(bar, 2.0, c.gamma_multiply(0.45));
+        // The threshold, a line across the column with a handle.
+        let thr = h.v(&format!("b{n}_thr"));
+        let ty = g.y(thr);
+        p.line_segment([Pos2::new(col_r.left() + 2.0, ty), Pos2::new(col_r.right() - 2.0, ty)], Stroke::new(1.6_f32, c));
+        p.circle_filled(Pos2::new(col_r.center().x, ty), 4.5, c);
+        p.circle_stroke(Pos2::new(col_r.center().x, ty), 4.5, Stroke::new(1.0_f32, Color32::from_black_alpha(160)));
+        // The gain change hangs from the top (down = reduction, up arrow = upward gain).
+        let chg = if live {
+            h.tele[4 + k]
+        } else if off {
+            0.0
+        } else {
+            -((lvl - thr).max(0.0) * (1.0 - 1.0 / h.v(&format!("b{n}_ratio")).max(1.0))).min(h.v(&format!("b{n}_range")))
+        };
+        if chg.abs() > 0.05 {
+            let len = (chg.abs() / 30.0).clamp(0.0, 1.0) * g.plot.height() * 0.6;
+            let gr = Rect::from_x_y_ranges(col_r.center().x - bw / 2.0..=col_r.center().x + bw / 2.0, g.plot.top()..=g.plot.top() + len);
+            p.rect_filled(gr, 2.0, if chg < 0.0 { Color32::from_rgb(0xff, 0x55, 0x48) } else { Color32::from_rgb(0x5c, 0xe0, 0x8a) }.gamma_multiply(0.8));
+        }
+        p.text(Pos2::new(col_r.center().x, r.top() + 4.0), egui::Align2::CENTER_TOP, format!("{chg:+.1}"), egui::FontId::monospace(10.0), if chg.abs() > 0.05 { Color32::WHITE } else { theme::TEXT_DIM });
+        // Name, mode and frequency range under the column.
+        let mode = ["COMP", "EXP", "UP COMP", "UP EXP"].get(h.v(&format!("b{n}_mode")).round() as usize).copied().unwrap_or("COMP");
+        let lo = freq_at(g.plot, a);
+        let hi = freq_at(g.plot, b);
+        let label = if b - a > 70.0 { format!("BAND {n} · {mode}") } else { format!("{n}") };
+        p.text(Pos2::new(col_r.center().x, r.bottom() - 15.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(10.0), c);
+        if b - a > 60.0 {
+            p.text(Pos2::new(col_r.center().x, r.bottom() - 3.0), egui::Align2::CENTER_BOTTOM, format!("{} – {} Hz", hz_label(lo), hz_label(hi)), small.clone(), theme::TEXT_DIM);
+        }
+    }
+    // The crossovers, with a grip at the top.
+    for (j, &x) in g.xs.iter().enumerate() {
+        p.line_segment([Pos2::new(x, g.plot.top()), Pos2::new(x, g.plot.bottom())], Stroke::new(1.5_f32, Color32::from_white_alpha(150)));
+        let grip = Rect::from_center_size(Pos2::new(x, g.plot.bottom() - 8.0), Vec2::new(8.0, 16.0));
+        p.rect_filled(grip, 2.0, Color32::from_gray(210));
+        let f = h.v(["x1", "x2", "x3"][j]);
+        p.text(Pos2::new(x + 4.0, g.plot.top() + 2.0), egui::Align2::LEFT_TOP, format!("{} Hz", hz_label(f)), small.clone(), Color32::from_white_alpha(160));
+    }
+}
+
+/// What a drag on the multiband display moves.
+#[derive(Clone, Copy)]
+enum MbDrag {
+    Crossover(usize),
+    Threshold(usize),
+}
+
+fn multiband_interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero, pos: Pos2, out: &mut Vec<(String, f32)>) {
+    let g = MbGeom::new(r, h);
+    let key = h.key.with("mb.drag");
+    let near = |x: f32| g.xs.iter().position(|cx| (cx - x).abs() <= 7.0);
+    let pick = |at: Pos2| match near(at.x) {
+        Some(j) => MbDrag::Crossover(j),
+        None => MbDrag::Threshold(g.band_at(at.x)),
+    };
+    if r.contains(pos) {
+        let icon = if near(pos.x).is_some() { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical };
+        ui.ctx().set_cursor_icon(icon);
+    }
+    let mut target: Option<MbDrag> = ui.data(|d| d.get_temp(key));
+    if resp.drag_started() || (resp.dragged() && target.is_none()) {
+        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+        target = Some(pick(origin));
+        ui.data_mut(|d| d.insert_temp(key, target));
+    }
+    if resp.dragged() {
+        match target {
+            Some(MbDrag::Crossover(j)) => {
+                let ids = ["x1", "x2", "x3"];
+                let prm = h.def.params.iter().find(|p| p.id == ids[j]);
+                let (mut lo, mut hi) = prm.map(|p| (p.min, p.max)).unwrap_or((20.0, 20000.0));
+                // Keep the crossovers in order, a little apart.
+                if j > 0 {
+                    lo = lo.max(h.v(ids[j - 1]) * 1.25);
+                }
+                if j + 1 < g.xs.len() {
+                    hi = hi.min(h.v(ids[j + 1]) / 1.25);
+                }
+                let f = freq_at(g.plot, pos.x).clamp(lo, hi.max(lo));
+                out.push((ids[j].into(), f.round()));
+            }
+            Some(MbDrag::Threshold(k)) => {
+                let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+                let id = format!("b{}_thr", k + 1);
+                let db = (h.v(&id) - resp.drag_delta().y * fine * 60.0 / g.plot.height()).clamp(-60.0, 0.0);
+                out.push((id, (db * 10.0).round() / 10.0));
+            }
+            None => {}
+        }
+    }
+    if resp.drag_stopped() {
+        ui.data_mut(|d| d.remove::<Option<MbDrag>>(key));
+    }
+    if resp.double_clicked() {
+        match pick(pos) {
+            MbDrag::Crossover(j) => {
+                let id = ["x1", "x2", "x3"][j];
+                if let Some(prm) = h.def.params.iter().find(|p| p.id == id) {
+                    out.push((id.into(), prm.default));
+                }
+            }
+            MbDrag::Threshold(k) => {
+                let id = format!("b{}_thr", k + 1);
+                if let Some(prm) = h.def.params.iter().find(|p| p.id == id) {
+                    out.push((id, prm.default));
+                }
+            }
+        }
+    }
+}
+
+/// A band's meter for the multiband panel's columns: its level and its gain change, side by side.
+pub fn band_meter(ui: &mut Ui, tele: &[f32], band: usize, color: Color32) {
+    let w = ui.available_width().max(60.0);
+    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 30.0), egui::Sense::hover());
+    let p = ui.painter_at(r);
+    p.rect_filled(r, 4.0, Color32::from_rgb(0x0e, 0x10, 0x14));
+    let live = tele.len() >= 8;
+    let lvl = if live { tele[band] } else { -120.0 };
+    let chg = if live { tele[4 + band] } else { 0.0 };
+    let small = egui::FontId::monospace(9.0);
+    let row = |y: f32, name: &str, frac: f32, from_right: bool, c: Color32, text: String| {
+        let track = Rect::from_min_max(Pos2::new(r.left() + 22.0, y - 4.0), Pos2::new(r.right() - 44.0, y + 4.0));
+        p.rect_filled(track, 2.0, Color32::from_white_alpha(10));
+        let len = track.width() * frac.clamp(0.0, 1.0);
+        let fill = if from_right { Rect::from_min_max(Pos2::new(track.right() - len, track.top()), track.right_bottom()) } else { Rect::from_min_max(track.left_top(), Pos2::new(track.left() + len, track.bottom())) };
+        p.rect_filled(fill, 2.0, c);
+        p.text(Pos2::new(r.left() + 4.0, y), egui::Align2::LEFT_CENTER, name, small.clone(), theme::TEXT_DIM);
+        p.text(Pos2::new(r.right() - 4.0, y), egui::Align2::RIGHT_CENTER, text, small.clone(), theme::TEXT);
+    };
+    row(r.top() + 9.0, "IN", (lvl + 60.0) / 60.0, false, color.gamma_multiply(0.8), if lvl > -100.0 { format!("{lvl:.0}") } else { "-∞".into() });
+    let gc = if chg < 0.0 { Color32::from_rgb(0xff, 0x55, 0x48) } else { Color32::from_rgb(0x5c, 0xe0, 0x8a) };
+    row(r.bottom() - 9.0, "GR", chg.abs() / 24.0, chg < 0.0, gc, format!("{chg:+.1}"));
 }
 
 /// Clean Voice: a valve that glows while the tube stage is in, two moving-coil meters for the leveller and

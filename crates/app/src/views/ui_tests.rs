@@ -1481,3 +1481,105 @@ fn rename_reorder_and_icons() {
     crate::commands::execute(&mut h.st, "ctx.alt_down", &h.ctx.clone());
     assert_eq!(h.st.session.project.tracks[3].id, t0);
 }
+
+/// Mixer cables: none until a channel is selected; then only that channel's cables in and out; a click
+/// on empty mixer space hides them again.
+#[test]
+fn mixer_cables_only_for_the_selected_channel() {
+    let mut h = Harness::new();
+    let mixer = |ui: &mut egui::Ui, st: &mut State| super::mixer::show(ui, st);
+    h.st.ui.mixer_sel.clear();
+    h.idle(mixer, 2);
+    let drawn = |h: &mut Harness| {
+        h.idle(mixer, 1);
+        h.ctx.data(|d| d.get_temp::<usize>(egui::Id::new("mixer.cables.drawn"))).unwrap_or(0)
+    };
+    assert_eq!(drawn(&mut h), 0, "nothing selected: no cables");
+    let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).unwrap();
+    let ch = h.st.session.project.mixer.channels[0].id;
+    let r = rects.iter().find(|r| r.0 == ch).unwrap().1;
+    h.click(mixer, Pos2::new(r.center().x, r.top() + 10.0), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(drawn(&mut h), 1, "its one cable to the master");
+    let master = h.st.session.project.mixer.master.id;
+    let rm = rects.iter().find(|r| r.0 == master).unwrap().1;
+    h.click(mixer, Pos2::new(rm.center().x, rm.top() + 10.0), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(drawn(&mut h), h.st.session.project.mixer.channels.len(), "the master: every cable coming in");
+    // Escape over the mixer deselects.
+    h.frame(mixer, vec![Event::PointerMoved(rm.center()), Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    assert_eq!(drawn(&mut h), 0, "deselected with Escape");
+    // A click on empty mixer space too (a project with one track leaves room).
+    h.st.new_project();
+    h.st.session.edit("track", |p| {
+        p.add_track("One");
+    });
+    h.idle(mixer, 2);
+    let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).unwrap();
+    let one = rects[1].1;
+    h.click(mixer, Pos2::new(one.center().x, one.top() + 10.0), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(drawn(&mut h), 1);
+    h.click(mixer, Pos2::new(one.right() + 160.0, one.center().y), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(drawn(&mut h), 0, "deselected by clicking empty space");
+}
+
+/// Dragging an effect slot onto another mixer track copies it there with its settings (Shift moves it).
+#[test]
+fn drag_an_effect_onto_another_track() {
+    let mut h = Harness::new();
+    let mixer = |ui: &mut egui::Ui, st: &mut State| super::mixer::show(ui, st);
+    let chans: Vec<Id> = h.st.session.project.mixer.channels.iter().map(|c| c.id).collect();
+    let (src, dst) = (chans[0], chans[3]);
+    h.st.session.edit("fx", |p| {
+        let id = p.next_id();
+        let mut params = dragon_engine::effects::find("saturator").unwrap().defaults();
+        params.insert("drive".into(), 17.0);
+        p.mixer.get_mut(src).unwrap().inserts.push(Insert { id, effect: "saturator".into(), enabled: true, mix: 0.6, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+    });
+    h.idle(mixer, 2);
+    let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).unwrap();
+    let target = rects.iter().find(|r| r.0 == dst).unwrap().1.center();
+    let drop = |h: &mut Harness, m: Modifiers| {
+        egui::DragAndDrop::set_payload(&h.ctx, super::mixer::SlotDrag { mixer: src, index: 0 });
+        h.frame(mixer, vec![Event::PointerMoved(target)], m);
+        h.frame(mixer, vec![Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: true, modifiers: m }], m);
+        h.frame(mixer, vec![Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: m }], m);
+        h.idle(mixer, 1);
+    };
+    drop(&mut h, Modifiers::NONE);
+    let copied = h.st.session.project.mixer.get(dst).unwrap().inserts.last().cloned().expect("copied");
+    assert_eq!((copied.effect.as_str(), copied.params.get("drive").copied(), copied.mix), ("saturator", Some(17.0), 0.6));
+    assert_eq!(h.st.session.project.mixer.get(src).unwrap().inserts.len(), 1, "the original stays");
+    drop(&mut h, Modifiers::SHIFT);
+    assert!(h.st.session.project.mixer.get(src).unwrap().inserts.is_empty(), "Shift moves it");
+    assert_eq!(h.st.session.project.mixer.get(dst).unwrap().inserts.iter().filter(|i| i.effect == "saturator").count(), 2);
+}
+
+/// The export window: a quality preset sets format and loudness; the summary names the file; stems
+/// change the path to a folder; exporting runs and shows the result with the loudness.
+#[test]
+fn export_window_presets_and_result() {
+    let mut h = Harness::new();
+    let mut d = super::export::ExportDialog::new(&h.st.session.project, false, None);
+    let dir = std::env::temp_dir().join(format!("dragon-export-ui-{}", std::process::id()));
+    d.test_set_dir(&dir);
+    d.test_preset(1);
+    assert_eq!(d.test_summary(), ("Untitled.wav".to_string(), Some(-14.0)));
+    d.test_preset(2);
+    assert_eq!(d.test_summary().0, "Untitled.mp3");
+    d.test_stems(true);
+    assert_eq!(d.test_summary().0, "Untitled stems");
+    d.test_stems(false);
+    d.test_preset(0);
+    // Run it.
+    let ctx = h.ctx.clone();
+    d.test_start(&mut h.st);
+    let t0 = std::time::Instant::now();
+    while d.test_running() && t0.elapsed().as_secs() < 120 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            d.show(ctx, &mut h.st);
+        });
+    }
+    let files = d.test_files().expect("exported");
+    assert!(files.iter().any(|f| f.ends_with("Untitled.wav") && f.exists()), "{files:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

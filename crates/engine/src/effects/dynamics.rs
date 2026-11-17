@@ -332,7 +332,7 @@ pub const MB_PHASE: &[&str] = &["Crossover", "Dynamic phase"];
 
 const fn mb_params() -> [ParamInfo; MB_G + MB_BANDS * MB_PB] {
     let bands: [[ParamInfo; MB_PB]; MB_BANDS] = [mb_band!("1", -24.0), mb_band!("2", -24.0), mb_band!("3", -24.0), mb_band!("4", -24.0)];
-    let mut out = [ParamInfo::choice("bands", "Bands", &["1", "2", "3", "4"], 2.0); MB_G + MB_BANDS * MB_PB];
+    let mut out = [ParamInfo::choice("bands", "Bands", &["1", "2", "3", "4"], 3.0); MB_G + MB_BANDS * MB_PB];
     out[1] = ParamInfo::log("x1", "Crossover 1", 30.0, 1000.0, 200.0, "Hz");
     out[2] = ParamInfo::log("x2", "Crossover 2", 200.0, 8000.0, 2500.0, "Hz");
     out[3] = ParamInfo::log("x3", "Crossover 3", 1000.0, 16000.0, 8000.0, "Hz");
@@ -1522,16 +1522,16 @@ mod tests {
         let ratio = rms_of(&y[24000..]) / rms_of(&mix[24000..]);
         assert!((ratio - 1.0).abs() < 0.08, "idle multiband must sum ~flat, got {ratio}");
         // Compress only the low band hard.
-        let (y, _, gr) = run_fx(multiband_def(), &[("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &lo, &lo, None);
+        let (y, _, gr) = run_fx(multiband_def(), &[("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0), ("b4_thr", 0.0)], &lo, &lo, None);
         assert!(gr > 6.0 && rms_of(&y[24000..]) < rms_of(&lo[24000..]) * 0.5);
-        let (y, _, _) = run_fx(multiband_def(), &[("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &hi, &hi, None);
+        let (y, _, _) = run_fx(multiband_def(), &[("b1_thr", -30.0), ("b1_ratio", 20.0), ("b1_range", 30.0), ("b2_thr", 0.0), ("b3_thr", 0.0), ("b4_thr", 0.0)], &hi, &hi, None);
         assert!(rms_of(&y[24000..]) > rms_of(&hi[24000..]) * 0.85, "the high band is left alone");
         // Solo band 1: the 6 kHz tone disappears.
-        let (y, _, _) = run_fx(multiband_def(), &[("b1_solo", 1.0), ("b1_thr", 0.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &hi, &hi, None);
+        let (y, _, _) = run_fx(multiband_def(), &[("b1_solo", 1.0), ("b1_thr", 0.0), ("b2_thr", 0.0), ("b3_thr", 0.0), ("b4_thr", 0.0)], &hi, &hi, None);
         assert!(rms_of(&y[24000..]) < rms_of(&hi[24000..]) * 0.1);
         // Upward compression lifts a quiet signal in its band.
         let quiet = sine(100.0, 0.01, n);
-        let (y, _, _) = run_fx(multiband_def(), &[("b1_mode", 2.0), ("b1_thr", -20.0), ("b1_ratio", 4.0), ("b1_range", 12.0), ("b2_thr", 0.0), ("b3_thr", 0.0)], &quiet, &quiet, None);
+        let (y, _, _) = run_fx(multiband_def(), &[("b1_mode", 2.0), ("b1_thr", -20.0), ("b1_ratio", 4.0), ("b1_range", 12.0), ("b2_thr", 0.0), ("b3_thr", 0.0), ("b4_thr", 0.0)], &quiet, &quiet, None);
         assert!(rms_of(&y[24000..]) > rms_of(&quiet[24000..]) * 2.0);
         // Per-band sidechain: band 1 ducks the bass when the sidechain's low band is loud (a kick
         // ducking the bass), and does nothing on a quiet sidechain.

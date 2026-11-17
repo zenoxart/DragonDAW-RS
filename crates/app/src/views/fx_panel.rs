@@ -76,6 +76,27 @@ fn sec(title: impl Into<String>, ctls: Vec<Ctl>) -> Section {
     Section { title: title.into(), ctls }
 }
 
+/// The multiband panel's per-band meters (custom cells the editor draws from the effect's telemetry).
+pub const MB_METERS: [&str; 4] = ["mb.gr1", "mb.gr2", "mb.gr3", "mb.gr4"];
+
+/// The colours of bands 1 … 4 (multiband display and panel columns).
+pub const BAND_COLORS: [Color32; 4] = [Color32::from_rgb(0xff, 0x7a, 0x4a), Color32::from_rgb(0xf2, 0xc9, 0x4c), Color32::from_rgb(0x52, 0xd2, 0x7f), Color32::from_rgb(0x4c, 0xa8, 0xff)];
+
+/// Panels laid out as side-by-side band columns (every band visible at once); the last section is the
+/// output column.
+fn columns(id: &str) -> bool {
+    id == "multiband"
+}
+
+thread_local! {
+    /// The inner width of the column being drawn (column layouts draw compact cells).
+    static COLUMN: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+fn column() -> Option<f32> {
+    COLUMN.with(|c| c.get())
+}
+
 const MODERN: Skin = Skin { face: Color32::from_rgb(0x15, 0x18, 0x1e), section: Color32::from_rgb(0x1d, 0x21, 0x29), knob: KnobStyle::Ring };
 const STUDIO: Skin = Skin { face: Color32::from_rgb(0x1a, 0x1c, 0x20), section: Color32::from_rgb(0x26, 0x29, 0x2f), knob: KnobStyle::Metal };
 const CONSOLE: Skin = Skin { face: Color32::from_rgb(0x2e, 0x36, 0x42), section: Color32::from_rgb(0x3a, 0x44, 0x52), knob: KnobStyle::Chicken };
@@ -109,14 +130,34 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
         },
         "multiband" => Panel {
             skin: MODERN,
-            bands: Some((4, "Band")),
-            sections: vec![
-                sec("Crossovers", vec![p("bands", "Bands"), k("x1", "X-over 1"), k("x2", "X-over 2"), k("x3", "X-over 3"), p("phase", "Phase")]),
-                sec(format!("Band {b}"), vec![Ctl::Bands, p(bp("mode"), "Mode"), p(bp("solo"), "Solo"), p(bp("bypass"), "Bypass"), p(bp("sc"), "Ext. SC")]),
-                sec("Dynamics", vec![big(bp("thr"), "Threshold"), k(bp("range"), "Range"), k(bp("ratio"), "Ratio"), k(bp("knee"), "Knee")]),
-                sec("Timing", vec![k(bp("attack"), "Attack"), k(bp("release"), "Release"), k(bp("gain"), "Gain")]),
-                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
-            ],
+            bands: None,
+            sections: {
+                // McDSP MC404 style: every band as a column of its own, the output column last.
+                let mut s: Vec<Section> = (1..=4)
+                    .map(|n| {
+                        let b = |x: &str| format!("b{n}_{x}");
+                        sec(
+                            format!("Band {n}"),
+                            vec![
+                                Ctl::Custom(MB_METERS[n - 1]),
+                                p(b("mode"), "Mode"),
+                                p(b("solo"), "Solo"),
+                                p(b("bypass"), "Byp"),
+                                p(b("sc"), "SC"),
+                                big(b("thr"), "Threshold"),
+                                k(b("ratio"), "Ratio"),
+                                k(b("range"), "Range"),
+                                k(b("knee"), "Knee"),
+                                k(b("attack"), "Attack"),
+                                k(b("release"), "Release"),
+                                k(b("gain"), "Gain"),
+                            ],
+                        )
+                    })
+                    .collect();
+                s.push(sec("Output", vec![p("bands", "Bands"), p("phase", "Processing"), k("x1", "X-over 1"), k("x2", "X-over 2"), k("x3", "X-over 3"), fad("mix", "Mix"), k("output", "Output")]));
+                s
+            },
         },
         "gate" => Panel {
             skin: MODERN,
@@ -436,7 +477,12 @@ pub struct Touch<'a> {
 const CELL_W: f32 = 70.0;
 
 fn knob_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, skin: Skin, accent: Color32, big: bool) -> (Response, f32) {
-    let (w, rad) = if big { (104.0, 34.0) } else { (CELL_W, 19.0) };
+    let (w, rad) = match (big, column()) {
+        (true, Some(cw)) => (cw.max(104.0), 30.0),
+        (false, Some(_)) => (48.0, 14.0),
+        (true, None) => (104.0, 34.0),
+        (false, None) => (CELL_W, 19.0),
+    };
     let h = rad * 2.0 + 44.0;
     let (rect, mut r) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click_and_drag());
     let n = knob_input(ui, &mut r, prm.normalize(v), prm.normalize(prm.default), if big { 240.0 } else { 180.0 });
@@ -490,7 +536,8 @@ fn fader_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, accent: Color32
 
 fn switch_cell(ui: &mut Ui, v: f32, label: &str, accent: Color32) -> (Response, f32) {
     let on = v > 0.5;
-    let w = (ui.painter().layout_no_wrap(label.to_uppercase(), egui::FontId::proportional(9.5), theme::TEXT).size().x + 30.0).clamp(CELL_W, 130.0);
+    let text = ui.painter().layout_no_wrap(label.to_uppercase(), egui::FontId::proportional(9.5), theme::TEXT).size().x;
+    let w = if column().is_some() { (text + 24.0).clamp(40.0, 130.0) } else { (text + 30.0).clamp(CELL_W, 130.0) };
     let (rect, mut r) = ui.allocate_exact_size(Vec2::new(w, 26.0), Sense::click());
     let mut v = v;
     if r.clicked() {
@@ -520,9 +567,10 @@ fn choice_cell(ui: &mut Ui, prm: &ParamInfo, names: &[&str], v: f32, label: &str
     let r = ui
         .vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
-            let (lr, _) = ui.allocate_exact_size(Vec2::new(total.clamp(CELL_W, 300.0).min(if names.len() <= 5 { 300.0 } else { 170.0 }), 12.0), Sense::hover());
+            let limit = column().unwrap_or(300.0);
+            let (lr, _) = ui.allocate_exact_size(Vec2::new(total.clamp(CELL_W, 300.0).min(if names.len() <= 5 { 300.0 } else { 170.0 }).min(limit), 12.0), Sense::hover());
             fit_text(ui.painter(), lr.left_top(), egui::Align2::LEFT_TOP, &label.to_uppercase(), lr.width(), 9.5, theme::TEXT);
-            if names.len() <= 5 && total <= 300.0 {
+            if names.len() <= 5 && total <= limit {
                 let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(total, 24.0), Sense::click());
                 let p = ui.painter();
                 p.rect_filled(rect, 5.0, Color32::from_rgb(0x14, 0x17, 0x1c));
@@ -546,7 +594,7 @@ fn choice_cell(ui: &mut Ui, prm: &ParamInfo, names: &[&str], v: f32, label: &str
                 resp
             } else {
                 let mut idx = cur;
-                let resp = egui::ComboBox::from_id_salt(salt.with(prm.id)).width(150.0).selected_text(names.get(cur).copied().unwrap_or("?")).show_ui(ui, |ui| {
+                let resp = egui::ComboBox::from_id_salt(salt.with(prm.id)).width(column().map(|w| (w - 24.0).min(150.0)).unwrap_or(150.0)).selected_text(names.get(cur).copied().unwrap_or("?")).show_ui(ui, |ui| {
                     for (k, n) in names.iter().enumerate() {
                         ui.selectable_value(&mut idx, k, *n);
                     }
@@ -586,6 +634,30 @@ fn cell_width(ui: &Ui, def: &EffectDef, c: &Ctl) -> f32 {
         (Ctl::Fader(..), _) => 48.0,
         (Ctl::Big(..), _) => 104.0,
         _ => CELL_W,
+    }
+}
+
+/// A cell's width inside a column `cw` wide (the numbers the compact cells allocate).
+fn column_cell_width(ui: &Ui, def: &EffectDef, c: &Ctl, cw: f32) -> f32 {
+    let (id, label) = match c {
+        Ctl::Custom(_) => return cw,
+        Ctl::Bands => return panel_bands(def.id).map(|(n, _)| bands_width(n)).unwrap_or(0.0),
+        Ctl::Big(..) => return cw.max(104.0),
+        Ctl::Knob(id, l) | Ctl::Fader(id, l) | Ctl::Param(id, l) => (id.as_str(), *l),
+    };
+    let Some(prm) = def.params.iter().find(|x| x.id == id) else { return 0.0 };
+    let text = |t: &str, size: f32| ui.painter().layout_no_wrap(t.to_string(), egui::FontId::proportional(size), theme::TEXT).size().x;
+    match (c, prm.kind) {
+        (_, ParamKind::Toggle) => (text(&label.to_uppercase(), 9.5) + 24.0).clamp(40.0, 130.0),
+        (_, ParamKind::Choice(names)) => {
+            let total: f32 = names.iter().map(|n| text(n, 10.0) + 14.0).sum();
+            if names.len() <= 5 && total <= cw {
+                total.max(text(&label.to_uppercase(), 9.5))
+            } else {
+                cw
+            }
+        }
+        _ => 48.0,
     }
 }
 
@@ -631,6 +703,8 @@ fn shown(prm: &ParamInfo, v: f32) -> String {
 
 const GAP: f32 = 6.0;
 const SECTION_PAD: f32 = 16.0;
+/// The output column's width in a column layout.
+const COLUMN_OUT: f32 = 192.0;
 
 /// What a panel shows: the effect, its parameter values, the accent colour and an id salt.
 pub struct View<'a> {
@@ -674,52 +748,119 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                 used = need;
             }
         }
-        for row in rows {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-                for k in row {
-                    let s = &panel.sections[k];
-                    let inner = widths[k] - SECTION_PAD;
-                    egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
-                        ui.set_width(inner);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(s.title.to_uppercase()).size(10.0).strong().color(accent));
+        let mut draw = |ui: &mut Ui, k: usize, inner: f32, accent: Color32, dim: bool| {
+            let s = &panel.sections[k];
+            ui.scope(|ui| {
+                if dim {
+                    ui.multiply_opacity(0.4);
+                }
+                egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                    ui.set_width(inner);
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(s.title.to_uppercase()).size(10.0).strong().color(accent));
+                        // A lone control named like its section needs no label of its own.
+                        let lone = s.ctls.len() == 1;
+                        let mut cell = |ui: &mut Ui, c: &Ctl| {
+                            let (id, label) = match c {
+                                Ctl::Custom(name) => {
+                                    custom(ui, name);
+                                    return;
+                                }
+                                Ctl::Bands => {
+                                    if let Some((n, label)) = panel.bands {
+                                        band_picker(ui, n, label, band, accent, skin);
+                                    }
+                                    return;
+                                }
+                                Ctl::Knob(id, l) | Ctl::Big(id, l) | Ctl::Fader(id, l) | Ctl::Param(id, l) => (id.as_str(), *l),
+                            };
+                            let label = if lone && label.eq_ignore_ascii_case(&s.title) { "" } else { label };
+                            let Some(prm) = def.params.iter().find(|x| x.id == id) else { return };
+                            let v = effects::value(def, params, id);
+                            let (resp, value) = match (c, prm.kind) {
+                                (_, ParamKind::Toggle) => switch_cell(ui, v, label, accent),
+                                (_, ParamKind::Choice(names)) => choice_cell(ui, prm, names, v, label, accent, salt),
+                                (Ctl::Fader(..), _) => fader_cell(ui, prm, v, label, accent),
+                                (c, _) => knob_cell(ui, prm, v, label, skin, accent, matches!(c, Ctl::Big(..))),
+                            };
+                            rects.push((prm.id.to_string(), resp.rect));
+                            touch(ui, Touch { prm, resp, value });
+                        };
+                        if let Some(cw) = column() {
+                            // Columns: pack the cells into rows that fit the column (compact cells).
+                            let mut rows: Vec<Vec<&Ctl>> = vec![Vec::new()];
+                            let mut used = 0.0;
+                            for c in &s.ctls {
+                                let w = column_cell_width(ui, def, c, cw);
+                                let need = if rows.last().is_some_and(|r| r.is_empty()) { w } else { used + GAP + w };
+                                if need > cw + 0.5 && !rows.last().is_some_and(|r| r.is_empty()) {
+                                    rows.push(vec![c]);
+                                    used = w;
+                                } else {
+                                    rows.last_mut().unwrap().push(c);
+                                    used = need;
+                                }
+                            }
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            for row in rows {
+                                ui.horizontal_top(|ui| {
+                                    ui.spacing_mut().item_spacing.x = GAP;
+                                    for c in row {
+                                        cell(ui, c);
+                                    }
+                                });
+                            }
+                        } else {
                             ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(true), |ui| {
                                 ui.spacing_mut().item_spacing = Vec2::new(GAP, 6.0);
                                 ui.set_max_width(inner);
-                                // A lone control named like its section needs no label of its own.
-                                let lone = s.ctls.len() == 1;
                                 for c in &s.ctls {
-                                    let (id, label) = match c {
-                                        Ctl::Custom(name) => {
-                                            custom(ui, name);
-                                            continue;
-                                        }
-                                        Ctl::Bands => {
-                                            if let Some((n, label)) = panel.bands {
-                                                band_picker(ui, n, label, band, accent, skin);
-                                            }
-                                            continue;
-                                        }
-                                        Ctl::Knob(id, l) | Ctl::Big(id, l) | Ctl::Fader(id, l) | Ctl::Param(id, l) => (id.as_str(), *l),
-                                    };
-                                    let label = if lone && label.eq_ignore_ascii_case(&s.title) { "" } else { label };
-                                    let Some(prm) = def.params.iter().find(|x| x.id == id) else { continue };
-                                    let v = effects::value(def, params, id);
-                                    let (resp, value) = match (c, prm.kind) {
-                                        (_, ParamKind::Toggle) => switch_cell(ui, v, label, accent),
-                                        (_, ParamKind::Choice(names)) => choice_cell(ui, prm, names, v, label, accent, salt),
-                                        (Ctl::Fader(..), _) => fader_cell(ui, prm, v, label, accent),
-                                        (c, _) => knob_cell(ui, prm, v, label, skin, accent, matches!(c, Ctl::Big(..))),
-                                    };
-                                    rects.push((prm.id.to_string(), resp.rect));
-                                    touch(ui, Touch { prm, resp, value });
+                                    cell(ui, c);
                                 }
                             });
-                        });
+                        }
                     });
-                }
+                });
             });
+        };
+        let n = panel.sections.len().saturating_sub(1);
+        let one_row = (avail - COLUMN_OUT - 8.0 * n as f32) / n.max(1) as f32;
+        let two_rows = (avail - 8.0 * n.saturating_sub(1) as f32) / n.max(1) as f32;
+        if columns(def.id) && n > 0 && two_rows >= 130.0 {
+            let count = effects::value(def, params, "bands").round() as usize + 1;
+            let bands_row = |ui: &mut Ui, col_w: f32, draw: &mut dyn FnMut(&mut Ui, usize, f32, Color32, bool)| {
+                for k in 0..n {
+                    let dim = k >= count || effects::value(def, params, &format!("b{}_bypass", k + 1)) > 0.5;
+                    COLUMN.with(|c| c.set(Some(col_w - SECTION_PAD)));
+                    draw(ui, k, col_w - SECTION_PAD, BAND_COLORS[k % BAND_COLORS.len()], dim);
+                }
+                COLUMN.with(|c| c.set(None));
+            };
+            if one_row >= 150.0 {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                    bands_row(ui, one_row, &mut draw);
+                    COLUMN.with(|c| c.set(Some(COLUMN_OUT - SECTION_PAD)));
+                    draw(ui, n, COLUMN_OUT - SECTION_PAD, accent, false);
+                    COLUMN.with(|c| c.set(None));
+                });
+            } else {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                    bands_row(ui, two_rows, &mut draw);
+                });
+                ui.add_space(8.0);
+                draw(ui, n, widths[n] - SECTION_PAD, accent, false);
+            }
+        } else {
+            for row in rows {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                    for k in row {
+                        draw(ui, k, widths[k] - SECTION_PAD, accent, false);
+                    }
+                });
+            }
         }
     });
     // Where each control was drawn (for tests and tooling).

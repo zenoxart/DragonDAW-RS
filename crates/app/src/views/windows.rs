@@ -24,7 +24,9 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
         w = if full {
             w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false)
         } else {
-            w.default_width(600.0).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
+            // Wide editors (all four multiband columns side by side) open wider.
+            let wide = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_some_and(|x| x.effect == "multiband");
+            w.default_width(if wide { 980.0 } else { 600.0 }).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
         };
         w.show(ctx, |ui| effect_editor(ui, st, m, i));
         if !open || st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_none() {
@@ -486,6 +488,10 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         let mut custom = |ui: &mut Ui, name: &str| match name {
             "reverb.er" => reverb_part_curve(ui, &params, "er"),
             "reverb.late" => reverb_part_curve(ui, &params, "late"),
+            n if n.starts_with("mb.gr") => {
+                let band = n[5..].parse::<usize>().unwrap_or(1).clamp(1, 4) - 1;
+                super::fx_ui::band_meter(ui, &tele, band, super::fx_panel::BAND_COLORS[band]);
+            }
             _ => {}
         };
         super::fx_panel::show(ui, super::fx_panel::View { def, params: &params, accent: ccol, salt: egui::Id::new(("fx.panel", m, i)) }, &mut band, &mut touch, &mut custom)

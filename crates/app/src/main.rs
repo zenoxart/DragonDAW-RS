@@ -8,6 +8,7 @@
 
 mod app;
 mod audio;
+mod chains;
 mod commands;
 mod crash;
 mod gif_anim;
