@@ -965,7 +965,7 @@ fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &[MixerChann
 fn chain_menus(ui: &mut Ui, st: &mut State, m: &MixerChannel) {
     let id = m.id;
     let dir = crate::chains::dir(&st.ctx.paths.projects);
-    ui.menu_button("Load chain ▾", |ui| {
+    ui.menu_button("Load chain…", |ui| {
         let chains = crate::chains::list(&dir);
         if chains.is_empty() {
             ui.label(RichText::new("No saved chains yet – \"Save chain\" stores this track's effects").small().color(theme::TEXT_DIM));

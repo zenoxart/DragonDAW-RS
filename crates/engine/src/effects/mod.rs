@@ -5,6 +5,7 @@
 mod color;
 pub use color::{shape as saturation_curve, DragonParticle};
 pub mod alter;
+pub mod clipper;
 pub mod dynamics;
 pub mod eq;
 mod modulation;
@@ -217,6 +218,7 @@ pub fn registry() -> &'static [EffectDef] {
             color::saturator_def(),
             multisat::multiband_saturator_def(),
             color::bitcrusher_def(),
+            clipper::soft_clipper_def(),
             color::filter_def(),
             color::utility_def(),
             color::imager_def(),

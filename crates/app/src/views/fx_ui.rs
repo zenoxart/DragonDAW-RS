@@ -148,6 +148,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
             decay_curve(&p, decay_rect(r), h, col);
         }
         "saturator" | "bitcrusher" => shaper(&p, r, h, col),
+        "clipper" => clipper(&p, r, h, col),
         "multisat" => multisat(&p, r, h, col),
         "chorus" | "flanger" | "phaser" | "tremolo" => lfo(&p, r, h, col),
         "imager" => phase_meter(&p, r, h, col),
@@ -583,6 +584,10 @@ pub fn xy_params(id: &str) -> Option<(Option<&'static str>, Option<&'static str>
 /// Controls drawn on a display, as (area, parameter): dragged up / down like a fader.
 pub fn hit_regions(id: &str, r: Rect) -> Vec<(Rect, &'static str)> {
     match id {
+        "clipper" => {
+            let g = clip_geom(r);
+            vec![(g.input, "input"), (g.output, "post"), (g.screen, "threshold")]
+        }
         "drum_bus" => {
             let mut v = vec![
                 (Rect::from_min_max(Pos2::new(r.left() + 8.0, r.top() + 14.0), Pos2::new(r.left() + 36.0, r.bottom() - 14.0)), "input"),
@@ -2278,6 +2283,129 @@ pub fn band_meter(ui: &mut Ui, tele: &[f32], band: usize, color: Color32) {
     row(r.top() + 9.0, "IN", (lvl + 60.0) / 60.0, false, color.gamma_multiply(0.8), if lvl > -100.0 { format!("{lvl:.0}") } else { "-∞".into() });
     let gc = if chg < 0.0 { Color32::from_rgb(0xff, 0x55, 0x48) } else { Color32::from_rgb(0x5c, 0xe0, 0x8a) };
     row(r.bottom() - 9.0, "GR", chg.abs() / 24.0, chg < 0.0, gc, format!("{chg:+.1}"));
+}
+
+// ------------------------------------------------------------------------------------------------ clipper
+
+/// Where the clipper's faceplate puts things: the input meter, the screen, the output meter.
+struct ClipGeom {
+    face: Rect,
+    input: Rect,
+    screen: Rect,
+    output: Rect,
+}
+
+fn clip_geom(r: Rect) -> ClipGeom {
+    let face = r.shrink(2.0);
+    let input = Rect::from_min_max(Pos2::new(face.left() + 12.0, face.top() + 42.0), Pos2::new(face.left() + 40.0, face.bottom() - 12.0));
+    let output = Rect::from_min_max(Pos2::new(face.right() - 40.0, face.top() + 42.0), Pos2::new(face.right() - 12.0, face.bottom() - 12.0));
+    let screen = Rect::from_min_max(Pos2::new(input.right() + 14.0, face.top() + 42.0), Pos2::new(output.left() - 14.0, face.bottom() - 12.0));
+    ClipGeom { face, input, screen, output }
+}
+
+/// The Soft Clipper's faceplate: brushed gold with engraved labels, input and output meters, a clip LED,
+/// and a screen with the transfer curve and a sine pushed through it.
+fn clipper(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
+    use dragon_engine::effects::clipper::curve;
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    let g = clip_geom(r);
+    // Brushed gold: a vertical gradient with fine horizontal grain.
+    let mut mesh = Mesh::default();
+    let (top, bottom) = (Color32::from_rgb(0xe4, 0xc2, 0x74), Color32::from_rgb(0xa8, 0x82, 0x3c));
+    for (pos, c) in [(g.face.left_top(), top), (g.face.right_top(), top), (g.face.right_bottom(), bottom), (g.face.left_bottom(), bottom)] {
+        mesh.vertices.push(Vertex { pos, uv: WHITE_UV, color: c });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(mesh));
+    let mut y = g.face.top() + 2.0;
+    let mut k = 0u32;
+    while y < g.face.bottom() {
+        let a = 2 + (k.wrapping_mul(2654435761) >> 29) as u8;
+        p.line_segment([Pos2::new(g.face.left(), y), Pos2::new(g.face.right(), y)], Stroke::new(1.0_f32, Color32::from_white_alpha(a)));
+        y += 3.0;
+        k += 1;
+    }
+    p.rect_stroke(g.face, 6.0, Stroke::new(1.5_f32, Color32::from_rgb(0x7a, 0x5a, 0x22)), egui::StrokeKind::Inside);
+    let ink = Color32::from_rgb(0x2a, 0x1e, 0x0c);
+    p.text(Pos2::new(g.face.left() + 12.0, g.face.top() + 8.0), egui::Align2::LEFT_TOP, "SOFT CLIPPER", egui::FontId::proportional(13.0), ink);
+    let (t_db, c_db) = (h.v("threshold"), h.v("ceiling"));
+    let shape = h.v("shape").round() as usize;
+    let os = ["1×", "2×", "4×"].get(h.v("oversampling").round() as usize).copied().unwrap_or("1×");
+    p.text(
+        Pos2::new(g.screen.center().x, g.face.top() + 9.0),
+        egui::Align2::CENTER_TOP,
+        format!("{} · THR {:.1} dB · CEIL {:.1} dB · {os}", dragon_engine::effects::clipper::CLIP_SHAPES.get(shape).copied().unwrap_or("Soft").to_uppercase(), t_db.min(c_db), c_db),
+        egui::FontId::monospace(10.0),
+        ink,
+    );
+    // Clip LED.
+    let live = h.tele.len() >= 3;
+    let clip_db = if live { h.tele[1] } else { 0.0 };
+    let led = Pos2::new(g.face.right() - 22.0, g.face.top() + 15.0);
+    let on = clip_db > 0.05 && h.enabled;
+    if on {
+        p.circle_filled(led, 9.0, Color32::from_rgba_unmultiplied(255, 60, 40, 70));
+    }
+    p.circle_filled(led, 5.0, if on { Color32::from_rgb(255, 70, 50) } else { Color32::from_rgb(0x55, 0x22, 0x18) });
+    p.text(led - Vec2::new(10.0, 0.0), egui::Align2::RIGHT_CENTER, if on { format!("CLIP −{clip_db:.1}") } else { "CLIP".into() }, egui::FontId::monospace(10.0), ink);
+    // Meters: input (with the threshold and ceiling marks) and output.
+    let to_y = |m: Rect, db: f32| m.bottom() - ((db + 48.0) / 54.0).clamp(0.0, 1.0) * m.height();
+    for (m, db, name) in [(g.input, if live { h.tele[0] } else { -120.0 }, "IN"), (g.output, if live { h.tele[2] } else { -120.0 }, "OUT")] {
+        p.rect_filled(m, 3.0, Color32::from_rgb(0x14, 0x11, 0x0c));
+        let fill = Rect::from_min_max(Pos2::new(m.left() + 4.0, to_y(m, db)), Pos2::new(m.right() - 4.0, m.bottom() - 2.0));
+        if fill.height() > 0.5 {
+            p.rect_filled(fill, 2.0, if db > -0.1 { Color32::from_rgb(255, 80, 60) } else { Color32::from_rgb(0xf0, 0xc8, 0x60) });
+        }
+        p.text(Pos2::new(m.center().x, m.top() - 3.0), egui::Align2::CENTER_BOTTOM, name, egui::FontId::monospace(9.0), ink);
+    }
+    for (db, c) in [(t_db.min(c_db), Color32::from_rgb(0xf0, 0xc8, 0x60)), (c_db, Color32::from_rgb(255, 90, 70))] {
+        let y = to_y(g.input, db);
+        p.line_segment([Pos2::new(g.input.left() - 4.0, y), Pos2::new(g.input.right() + 4.0, y)], Stroke::new(1.5_f32, c));
+    }
+    // The screen: transfer curve on the left, a driven sine on the right.
+    p.rect_filled(g.screen, 4.0, Color32::from_rgb(0x10, 0x0e, 0x0a));
+    p.rect_stroke(g.screen, 4.0, Stroke::new(1.0_f32, Color32::from_rgb(0x5a, 0x42, 0x18)), egui::StrokeKind::Inside);
+    let amber = Color32::from_rgb(0xff, 0xc8, 0x5a);
+    let (t, c) = (dragon_engine::dsp::db_to_gain(t_db.min(c_db)), dragon_engine::dsp::db_to_gain(c_db));
+    let drive = dragon_engine::dsp::db_to_gain(h.v("input"));
+    let sq_side = g.screen.height().min(g.screen.width() * 0.42) - 12.0;
+    let sq = Rect::from_min_size(Pos2::new(g.screen.left() + 8.0, g.screen.center().y - sq_side / 2.0), Vec2::splat(sq_side.max(10.0)));
+    let grid = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 200, 90, 22));
+    p.line_segment([sq.left_center(), sq.right_center()], grid);
+    p.line_segment([sq.center_top(), sq.center_bottom()], grid);
+    p.extend(Shape::dashed_line(&[sq.left_bottom(), sq.right_top()], grid, 3.0, 3.0));
+    for lvl in [t, c] {
+        let y = sq.center().y - lvl / 1.5 * sq.height() / 2.0;
+        p.extend(Shape::dashed_line(&[Pos2::new(sq.left(), y), Pos2::new(sq.right(), y)], Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 120, 80, 60)), 2.0, 3.0));
+    }
+    let pts: Vec<Pos2> = (0..=96)
+        .map(|k| {
+            let x = -1.5 + 3.0 * k as f32 / 96.0;
+            let y = curve(x, t, c, shape);
+            Pos2::new(sq.center().x + x / 1.5 * sq.width() / 2.0, sq.center().y - y / 1.5 * sq.height() / 2.0)
+        })
+        .collect();
+    p.add(Shape::line(pts, Stroke::new(2.0_f32, amber)));
+    let wave = Rect::from_min_max(Pos2::new(sq.right() + 14.0, g.screen.top() + 8.0), Pos2::new(g.screen.right() - 8.0, g.screen.bottom() - 8.0));
+    if wave.width() > 30.0 {
+        let phase = h.t() * 1.5;
+        let span = (drive * 1.0).max(c) * 1.05;
+        let (mut dry, mut wet) = (Vec::new(), Vec::new());
+        for k in 0..=160 {
+            let u = k as f32 / 160.0;
+            let x = drive * 0.9 * (std::f32::consts::TAU * 2.0 * u + phase).sin();
+            let px = wave.left() + u * wave.width();
+            dry.push(Pos2::new(px, wave.center().y - x / span * wave.height() / 2.0));
+            wet.push(Pos2::new(px, wave.center().y - curve(x, t, c, shape) / span * wave.height() / 2.0));
+        }
+        for lvl in [c, -c] {
+            let y = wave.center().y - lvl / span * wave.height() / 2.0;
+            p.line_segment([Pos2::new(wave.left(), y), Pos2::new(wave.right(), y)], Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 90, 70, 70)));
+        }
+        p.add(Shape::line(dry, Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 200, 90, 60))));
+        p.add(Shape::line(wet, Stroke::new(2.0_f32, amber)));
+    }
 }
 
 /// Clean Voice: a valve that glows while the tube stage is in, two moving-coil meters for the leveller and

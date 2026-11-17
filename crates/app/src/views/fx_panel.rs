@@ -97,6 +97,8 @@ fn column() -> Option<f32> {
     COLUMN.with(|c| c.get())
 }
 
+/// Brushed gold (the Soft Clipper).
+const GOLD: Skin = Skin { face: Color32::from_rgb(0x4a, 0x3a, 0x1c), section: Color32::from_rgb(0x5e, 0x4a, 0x24), knob: KnobStyle::Metal };
 const MODERN: Skin = Skin { face: Color32::from_rgb(0x15, 0x18, 0x1e), section: Color32::from_rgb(0x1d, 0x21, 0x29), knob: KnobStyle::Ring };
 const STUDIO: Skin = Skin { face: Color32::from_rgb(0x1a, 0x1c, 0x20), section: Color32::from_rgb(0x26, 0x29, 0x2f), knob: KnobStyle::Metal };
 const CONSOLE: Skin = Skin { face: Color32::from_rgb(0x2e, 0x36, 0x42), section: Color32::from_rgb(0x3a, 0x44, 0x52), knob: KnobStyle::Chicken };
@@ -158,6 +160,15 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 s.push(sec("Output", vec![p("bands", "Bands"), p("phase", "Processing"), k("x1", "X-over 1"), k("x2", "X-over 2"), k("x3", "X-over 3"), fad("mix", "Mix"), k("output", "Output")]));
                 s
             },
+        },
+        "clipper" => Panel {
+            skin: GOLD,
+            bands: None,
+            sections: vec![
+                sec("Clip", vec![big("input", "Input"), k("threshold", "Threshold"), k("ceiling", "Ceiling")]),
+                sec("Character", vec![p("shape", "Shape"), p("oversampling", "Oversampling")]),
+                sec("Output", vec![k("post", "Post gain"), p("listen", "Clip only")]),
+            ],
         },
         "gate" => Panel {
             skin: MODERN,

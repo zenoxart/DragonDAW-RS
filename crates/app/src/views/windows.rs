@@ -339,7 +339,8 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let Some(ins) = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).cloned() else { return };
     let gr = st.audio.meters().snapshot().gain_reduction.get(&i).copied().unwrap_or(0.0);
     let cat = effects::find(&ins.effect).map(|d| d.category).unwrap_or("Plugin");
-    let ccol = super::mixer::category_color(cat);
+    // The Soft Clipper wears gold.
+    let ccol = if ins.effect == "clipper" { egui::Color32::from_rgb(0xf0, 0xc0, 0x5a) } else { super::mixer::category_color(cat) };
     // Header, after the design reference: colour stripe, "Dragon <name> | category", A/B compare, power
     // button and the mix knob.
     let fx_name = effects::find(&ins.effect).map(|d| d.name.to_string()).or_else(|| ins.plugin.as_ref().map(|p| p.name.clone())).unwrap_or_default();
