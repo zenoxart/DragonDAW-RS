@@ -367,6 +367,10 @@ impl eframe::App for DragonApp {
                 self.splash = None;
             }
         }
+        // The start screen, once the splash is gone.
+        if self.splash.is_none() && self.st.ui.start_screen && !crate::modes::show(ctx, &mut self.st) {
+            self.st.ui.start_screen = false;
+        }
         // The Dragon startup sound, once the splash is gone (as in the original Dragon DAW).
         if self.splash.is_none() && !self.sound_played {
             self.sound_played = true;

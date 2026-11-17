@@ -29,6 +29,8 @@ pub struct Settings {
     pub undo_limit: usize,
     pub ui_scale: f32,
     pub show_splash: bool,
+    /// Shows the start screen ("What do you want to do?") when the app opens.
+    pub show_start: bool,
     /// Plays the Dragon startup sound when the app opens.
     pub startup_sound: bool,
     pub reduced_motion: bool,
@@ -50,6 +52,7 @@ impl Default for Settings {
             undo_limit: 200,
             ui_scale: 1.0,
             show_splash: true,
+            show_start: true,
             startup_sound: true,
             reduced_motion: false,
             follow_playhead: true,
@@ -148,6 +151,8 @@ pub struct UiState {
     pub editor: Editor,
     /// The file selected in the browser (shown in its waveform preview) and when its preview started.
     pub browser_sel: Option<PathBuf>,
+    /// The start screen is showing.
+    pub start_screen: bool,
     pub preview_started: Option<Instant>,
     pub clipboard: Option<Clipboard>,
     /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
@@ -255,6 +260,7 @@ impl UiState {
             picker_sel: Vec::new(),
             editor: Editor::Playlist,
             browser_sel: None,
+            start_screen: false,
             preview_started: None,
             clipboard: None,
             last_undo: None,

@@ -1022,6 +1022,9 @@ pub struct Project {
     pub midi_mappings: Vec<MidiMapping>,
     /// Loudness target for the master meter / export normalisation (LUFS).
     pub loudness_target: f32,
+    /// What the project was set up for on the start screen ("beat", "record", "mix", "master", "stems",
+    /// "album", "film"; empty = not chosen). Views adapt to it (the album panel, for instance).
+    pub mode: String,
     pub next_id: Id,
     /// Video for scoring / post: shown in sync with the playhead, can be exported with the mix.
     pub video: Option<VideoRef>,
@@ -1041,6 +1044,7 @@ pub struct ReferenceTrack {
 impl Default for Project {
     fn default() -> Self {
         Project {
+            mode: String::new(),
             format_version: 1,
             meta: Metadata::default(),
             bpm: 140.0,

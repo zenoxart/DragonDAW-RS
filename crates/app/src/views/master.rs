@@ -4,7 +4,6 @@
 use super::widgets;
 use crate::state::State;
 use crate::theme;
-use dragon_engine::model::Insert;
 use egui::{Pos2, RichText, Stroke, Ui, Vec2};
 
 const TARGETS: &[(&str, f32)] = &[("Streaming (Spotify/YouTube)", -14.0), ("Apple Music", -16.0), ("Podcast", -16.0), ("Broadcast EBU R128", -23.0), ("Club / loud master", -9.0)];
@@ -172,21 +171,7 @@ fn meters(ui: &mut Ui, st: &mut State) {
             ui.label(RichText::new("Export can normalise to the target (File › Export › Normalise: loudness).").small().color(theme::TEXT_DIM));
             ui.separator();
             if ui.button("Add mastering chain to master").on_hover_text("EQ ➡ multiband compressor ➡ stereo imager ➡ limiter (−1 dBTP)").clicked() {
-                st.session.edit("Mastering chain", |p| {
-                    for id in ["eq", "multiband", "imager", "limiter"] {
-                        if p.mixer.master.inserts.iter().any(|i| i.effect == id) {
-                            continue;
-                        }
-                        let iid = p.next_id();
-                        let mut params = dragon_engine::effects::find(id).map(|d| d.defaults()).unwrap_or_default();
-                        if id == "limiter" {
-                            params.insert("ceiling".into(), -1.0);
-                        }
-                        p.mixer.master.inserts.push(Insert { id: iid, effect: id.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
-                    }
-                    // Keep the limiter last.
-                    p.mixer.master.inserts.sort_by_key(|i| i.effect == "limiter");
-                });
+                st.session.edit("Mastering chain", crate::modes::add_mastering_chain);
                 st.ui.mixer = st.session.project.mixer.master.id;
             }
         });

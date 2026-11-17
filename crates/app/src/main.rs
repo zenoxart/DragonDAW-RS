@@ -13,6 +13,7 @@ mod chains;
 mod commands;
 mod crash;
 mod gif_anim;
+mod modes;
 mod session;
 mod splash;
 mod state;
@@ -47,6 +48,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut st = state::State::new(ctx, settings);
+            // The start screen, unless a project was given or the start is scripted.
+            st.ui.start_screen = st.settings.show_start && open.is_none() && crashed.is_none() && std::env::var_os("DRAGON_STARTUP_COMMANDS").is_none() && std::env::var_os("DRAGON_OPEN_FX").is_none();
             match (open, &crashed) {
                 // The last run died opening this very project: ask first instead of crashing again.
                 (Some(p), Some(c)) if c.project.as_deref() == Some(p.as_path()) && !safe_flag => {}

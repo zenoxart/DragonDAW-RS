@@ -22,6 +22,7 @@ use redhive_contracts::{IconRef, TextKey};
 const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("file.new", "New project", "File", 0, ""),
     ("file.new_demo", "New project with demo beat", "File", 0, ""),
+    ("file.start", "Start screen…", "File", 0, ""),
     ("file.open", "Open…", "File", 0, "Ctrl+O"),
     ("file.save", "Save", "File", 1, "Ctrl+S"),
     ("file.save_as", "Save as…", "File", 1, "Ctrl+Shift+S"),
@@ -538,6 +539,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "file.new" => st.new_project(),
         "file.new_demo" => st.new_demo_project(),
+        "file.start" => st.ui.start_screen = true,
         "file.open" => st.open_dialog(),
         "file.save" => {
             st.save(false);
