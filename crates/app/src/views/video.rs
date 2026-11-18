@@ -31,8 +31,30 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             if ui.button("Import video…").clicked() {
                 st.ctx.run("dragon.file.import_video", serde_json::Value::Null);
             }
-            if !dragon_engine::video::available() {
-                ui.label(RichText::new("Video needs ffmpeg and ffprobe on the PATH (or DRAGON_FFMPEG / DRAGON_FFPROBE).").small().color(theme::WARN));
+            if !st.ffmpeg_ready() {
+                ui.add_space(10.0);
+                ui.label(RichText::new("Video needs ffmpeg (a free video tool), which is not installed.").color(theme::WARN));
+                if cfg!(windows) {
+                    if st.ui.ffmpeg_job.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Downloading ffmpeg (about 40 MB) …");
+                        });
+                    } else if ui
+                        .button(RichText::new("Get ffmpeg").strong())
+                        .on_hover_text(format!("Downloads the official LGPL build of ffmpeg into Dragon DAW's tools folder\n{}", dragon_engine::video::FFMPEG_WIN_URL))
+                        .clicked()
+                    {
+                        st.install_ffmpeg();
+                    }
+                } else if cfg!(target_os = "macos") {
+                    ui.label(RichText::new("Install it with Homebrew: brew install ffmpeg").small());
+                } else {
+                    ui.label(RichText::new("Install it with your package manager, e.g. sudo apt install ffmpeg").small());
+                }
+                if ui.small_button("Check again").on_hover_text("After installing ffmpeg yourself").clicked() {
+                    st.ui.ffmpeg_ok = None;
+                }
             }
         });
         return;

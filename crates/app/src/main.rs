@@ -49,6 +49,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut st = state::State::new(ctx, settings);
+            // Tools the app installs itself (ffmpeg) live next to the settings.
+            dragon_engine::video::set_tools_dir(st.ctx.paths.local.join("tools"));
             // The start screen, unless a project was given or the start is scripted.
             st.ui.start_screen = st.settings.show_start
                 && open.is_none()

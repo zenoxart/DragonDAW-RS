@@ -111,6 +111,9 @@ pub enum Clipboard {
     Notes(Vec<Note>),
 }
 
+/// An ffmpeg download's outcome (the folder it went to, or why not).
+pub type FfmpegJob = std::sync::Arc<std::sync::Mutex<Option<Result<PathBuf, String>>>>;
+
 pub struct UiState {
     pub pattern: Id,
     pub channel: Option<Id>,
@@ -159,6 +162,10 @@ pub struct UiState {
     pub repair: crate::views::repair::RepairUi,
     /// The click-through tour.
     pub tour: crate::tutorial::Tour,
+    /// ffmpeg can be run (`None` = not checked yet).
+    pub ffmpeg_ok: Option<bool>,
+    /// An ffmpeg download running in the background.
+    pub ffmpeg_job: Option<FfmpegJob>,
     /// The control being touched (hovered or turned) and its value, for the hint at the top left:
     /// (where, what, value, when).
     pub hint: Option<(String, String, String, Instant)>,
@@ -273,6 +280,8 @@ impl UiState {
             album_lufs: Vec::new(),
             repair: Default::default(),
             tour: Default::default(),
+            ffmpeg_ok: None,
+            ffmpeg_job: None,
             hint: None,
             preview_started: None,
             clipboard: None,
@@ -1201,6 +1210,12 @@ impl State {
 
     /// Puts a video on the timeline at beat 0 and its soundtrack on a new audio track.
     pub fn import_video(&mut self, path: &Path) {
+        // Without ffmpeg, say so and show where to get it (instead of a "not found" error).
+        if !self.ffmpeg_ready() {
+            self.toast("Video needs ffmpeg – the Video view can get it for you", Severity::Warning);
+            self.ctx.open("dragon.video", None);
+            return;
+        }
         let v = match dragon_engine::video::probe(path) {
             Ok(v) => v,
             Err(e) => {
@@ -1305,6 +1320,40 @@ impl State {
 }
 
 impl State {
+    /// Whether ffmpeg / ffprobe can be run (checked once, again after an install).
+    pub fn ffmpeg_ready(&mut self) -> bool {
+        *self.ui.ffmpeg_ok.get_or_insert_with(dragon_engine::video::available)
+    }
+
+    /// Downloads ffmpeg in the background (Windows); `poll_ffmpeg_install` finishes it.
+    pub fn install_ffmpeg(&mut self) {
+        if self.ui.ffmpeg_job.is_some() {
+            return;
+        }
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let out = slot.clone();
+        std::thread::spawn(move || {
+            let r = dragon_engine::video::install_ffmpeg().map_err(|e| e.to_string());
+            if let Ok(mut g) = out.lock() {
+                *g = Some(r);
+            }
+            redhive_client_framework::runtime::request_repaint();
+        });
+        self.ui.ffmpeg_job = Some(slot);
+    }
+
+    pub fn poll_ffmpeg_install(&mut self) {
+        let Some(job) = &self.ui.ffmpeg_job else { return };
+        let Some(r) = job.lock().ok().and_then(|mut g| g.take()) else { return };
+        self.ui.ffmpeg_job = None;
+        self.ui.ffmpeg_ok = None;
+        match r {
+            Ok(_) if self.ffmpeg_ready() => self.toast("ffmpeg is ready – you can import video now", Severity::Success),
+            Ok(dir) => self.toast(format!("ffmpeg was downloaded to {} but does not run", dir.display()), Severity::Error),
+            Err(e) => self.toast(format!("Could not get ffmpeg: {e}"), Severity::Error),
+        }
+    }
+
     /// Shows `name: value` of `source` in the hint at the top left (any control, stock or plugin).
     pub fn hint(&mut self, source: &str, name: &str, value: String) {
         self.ui.hint = Some((source.to_string(), name.to_string(), value, Instant::now()));

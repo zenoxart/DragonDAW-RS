@@ -246,6 +246,7 @@ impl DragonApp {
         self.st.poll_auto_balance();
         crate::views::album::poll(&mut self.st);
         crate::views::repair::poll(&mut self.st);
+        self.st.poll_ffmpeg_install();
         if self.st.session.latency_moved() {
             self.st.session.force_recompile();
         }
