@@ -179,8 +179,9 @@ pub fn panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, is_master: bool) {
                     ui.label(RichText::new(format!("Interface: {name} · {n} inputs")).small().color(theme::TEXT_DIM));
                 }
                 None => {
+                    let why = st.audio.input_error().unwrap_or_else(|| "no input device".into());
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("No input device is open.").small().color(theme::WARN));
+                        ui.label(RichText::new(format!("No input is open: {why}.")).small().color(theme::WARN));
                         if ui.small_button("Options › Audio").clicked() {
                             st.ctx.open("dragon.options", None);
                         }

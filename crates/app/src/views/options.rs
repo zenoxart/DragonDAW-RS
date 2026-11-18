@@ -107,7 +107,28 @@ fn audio(ui: &mut Ui, st: &mut State) {
         ui.end_row();
     });
     let changed = cfg != st.settings.device;
+    // A new driver or device is used at once (no separate Apply needed); the offset applies on restart.
+    let device_changed = cfg.host != st.settings.device.host
+        || cfg.output != st.settings.device.output
+        || cfg.input != st.settings.device.input
+        || cfg.sample_rate != st.settings.device.sample_rate
+        || cfg.buffer != st.settings.device.buffer;
     st.settings.device = cfg;
+    if device_changed {
+        restart_audio(st);
+    }
+    // What is open now.
+    ui.add_space(6.0);
+    match st.audio.input() {
+        Some((name, n)) => {
+            ui.label(RichText::new(format!("✔ Recording from {name} ({n} inputs)")).color(theme::OK));
+        }
+        None => {
+            let why = st.audio.input_error().unwrap_or_else(|| "no input device".into());
+            ui.label(RichText::new(format!("No input is open: {why}")).color(theme::WARN));
+            ui.label(RichText::new("Pick the interface under Input (recording). If it still fails, try another sample rate or Buffer: driver, close other programs that use it exclusively, and on Windows allow microphone access (Settings › Privacy › Microphone › let desktop apps access your microphone).").small().color(theme::TEXT_DIM));
+        }
+    }
     if ui.add_enabled(changed, egui::Button::new("Apply audio settings")).clicked() {
         restart_audio(st);
     }

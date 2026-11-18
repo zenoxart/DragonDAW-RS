@@ -184,6 +184,8 @@ pub struct AudioEngine {
     pub output_name: String,
     pub input_name: Option<String>,
     pub input_channels: u16,
+    /// Why no input is open (device missing or refused), for the Options and the recording panel.
+    pub input_error: Option<String>,
     pub latency_frames: u32,
     record_offset: f64,
     pub health: Arc<StreamHealth>,
@@ -217,28 +219,24 @@ impl AudioEngine {
         let mut input_channels = 0;
         let mut in_stream = None;
         let mut input_name = None;
-        if let Some(dev) = in_dev {
-            if let Ok(icfg) = dev.default_input_config() {
-                let ich = icfg.channels().max(1);
-                let icfg2 = cpal::StreamConfig { channels: ich, sample_rate: cpal::SampleRate(rate), buffer_size: buffer };
-                let ib = input_buf.clone();
-                *ib.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = vec![VecDeque::with_capacity(rate as usize); ich as usize];
-                let err = |e| tracing::warn!("input stream: {e}");
-                let stream = match icfg.sample_format() {
-                    cpal::SampleFormat::F32 => dev.build_input_stream(&icfg2, move |d: &[f32], _: &_| push_input(&ib, d, ich as usize, |x| x), err, None),
-                    cpal::SampleFormat::I16 => dev.build_input_stream(&icfg2, move |d: &[i16], _: &_| push_input(&ib, d, ich as usize, |x| x as f32 / 32768.0), err, None),
-                    cpal::SampleFormat::I32 => dev.build_input_stream(&icfg2, move |d: &[i32], _: &_| push_input(&ib, d, ich as usize, |x| x as f32 / 2_147_483_648.0), err, None),
-                    _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
-                };
-                match stream {
-                    Ok(s) => {
-                        let _ = s.play();
-                        in_stream = Some(s);
-                        input_channels = ich;
-                        input_name = dev.name().ok();
-                    }
-                    Err(e) => tracing::warn!("no input stream: {e}"),
+        let mut input_error = None;
+        match in_dev {
+            Some(dev) => match open_input(&dev, rate, buffer, &input_buf) {
+                Ok((stream, ich)) => {
+                    in_stream = Some(stream);
+                    input_channels = ich;
+                    input_name = dev.name().ok();
                 }
+                Err(e) => {
+                    tracing::warn!("no input stream: {e}");
+                    input_error = Some(format!("{}: {e}", dev.name().unwrap_or_else(|_| "input".into())));
+                }
+            },
+            None => {
+                input_error = Some(match &cfg.input {
+                    Some(n) => format!("the input \"{n}\" was not found"),
+                    None => "no input device found".into(),
+                })
             }
         }
 
@@ -427,6 +425,7 @@ impl AudioEngine {
             output_name: out_dev.name().unwrap_or_default(),
             input_name,
             input_channels,
+            input_error,
             latency_frames,
             record_offset: cfg.record_offset_ms as f64 / 1000.0,
             health,
@@ -469,15 +468,92 @@ impl AudioEngine {
     }
 }
 
-fn push_input<T: Copy>(buf: &Arc<Mutex<Vec<VecDeque<f32>>>>, data: &[T], ch: usize, conv: impl Fn(T) -> f32) {
+type InputBuf = Arc<Mutex<Vec<VecDeque<f32>>>>;
+
+/// Opens `dev` for recording. Tries the engine's rate and buffer first, then the driver's buffer, then
+/// the device's own rate (resampled to the engine's) – WASAPI shared mode and many interfaces refuse a
+/// rate or a fixed buffer that differs from their own. Returns the stream and its channel count.
+fn open_input(dev: &cpal::Device, rate: u32, buffer: cpal::BufferSize, buf: &InputBuf) -> std::result::Result<(cpal::Stream, u16), String> {
+    let def = dev.default_input_config().map_err(|e| e.to_string())?;
+    let ich = def.channels().max(1);
+    let format = def.sample_format();
+    let own = def.sample_rate().0;
+    let mut tries = vec![(rate, buffer), (rate, cpal::BufferSize::Default)];
+    if own != rate {
+        tries.push((own, cpal::BufferSize::Default));
+    }
+    let mut last = String::from("no usable configuration");
+    for (in_rate, bsize) in tries {
+        let cfg = cpal::StreamConfig { channels: ich, sample_rate: cpal::SampleRate(in_rate), buffer_size: bsize };
+        *buf.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = vec![VecDeque::with_capacity(rate as usize); ich as usize];
+        macro_rules! build {
+            ($t:ty, $conv:expr) => {{
+                let ib = buf.clone();
+                let mut rs = Resample::new(ich as usize, in_rate, rate);
+                dev.build_input_stream(&cfg, move |d: &[$t], _: &_| push_input(&ib, d, ich as usize, $conv, &mut rs), |e| tracing::warn!("input stream: {e}"), None)
+            }};
+        }
+        let stream = match format {
+            cpal::SampleFormat::F32 => build!(f32, |x: f32| x),
+            cpal::SampleFormat::F64 => build!(f64, |x: f64| x as f32),
+            cpal::SampleFormat::I16 => build!(i16, |x: i16| x as f32 / 32768.0),
+            cpal::SampleFormat::I32 => build!(i32, |x: i32| x as f32 / 2_147_483_648.0),
+            cpal::SampleFormat::I8 => build!(i8, |x: i8| x as f32 / 128.0),
+            cpal::SampleFormat::U16 => build!(u16, |x: u16| (x as f32 - 32768.0) / 32768.0),
+            cpal::SampleFormat::U8 => build!(u8, |x: u8| (x as f32 - 128.0) / 128.0),
+            f => return Err(format!("sample format {f:?} is not supported")),
+        };
+        match stream {
+            Ok(s) => match s.play() {
+                Ok(()) => return Ok((s, ich)),
+                Err(e) => last = e.to_string(),
+            },
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(last)
+}
+
+/// Linear resampling of the input to the engine's rate (when the device runs at its own rate).
+struct Resample {
+    step: f64,
+    pos: f64,
+    last: Vec<f32>,
+    frame: Vec<f32>,
+}
+
+impl Resample {
+    fn new(ch: usize, from: u32, to: u32) -> Self {
+        Resample { step: from as f64 / to as f64, pos: 0.0, last: vec![0.0; ch], frame: vec![0.0; ch] }
+    }
+}
+
+fn push_input<T: Copy>(buf: &InputBuf, data: &[T], ch: usize, conv: impl Fn(T) -> f32, rs: &mut Resample) {
     if let Ok(mut q) = buf.lock() {
         if q.len() != ch {
             q.resize(ch, VecDeque::new());
         }
+        let same = (rs.step - 1.0).abs() < 1e-9;
         for frame in data.chunks_exact(ch) {
-            for (k, s) in frame.iter().enumerate() {
-                q[k].push_back(conv(*s));
+            if same {
+                for (k, s) in frame.iter().enumerate() {
+                    q[k].push_back(conv(*s));
+                }
+                continue;
             }
+            for (k, s) in frame.iter().enumerate() {
+                rs.frame[k] = conv(*s);
+            }
+            // Output samples that fall between the previous frame and this one.
+            while rs.pos < 1.0 {
+                let f = rs.pos as f32;
+                for k in 0..ch {
+                    q[k].push_back(rs.last[k] + (rs.frame[k] - rs.last[k]) * f);
+                }
+                rs.pos += rs.step;
+            }
+            rs.pos -= 1.0;
+            rs.last.copy_from_slice(&rs.frame);
         }
         // Never grow without bound when nobody consumes (output stopped).
         for c in q.iter_mut() {
@@ -571,5 +647,38 @@ impl MidiInputs {
             }
         }
         MidiInputs { _conns: conns, rx, names: opened, all_ports: ports }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    /// An input running at its own rate is resampled to the engine's: the right number of samples, and the
+    /// tone keeps its pitch.
+    #[test]
+    fn input_at_another_rate_is_resampled_to_the_engines() {
+        let buf: InputBuf = Arc::new(Mutex::new(vec![VecDeque::new(); 2]));
+        let mut rs = Resample::new(2, 48_000, 44_100);
+        // One second of a 1 kHz tone at 48 kHz, stereo interleaved, in 480-frame callbacks.
+        let x: Vec<f32> = (0..48_000)
+            .flat_map(|i| {
+                let v = (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin();
+                [v, v]
+            })
+            .collect();
+        for chunk in x.chunks(960) {
+            push_input(&buf, chunk, 2, |v: f32| v, &mut rs);
+        }
+        let q = buf.lock().unwrap();
+        let n = q[0].len();
+        assert!((n as i64 - 44_100).abs() <= 2, "{n} samples");
+        // Zero crossings of 1 kHz over one second: ~2000.
+        let y: Vec<f32> = q[0].iter().copied().collect();
+        let zc = y.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count();
+        assert!((zc as i64 - 1000).abs() <= 2, "{zc} rising crossings");
+        // Smooth: no jumps bigger than a 1 kHz sine's step at 44.1 kHz.
+        let max_step = y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(max_step < 0.16, "{max_step}");
     }
 }

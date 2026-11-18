@@ -144,6 +144,14 @@ impl Audio {
         }
     }
 
+    /// Why no input is open (`None` when one is, or when there is no audio device at all).
+    pub fn input_error(&self) -> Option<String> {
+        match self {
+            Audio::Device(e) => e.input_error.clone(),
+            Audio::Null(_, why) => Some(format!("no audio device ({why})")),
+        }
+    }
+
     pub fn can_record(&self) -> bool {
         matches!(self, Audio::Device(e) if e.input_name.is_some())
     }
