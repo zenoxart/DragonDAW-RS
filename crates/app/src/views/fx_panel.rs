@@ -713,7 +713,8 @@ fn shown(prm: &ParamInfo, v: f32) -> String {
 }
 
 const GAP: f32 = 6.0;
-const SECTION_PAD: f32 = 16.0;
+/// A group's padding: 8 px margin and its 1 px engraved edge on each side.
+const SECTION_PAD: f32 = 18.0;
 /// Where `show` leaves the narrowest width its panel needs (read by the editor window for its minimum size).
 pub const NEED_KEY: &str = "fx.panel.need";
 /// The output column's width in a column layout.
@@ -730,12 +731,19 @@ pub struct View<'a> {
 /// Draws the effect's panel. `band` is the band shown (picked here when the effect has bands); `touch`
 /// gets every control's response with its new value (apply it when `resp.changed()`); `custom` draws the
 /// layout's custom cells.
+/// The finish of an effect's panel (its faceplate colour, group colour and knobs).
+pub fn skin_of(id: &str) -> Option<Skin> {
+    panel(id, 1).map(|p| p.skin)
+}
+
 pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mut Ui, Touch), custom: &mut dyn FnMut(&mut Ui, &str)) -> bool {
     let View { def, params, accent, salt } = view;
     let mut rects: Vec<(String, Rect)> = Vec::new();
     let Some(panel) = panel(def.id, *band) else { return false };
     let skin = panel.skin;
-    egui::Frame::NONE.fill(skin.face).corner_radius(8.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+    // The editor draws the faceplate (skin.face) around the display and this panel: here only the groups,
+    // engraved into it.
+    egui::Frame::NONE.show(ui, |ui| {
         ui.set_width(ui.available_width());
         // Pack the sections into rows that fit the editor's width; a section wider than that wraps its
         // own controls.
@@ -777,7 +785,7 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                 if dim {
                     ui.multiply_opacity(0.4);
                 }
-                egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).stroke(Stroke::new(1.0_f32, Color32::from_black_alpha(90))).show(ui, |ui| {
                     ui.set_width(inner);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(s.title.to_uppercase()).size(10.0).strong().color(accent));

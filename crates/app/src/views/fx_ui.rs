@@ -2064,14 +2064,14 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 // ------------------------------------------------------------------------------------------------ multiband
 
-/// The display's height: taller in wide windows (full screen), at most 30 % of the screen so the
+/// The display's height: taller in wide windows (full screen), at most 27 % of the screen so the
 /// controls keep their room, and short for the multiband (its band columns need the space).
 pub(crate) fn hero_height(id: &str, base: f32, w: f32, avail_h: f32, screen_h: f32) -> f32 {
     let mut height = (base * (w / 520.0).clamp(1.0, 2.2)).min(avail_h.max(base));
     if id == "multiband" {
         height = height.min(250.0);
     }
-    height.min((screen_h * 0.3).max(base))
+    height.min((screen_h * 0.27).max(base))
 }
 
 /// Where the multiband display draws: the plot, its dB scale (0 dB at the top, −60 dB at the bottom) and

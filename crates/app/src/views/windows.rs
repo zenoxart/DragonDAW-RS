@@ -356,6 +356,31 @@ fn presets_dir(st: &State, effect: &str) -> PathBuf {
     st.ctx.paths.config.join("Presets").join(effect)
 }
 
+/// `c` lighter (`k` > 1) or darker (`k` < 1).
+fn shade(c: egui::Color32, k: f32) -> egui::Color32 {
+    let f = |v: u8| ((v as f32 * k).clamp(0.0, 255.0)) as u8;
+    egui::Color32::from_rgb(f(c.r()), f(c.g()), f(c.b()))
+}
+
+/// A small (i) that shows `text` when hovered.
+fn info_dot(ui: &mut Ui, text: &str, accent: egui::Color32) {
+    let (ir, iresp) = ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
+    let col = if iresp.hovered() { accent } else { theme::TEXT_DIM };
+    ui.painter().circle_stroke(ir.center(), 6.5, egui::Stroke::new(1.2_f32, col));
+    ui.painter().text(ir.center(), egui::Align2::CENTER_CENTER, "i", egui::FontId::proportional(10.0), col);
+    iresp.on_hover_text(text);
+}
+
+/// Four screws in the corners of a faceplate.
+fn screws(ui: &Ui, r: egui::Rect, face: egui::Color32) {
+    let p = ui.painter();
+    for c in [r.left_top() + egui::vec2(7.0, 7.0), r.right_top() + egui::vec2(-7.0, 7.0), r.left_bottom() + egui::vec2(7.0, -7.0), r.right_bottom() + egui::vec2(-7.0, -7.0)] {
+        p.circle_filled(c, 3.2, shade(face, 1.9));
+        p.circle_stroke(c, 3.2, egui::Stroke::new(0.8_f32, shade(face, 0.5)));
+        p.line_segment([c + egui::vec2(-2.0, 1.2), c + egui::vec2(2.0, -1.2)], egui::Stroke::new(0.9_f32, shade(face, 0.6)));
+    }
+}
+
 pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let Some(ins) = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).cloned() else { return };
     let gr = st.audio.meters().snapshot().gain_reduction.get(&i).copied().unwrap_or(0.0);
@@ -423,6 +448,10 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                     let name = ui.add(egui::Label::new(RichText::new(&brand).size(15.0).strong().color(theme::TEXT)).truncate());
                     ui.data_mut(|d| d.insert_temp(egui::Id::new(("fx.header.name", m, i)), name.rect));
                     ui.add(egui::Label::new(RichText::new(format!("|  {cat}")).size(11.0).color(theme::TEXT_DIM)).truncate());
+                    // What it does, behind an (i).
+                    if let Some(d) = effects::find(&ins.effect) {
+                        info_dot(ui, d.description, ccol);
+                    }
                 });
             });
         });
@@ -461,79 +490,94 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     };
     let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
     let tele = st.audio.meters().snapshot().fx_data.get(&i).cloned().unwrap_or_else(|| vec![-1.0]);
-    let (edits, _) = super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) });
-    if let Some((k, v)) = edits.last() {
-        if let Some(prm) = def.params.iter().find(|p| p.id == k.as_str()) {
-            st.hint(def.name, prm.name, prm.format(*v));
-        }
-    }
-    if !edits.is_empty() {
-        st.session.gesture(def.name, |p| {
-            with_insert(p, m, i, |x| {
-                for (k, v) in edits {
-                    x.params.insert(k, v);
-                }
-            })
-        });
-    }
-    if time.is_some() && ins.enabled {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
-    }
-    ui.label(RichText::new(def.description).small().color(theme::TEXT_DIM));
-    // The designed panel (fx_panel); the generic grid below only for an effect without one.
-    let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");
-    let band_key = if def.id == "eq" { eq_sel_key } else { egui::Id::new(("fx.hero", m, i)).with("band") };
-    let mut band: usize =
-        ui.data(|d| d.get_temp(band_key)).unwrap_or_else(|| if def.id == "eq" { (1..=dragon_engine::effects::eq::EQ_BANDS).find(|b| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5).unwrap_or(1) } else { 1 });
-    if def.id == "eq" && super::fx_panel::panel("eq", 1).is_some() {
-        eq_compare(ui, st, m, i, &ins);
-    }
-    let params = ins.params.clone();
-    let shown = {
-        let mut touch = |_ui: &mut Ui, t: super::fx_panel::Touch| {
-            let prm = t.prm;
-            let key = prm.id.to_string();
-            let v = t.value;
-            if t.resp.hovered() || t.resp.dragged() || t.resp.changed() {
-                st.hint(def.name, prm.name, prm.format(v));
+    // The device: display and controls on one faceplate in the effect's own finish – the display in its
+    // bezel, the control groups engraved into the same face, screws in the corners.
+    let face = super::fx_panel::skin_of(def.id).map(|s| s.face).unwrap_or(theme::PANEL);
+    let dev = egui::Frame::NONE.fill(face).corner_radius(10.0).inner_margin(egui::Margin { left: 14, right: 14, top: 8, bottom: 12 }).stroke(egui::Stroke::new(1.0_f32, shade(face, 1.6))).show(ui, |ui| {
+        let bezel = egui::Frame::NONE.fill(egui::Color32::from_rgb(0x08, 0x09, 0x0b)).corner_radius(7.0).inner_margin(egui::Margin::same(3)).stroke(egui::Stroke::new(2.0_f32, shade(face, 0.55)));
+        let (edits, _) =
+            bezel.show(ui, |ui| super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) })).inner;
+        ui.add_space(8.0);
+        if let Some((k, v)) = edits.last() {
+            if let Some(prm) = def.params.iter().find(|p| p.id == k.as_str()) {
+                st.hint(def.name, prm.name, prm.format(*v));
             }
-            match prm.kind {
-                ParamKind::Choice(_) | ParamKind::Toggle => {
-                    if t.resp.changed() {
-                        st.session.edit(prm.name, |p| {
+        }
+        if !edits.is_empty() {
+            st.session.gesture(def.name, |p| {
+                with_insert(p, m, i, |x| {
+                    for (k, v) in edits {
+                        x.params.insert(k, v);
+                    }
+                })
+            });
+        }
+        if time.is_some() && ins.enabled {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
+        // The designed panel (fx_panel); the generic grid below only for an effect without one.
+        let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");
+        let band_key = if def.id == "eq" { eq_sel_key } else { egui::Id::new(("fx.hero", m, i)).with("band") };
+        let mut band: usize = ui.data(|d| d.get_temp(band_key)).unwrap_or_else(|| {
+            if def.id == "eq" {
+                (1..=dragon_engine::effects::eq::EQ_BANDS).find(|b| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5).unwrap_or(1)
+            } else {
+                1
+            }
+        });
+        if def.id == "eq" && super::fx_panel::panel("eq", 1).is_some() {
+            eq_compare(ui, st, m, i, &ins);
+        }
+        let params = ins.params.clone();
+        let shown = {
+            let mut touch = |_ui: &mut Ui, t: super::fx_panel::Touch| {
+                let prm = t.prm;
+                let key = prm.id.to_string();
+                let v = t.value;
+                if t.resp.hovered() || t.resp.dragged() || t.resp.changed() {
+                    st.hint(def.name, prm.name, prm.format(v));
+                }
+                match prm.kind {
+                    ParamKind::Choice(_) | ParamKind::Toggle => {
+                        if t.resp.changed() {
+                            st.session.edit(prm.name, |p| {
+                                with_insert(p, m, i, |x| {
+                                    x.params.insert(key.clone(), v);
+                                })
+                            });
+                        }
+                    }
+                    _ => {
+                        let r = t.resp.on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
+                        widgets::apply(st, &r, prm.name, |p| {
                             with_insert(p, m, i, |x| {
                                 x.params.insert(key.clone(), v);
                             })
                         });
+                        let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
+                        if r.changed() || r.drag_started() {
+                            st.ui.last_target = Some(target.clone());
+                        }
+                        param_menu(&r, st, m, i, prm, v, target);
                     }
                 }
-                _ => {
-                    let r = t.resp.on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
-                    widgets::apply(st, &r, prm.name, |p| {
-                        with_insert(p, m, i, |x| {
-                            x.params.insert(key.clone(), v);
-                        })
-                    });
-                    let target = Target::InsertParam { channel: m, insert: i, param: key.clone() };
-                    if r.changed() || r.drag_started() {
-                        st.ui.last_target = Some(target.clone());
-                    }
-                    param_menu(&r, st, m, i, prm, v, target);
+            };
+            let mut custom = |ui: &mut Ui, name: &str| match name {
+                "reverb.er" => reverb_part_curve(ui, &params, "er"),
+                "reverb.late" => reverb_part_curve(ui, &params, "late"),
+                n if n.starts_with("mb.gr") => {
+                    let band = n[5..].parse::<usize>().unwrap_or(1).clamp(1, 4) - 1;
+                    super::fx_ui::band_meter(ui, &tele, band, super::fx_panel::BAND_COLORS[band]);
                 }
-            }
+                _ => {}
+            };
+            super::fx_panel::show(ui, super::fx_panel::View { def, params: &params, accent: ccol, salt: egui::Id::new(("fx.panel", m, i)) }, &mut band, &mut touch, &mut custom)
         };
-        let mut custom = |ui: &mut Ui, name: &str| match name {
-            "reverb.er" => reverb_part_curve(ui, &params, "er"),
-            "reverb.late" => reverb_part_curve(ui, &params, "late"),
-            n if n.starts_with("mb.gr") => {
-                let band = n[5..].parse::<usize>().unwrap_or(1).clamp(1, 4) - 1;
-                super::fx_ui::band_meter(ui, &tele, band, super::fx_panel::BAND_COLORS[band]);
-            }
-            _ => {}
-        };
-        super::fx_panel::show(ui, super::fx_panel::View { def, params: &params, accent: ccol, salt: egui::Id::new(("fx.panel", m, i)) }, &mut band, &mut touch, &mut custom)
-    };
-    ui.data_mut(|d| d.insert_temp(band_key, band));
+        ui.data_mut(|d| d.insert_temp(band_key, band));
+        shown
+    });
+    screws(ui, dev.response.rect, face);
+    let shown = dev.inner;
     if !shown {
         // Group "Band 3 freq" / "Band 3 gain" … into one row per band, and parameters sharing a first word
         // ("Early …", "Late …") into a section; other parameters share a row.
