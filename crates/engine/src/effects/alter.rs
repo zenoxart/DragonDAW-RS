@@ -40,6 +40,15 @@ pub struct Alter {
     out: f32,
     input: [Vec<f32>; 2],
     output: [Vec<f32>; 2],
+    /// The summed grain windows at each output sample (the output is divided by it, so overlapping grains
+    /// neither boost nor dip the level).
+    weight: Vec<f32>,
+    /// The longest grain half (two periods of the lowest voice: formant down an octave).
+    max_half: f64,
+    /// Smoothed mix, output gain and drive (no zipper noise when they move).
+    mix_s: f32,
+    out_s: f32,
+    drive_s: f32,
     /// Total samples written (stream time).
     t: usize,
     /// Next synthesis mark (stream time, output side).
@@ -58,8 +67,10 @@ pub struct Alter {
 
 impl Alter {
     pub fn new(rate: f32) -> Self {
-        // Two periods of the lowest voice (≈ 70 Hz) of look-ahead so a grain is always complete.
-        let latency = (rate / 70.0 * 2.0) as usize + 64;
+        // Look-ahead: a grain reaches up to two periods of the lowest voice (≈ 70 Hz) ahead of its centre in
+        // the output (formant down an octave) and one period behind it in the input – three periods.
+        let max_period = rate / 70.0;
+        let latency = (max_period * 3.0) as usize + 64;
         Alter {
             rate,
             pitch: 0.0,
@@ -71,6 +82,11 @@ impl Alter {
             out: 1.0,
             input: [vec![0.0; RING], vec![0.0; RING]],
             output: [vec![0.0; RING], vec![0.0; RING]],
+            weight: vec![0.0; RING],
+            max_half: (max_period * 2.0) as f64,
+            mix_s: 1.0,
+            out_s: 1.0,
+            drive_s: 0.0,
             t: 0,
             next_out: 0.0,
             mark: 0.0,
@@ -99,10 +115,10 @@ impl Alter {
     }
 
     /// Lays down one grain centred on stream time `at_out`, taken around input time `at_in`.
-    fn grain(&mut self, at_in: f64, at_out: f64, period: f32, formant: f32, gain: f32) {
+    fn grain(&mut self, at_in: f64, at_out: f64, period: f32, formant: f32) {
         let half_in = period as f64;
         // Formant up = the grain is read faster (shorter, higher resonances).
-        let half_out = (half_in / formant as f64).max(4.0);
+        let half_out = (half_in / formant as f64).clamp(4.0, self.max_half);
         let n = (half_out * 2.0) as usize;
         for j in 0..n {
             let u = j as f64 / n as f64;
@@ -115,10 +131,12 @@ impl Alter {
             let i0 = src.floor() as usize;
             let f = (src - i0 as f64) as f32;
             let o = dst.round() as usize % RING;
+            let w = w as f32;
+            self.weight[o] += w;
             for ch in 0..2 {
                 let a = self.input[ch][i0 % RING];
                 let b = self.input[ch][(i0 + 1) % RING];
-                self.output[ch][o] += (a + (b - a) * f) * w as f32 * gain;
+                self.output[ch][o] += (a + (b - a) * f) * w;
             }
         }
     }
@@ -141,6 +159,7 @@ impl Effect for Alter {
         for b in self.input.iter_mut().chain(self.output.iter_mut()) {
             b.fill(0.0);
         }
+        self.weight.fill(0.0);
         self.t = 0;
         self.next_out = 0.0;
         self.mark = 0.0;
@@ -151,8 +170,10 @@ impl Effect for Alter {
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let ratio = 2f32.powf(self.pitch / 12.0);
         // Link: the formant follows the pitch (like a sample sped up), the Formant knob adds to it.
-        let formant = 2f32.powf((self.formant + if self.link { self.pitch } else { 0.0 }) / 12.0);
-        let lat = self.latency as f64;
+        let formant = 2f32.powf((self.formant + if self.link { self.pitch } else { 0.0 }) / 12.0).clamp(0.5, 2.0);
+        let lat = self.latency;
+        // Parameter smoothing (≈ 10 ms).
+        let k = 1.0 - (-1.0 / (0.01 * self.rate)).exp();
         for i in 0..l.len() {
             let w = self.t % RING;
             self.input[0][w] = l[i];
@@ -176,38 +197,43 @@ impl Effect for Alter {
                 _ => self.period / ratio,
             };
             self.tele[1] = self.rate / out_period;
-            // Synthesis marks run `lat` behind the input so every grain's source is already here.
-            let now = self.t as f64;
-            while self.next_out <= now {
-                let target_in = self.next_out - lat + self.period as f64 * 2.0;
-                // Analysis marks advance by whole input periods towards the target time.
-                if self.mark < target_in - self.period as f64 * 4.0 || self.mark > target_in + self.period as f64 * 4.0 {
-                    self.mark = target_in;
+            // The output runs a fixed `lat` samples behind the input. Grains are laid down at their own
+            // output time, centred where their source sits in the input, as soon as the sample being read
+            // could reach them – so a grain is always complete before it is read, and changing periods
+            // never move the read position (which is what used to crackle).
+            let read = self.t as f64 - lat as f64;
+            while self.next_out <= read + self.max_half {
+                let c = self.next_out;
+                let per = self.period as f64;
+                // Analysis marks advance by whole input periods up to the grain's time.
+                if self.mark > c || self.mark < c - per * 4.0 {
+                    self.mark = c;
                 }
-                while self.mark + (self.period as f64) <= target_in {
-                    self.mark += self.period as f64;
+                while self.mark + per <= c {
+                    self.mark += per;
                 }
-                let (mark, at_out, per) = (self.mark, self.next_out + self.period as f64 * 2.0, self.period);
-                // Hann grains of two input periods spaced one output period apart sum to period / spacing.
-                let gain = (out_period / per).min(2.0);
-                self.grain(mark, at_out, per, formant, gain);
+                self.grain(self.mark, c, self.period, formant);
                 self.next_out += out_period.max(16.0) as f64;
             }
-            // Read the output lat samples late (where the grains are complete).
-            let rd = (self.t + RING - (self.latency - (self.period * 2.0) as usize).min(self.latency)) % RING;
-            let (mut a, mut b) = (self.output[0][rd], self.output[1][rd]);
+            let rd = (self.t + RING - lat) % RING;
+            // Divided by the summed windows (floored so gaps between sparse grains are not blown up).
+            let norm = 1.0 / self.weight[rd].max(0.5);
+            let (mut a, mut b) = (self.output[0][rd] * norm, self.output[1][rd] * norm);
             self.output[0][rd] = 0.0;
             self.output[1][rd] = 0.0;
-            if self.drive > 0.0 {
-                let d = 1.0 + self.drive * 6.0;
+            self.weight[rd] = 0.0;
+            self.drive_s += (self.drive - self.drive_s) * k;
+            self.mix_s += (self.mix - self.mix_s) * k;
+            self.out_s += (self.out - self.out_s) * k;
+            if self.drive_s > 1e-4 {
+                let d = 1.0 + self.drive_s * 6.0;
                 a = (a * d).tanh() / d.sqrt();
                 b = (b * d).tanh() / d.sqrt();
             }
             // Dry is delayed by the same latency.
-            let dr = (self.t + RING - self.latency) % RING;
-            let (da, db) = (self.input[0][dr], self.input[1][dr]);
-            l[i] = (da + (a - da) * self.mix) * self.out;
-            r[i] = (db + (b - db) * self.mix) * self.out;
+            let (da, db) = (self.input[0][rd], self.input[1][rd]);
+            l[i] = (da + (a - da) * self.mix_s) * self.out_s;
+            r[i] = (db + (b - db) * self.mix_s) * self.out_s;
             self.t += 1;
         }
     }
@@ -331,5 +357,57 @@ mod tests {
         let c = run(&[("pitch", 7.0), ("formant", 7.0)], &x);
         let d = |p: &[f32], q: &[f32]| p[30000..34000].iter().zip(&q[30000..34000]).map(|(x, y)| (x - y).abs()).sum::<f32>();
         assert!(d(&b, &c) < d(&a, &b) * 0.2, "link = formant following pitch");
+    }
+
+    /// No crackle: with a voice that glides and wobbles (so the detected period keeps changing), the output
+    /// is as smooth as the input – no sample-to-sample jumps – in every mode.
+    #[test]
+    fn a_gliding_voice_comes_out_without_crackles() {
+        let sr = 48000.0f32;
+        let mut ph = 0.0f32;
+        let x: Vec<f32> = (0..96000)
+            .map(|i| {
+                let t = i as f32 / sr;
+                let hz = 150.0 + 60.0 * (t * 0.7 * std::f32::consts::TAU).sin() + 6.0 * (t * 5.5 * std::f32::consts::TAU).sin();
+                ph += hz / sr;
+                (1..12).map(|h| (std::f32::consts::TAU * ph * h as f32).sin() / h as f32).sum::<f32>() * 0.3
+            })
+            .collect();
+        // The largest second difference: a click is a spike far above the signal's own curvature.
+        let roughness = |y: &[f32]| y[8000..].windows(3).map(|w| (w[2] - 2.0 * w[1] + w[0]).abs()).fold(0.0f32, f32::max);
+        let input = roughness(&x);
+        for params in [
+            vec![("pitch", 0.0)],
+            vec![("pitch", 4.0)],
+            vec![("pitch", -5.0), ("formant", 3.0)],
+            vec![("mode", 1.0)],
+            vec![("mode", 2.0)],
+            vec![("pitch", 12.0)],
+            vec![("pitch", -12.0)],
+            vec![("pitch", 7.0), ("link", 1.0)],
+        ] {
+            let y = run(&params, &x);
+            let r = roughness(&y);
+            assert!(r < input * 2.5, "{params:?}: roughness {r} vs input {input}");
+        }
+    }
+
+    /// Turning Mix and Output while it plays does not click.
+    #[test]
+    fn moving_mix_and_output_is_smooth() {
+        let x = buzz(150.0, 1.0);
+        let mut e = Alter::new(48000.0);
+        e.set_param("pitch", 5.0);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        for (k, (a, b)) in l.chunks_mut(128).zip(r.chunks_mut(128)).enumerate() {
+            if k % 20 == 0 {
+                e.set_param("mix", if (k / 20) % 2 == 0 { 0.0 } else { 100.0 });
+                e.set_param("output", if (k / 20) % 2 == 0 { -12.0 } else { 6.0 });
+            }
+            e.process(a, b, None);
+        }
+        let jump = l[4000..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let natural = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(jump < natural * 2.5, "{jump} vs {natural}");
     }
 }
