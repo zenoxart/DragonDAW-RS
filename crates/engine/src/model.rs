@@ -1163,6 +1163,33 @@ impl Project {
         id
     }
 
+    /// Adds an armed recording track for `input`. It records into mixer channel `into`, or into a new mixer
+    /// channel of its own (named like the track) when `into` is `None`. Returns (track, mixer channel).
+    pub fn add_recording_track(&mut self, name: &str, input: InputSource, into: Option<Id>) -> (Id, Id) {
+        let id = self.add_track(name);
+        let own = self.tracks.last().map(|t| t.mixer).unwrap_or(self.mixer.master.id);
+        let mixer = match into {
+            Some(m) if m != own => {
+                // Recording into an existing channel: the track's own new channel is not needed.
+                self.mixer.channels.retain(|c| c.id != own);
+                m
+            }
+            _ => own,
+        };
+        if let Some(t) = self.tracks.last_mut() {
+            t.armed = true;
+            t.input = Some(input);
+            t.monitor = MonitorMode::Auto;
+            t.mixer = mixer;
+        }
+        if mixer == own {
+            if let Some(c) = self.mixer.get_mut(own) {
+                c.icon = "vocal".into();
+            }
+        }
+        (id, mixer)
+    }
+
     /// Adds a Channel-Rack channel with its own mixer channel.
     pub fn add_channel(&mut self, name: &str, instrument: Instrument) -> Id {
         let mixer = self.add_mixer_channel(name);

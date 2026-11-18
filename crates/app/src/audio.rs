@@ -136,6 +136,14 @@ impl Audio {
         }
     }
 
+    /// The open input device's name and its number of channels (none open: `None`).
+    pub fn input(&self) -> Option<(String, u16)> {
+        match self {
+            Audio::Device(e) => e.input_name.clone().map(|n| (n, e.input_channels)),
+            Audio::Null(..) => None,
+        }
+    }
+
     pub fn can_record(&self) -> bool {
         matches!(self, Audio::Device(e) if e.input_name.is_some())
     }

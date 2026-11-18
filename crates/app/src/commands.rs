@@ -181,6 +181,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("add.synth", "Synth channel", "Add/Instrument", 1, ""),
     ("add.drums", "Drum pads channel", "Add/Instrument", 1, ""),
     ("add.mixer", "Mixer bus", "Add", 2, ""),
+    ("add.recording", "Recording channel", "Add", 2, ""),
     ("add.vca", "VCA fader", "Add", 2, ""),
     ("mixer.autobalance", "Auto-balance all mixer channels", "Tools", 2, ""),
     ("add.marker", "Time marker", "Add", 3, "Alt+T"),
@@ -211,6 +212,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.to_midi_drums", "Convert selected clip to MIDI (drums)", "Tools", 2, ""),
     ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
     ("help.tour", "Take the tour", "Help", 0, ""),
+    ("help.record_tour", "How to record (tutorial)", "Help", 0, ""),
     ("help.quests", "Dragon Quests", "Help", 0, ""),
     ("help.updates", "Check for updates…", "Help", 0, ""),
     ("help.about", "About Dragon DAW", "Help", 0, ""),
@@ -1054,6 +1056,10 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             st.ui.piano_channel = Some(id);
             st.ui.instrument_windows.push(id);
         }
+        "add.recording" => {
+            crate::views::recording::add_recording_channel(st);
+            st.ctx.open("dragon.mixer", None);
+        }
         "add.mixer" => {
             st.ui.mixer = st.session.edit("Add bus", |p| {
                 let n = p.mixer.channels.len() + 1;
@@ -1226,6 +1232,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "tools.separate" => st.separate_selected(),
         "help.about" => st.ui.about = true,
         "help.tour" => crate::tutorial::start(st),
+        "help.record_tour" => crate::tutorial::start_recording(st),
         "help.quests" => st.quests.window_open = true,
         "help.updates" => crate::update::start_check(st, true),
         _ => return false,

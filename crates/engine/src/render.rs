@@ -449,7 +449,8 @@ pub struct CompileContext<'a> {
     pub rate: f32,
 }
 
-fn fade_gain(curve: FadeCurve, x: f64) -> f32 {
+/// The gain of a fade at `x` (0 = silent end, 1 = full level) for `curve`.
+pub fn fade_gain(curve: FadeCurve, x: f64) -> f32 {
     let x = x.clamp(0.0, 1.0);
     (match curve {
         FadeCurve::Linear => x,

@@ -99,6 +99,83 @@ pub const STEPS: &[Step] = &[
     },
 ];
 
+/// The recording tour: from the interface to a clean take.
+pub const RECORD_STEPS: &[Step] = &[
+    Step {
+        target: None,
+        open: None,
+        title: "Recording, step by step",
+        text: "You need an audio interface (or your computer's mic input), your mic or instrument, and headphones – speakers would leak into the microphone. This walks you through one good take.",
+        try_it: None,
+    },
+    Step {
+        target: Some("mixer.add_rec"),
+        open: Some("dragon.mixer"),
+        title: "Add a recording channel",
+        text: "Click + record in the mixer. It makes a mixer channel and an armed track that records into it. Give every mic or instrument its own.",
+        try_it: Some(("Add a recording channel", |st| st.session.project.tracks.iter().any(|t| t.armed))),
+    },
+    Step {
+        target: Some("mixer.rec_input"),
+        open: Some("dragon.mixer"),
+        title: "Pick the input",
+        text: "Choose where it is plugged in: In 1 for one mic, a guitar or a bass (mono); In 1+2 for a keyboard or a stereo pair. No interface? Choose it in Options › Audio first.",
+        try_it: Some(("Open an input device", |st| st.audio.can_record())),
+    },
+    Step {
+        target: Some("mixer.rec_strip"),
+        open: Some("dragon.mixer"),
+        title: "Set the level",
+        text: "Play or sing the loudest part and watch the channel's meter. Turn the gain knob on your interface – not the fader – until the peaks sit around −12 to −6 dB: green, never red. Too quiet can be fixed later; clipping cannot.",
+        try_it: None,
+    },
+    Step {
+        target: Some("mixer.rec_monitor"),
+        open: Some("dragon.mixer"),
+        title: "Hear yourself",
+        text: "Auto plays your input through the channel while it is armed, effects included. Hear an echo or a delay? Choose Off and use your interface's direct monitoring, or lower the buffer size in Options › Audio (128–256).",
+        try_it: None,
+    },
+    Step {
+        target: Some("transport.click"),
+        open: None,
+        title: "Click and count-in",
+        text: "CLICK turns on the metronome and COUNT gives you a bar to get ready, so you come in on time. With headphones on, the click is not recorded.",
+        try_it: None,
+    },
+    Step {
+        target: Some("transport.record"),
+        open: None,
+        title: "Record",
+        text: "Press R or this button. After the count-in, perform; Space stops. The take lands on the armed track. With LOOP on, every pass is kept as a take, so you can pick the best parts.",
+        try_it: Some(("Start a recording", |st| st.ui.record_started.is_some())),
+    },
+    Step {
+        target: None,
+        open: None,
+        title: "After the take",
+        text: "Drag the small squares at a clip's top corners to fade it in and out. Double-click the clip to trim it, clean noise, hum and clicks with Audio repair, or correct the pitch. Disarm the track when you're done.",
+        try_it: None,
+    },
+];
+
+/// Which tour runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TourKind {
+    /// The general tour (Help › Take the tour).
+    #[default]
+    Basics,
+    /// How to record (Help › How to record, the mixer's recording panel).
+    Recording,
+}
+
+fn steps(kind: TourKind) -> &'static [Step] {
+    match kind {
+        TourKind::Basics => STEPS,
+        TourKind::Recording => RECORD_STEPS,
+    }
+}
+
 /// The tour's state.
 #[derive(Default)]
 pub struct Tour {
@@ -106,16 +183,21 @@ pub struct Tour {
     pub step: Option<usize>,
     /// The step whose view was opened already.
     opened: Option<usize>,
+    pub kind: TourKind,
 }
 
 pub fn start(st: &mut State) {
-    st.ui.tour.step = Some(0);
-    st.ui.tour.opened = None;
+    st.ui.tour = Tour { step: Some(0), opened: None, kind: TourKind::Basics };
+}
+
+/// Starts the recording tour.
+pub fn start_recording(st: &mut State) {
+    st.ui.tour = Tour { step: Some(0), opened: None, kind: TourKind::Recording };
 }
 
 fn finish(st: &mut State, completed: bool) {
     st.ui.tour.step = None;
-    if completed {
+    if completed && st.ui.tour.kind == TourKind::Basics {
         crate::views::quests::event(st, crate::views::quests::Event::TourDone);
     }
 }
@@ -123,7 +205,8 @@ fn finish(st: &mut State, completed: bool) {
 /// Draws the tour, when it runs; call once per frame after the panels.
 pub fn show(ctx: &Context, st: &mut State) {
     let Some(k) = st.ui.tour.step else { return };
-    let Some(step) = STEPS.get(k) else {
+    let all = steps(st.ui.tour.kind);
+    let Some(step) = all.get(k) else {
         finish(st, true);
         return;
     };
@@ -185,9 +268,9 @@ pub fn show(ctx: &Context, st: &mut State) {
         egui::Frame::NONE.fill(Color32::from_rgb(0x20, 0x16, 0x14)).stroke(Stroke::new(1.5_f32, theme::ACCENT)).corner_radius(10.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
             ui.set_width(card_w - 28.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{} / {}", k + 1, STEPS.len())).small().color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("{} / {}", k + 1, all.len())).small().color(theme::TEXT_DIM));
                 // Progress dots.
-                for j in 0..STEPS.len() {
+                for j in 0..all.len() {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(7.0), egui::Sense::hover());
                     ui.painter().circle_filled(r.center(), 2.5, if j <= k { theme::ACCENT } else { Color32::from_white_alpha(40) });
                 }
@@ -208,7 +291,7 @@ pub fn show(ctx: &Context, st: &mut State) {
                     skip = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let last = k + 1 == STEPS.len();
+                    let last = k + 1 == all.len();
                     let next = egui::Button::new(RichText::new(if last { "Finish" } else { "Next ›" }).strong().color(Color32::BLACK)).fill(theme::ACCENT);
                     if ui.add(next).clicked() {
                         go = Some(1);
@@ -227,7 +310,7 @@ pub fn show(ctx: &Context, st: &mut State) {
         finish(st, false);
     } else if let Some(d) = go {
         let n = k as isize + d;
-        if n as usize >= STEPS.len() {
+        if n as usize >= all.len() {
             finish(st, true);
         } else {
             st.ui.tour.step = Some(n.max(0) as usize);
@@ -280,11 +363,26 @@ mod tests {
 
     #[test]
     fn every_step_has_words_and_a_real_view() {
-        for s in STEPS {
+        for s in STEPS.iter().chain(RECORD_STEPS) {
             assert!(!s.title.is_empty() && s.text.len() > 20);
             if let Some(v) = s.open {
-                assert_eq!(s.target, Some(v), "a step that opens a view points at it");
+                // It points at the view, or at something inside it ("dragon.mixer" → "mixer.add_rec").
+                let inside = format!("{}.", v.trim_start_matches("dragon."));
+                assert!(s.target == Some(v) || s.target.is_some_and(|t| t.starts_with(&inside)), "{} points into its view", s.title);
             }
         }
+    }
+
+    #[test]
+    fn the_recording_tour_starts_on_its_own_steps() {
+        let mut st = state();
+        start_recording(&mut st);
+        assert_eq!(st.ui.tour.kind, TourKind::Recording);
+        let ctx = Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| show(ctx, &mut st));
+        assert_eq!(st.ui.tour.step, Some(0));
+        // Skipping does not count as the general tour.
+        finish(&mut st, true);
+        assert!(!st.quests.events_pending(crate::views::quests::Event::TourDone));
     }
 }

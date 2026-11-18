@@ -143,7 +143,7 @@ pub fn start(st: &mut State, mode: Mode) {
     }
     let hint = match mode {
         Mode::Beat => "Click steps in the channel rack, or open the piano roll – then press Space",
-        Mode::Record => "Press record (R) to record onto the armed track",
+        Mode::Record => "Press record (R) to record onto the armed track – Help › How to record walks you through it",
         Mode::Mix => "Drag your stems from the browser or your file manager onto the playlist",
         Mode::Master => "Drop your mixdown onto the Mixdown track; the mastering chain is on the master",
         Mode::Stems => "Drop each stem onto its group: Drums, Melody, All vocals or SFX",

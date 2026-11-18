@@ -96,6 +96,21 @@ impl Tool {
         (Tool::Playback, "▶", "Playback (Y)"),
         (Tool::Zoom, "🔍", "Zoom (Z)"),
     ];
+
+    /// Its short name and what it does (for the tool buttons).
+    pub fn describe(self) -> (&'static str, &'static str) {
+        match self {
+            Tool::Draw => ("Draw", "Click to add a clip or note, drag it to move, drag its edge to resize."),
+            Tool::Paint => ("Paint", "Drag across the grid to paint many clips or notes in one go."),
+            Tool::Select => ("Select", "Drag a box to select several things (Ctrl+drag works with any tool)."),
+            Tool::Slice => ("Slice", "Drag a line across clips or notes to cut them where it crosses."),
+            Tool::Erase => ("Delete", "Click or drag over clips or notes to delete them (right-click deletes too)."),
+            Tool::Mute => ("Mute", "Click clips or notes to mute / unmute them."),
+            Tool::Slip => ("Slip", "Drag inside an audio clip to move its audio while the clip stays put."),
+            Tool::Playback => ("Play", "Hold the mouse on the timeline to play from there; drag to scrub."),
+            Tool::Zoom => ("Zoom", "Drag a box to zoom into it; right-click zooms out."),
+        }
+    }
 }
 
 /// The editor the user last worked in (decides what Select all / Copy / Paste act on).

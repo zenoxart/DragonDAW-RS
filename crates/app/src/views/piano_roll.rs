@@ -879,11 +879,7 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 }
             }
         });
-        for (t, icon, name) in Tool::ALL {
-            if ui.selectable_label(st.ui.tool == t, icon).on_hover_text(name).clicked() {
-                st.ui.tool = t;
-            }
-        }
+        widgets::tool_buttons(ui, st);
         ui.separator();
         let cur = widgets::SNAPS.iter().find(|s| (s.1 - st.ui.snap).abs() < 1e-9).map(|s| s.0).unwrap_or("custom");
         egui::ComboBox::from_id_salt("pr.snap").selected_text(format!("Snap {cur}")).width(100.0).show_ui(ui, |ui| {

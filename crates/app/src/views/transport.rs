@@ -32,11 +32,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if ui.add(egui::Button::new(big("⏹")).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Stop (Ctrl+Space)").clicked() {
             st.stop();
         }
-        if ui
-            .add(egui::Button::new(big("⏺").color(if rec { theme::REC } else { theme::TEXT_DIM })).min_size(Vec2::new(36.0, 30.0)))
-            .on_hover_text("Record (R): armed tracks record audio, otherwise notes are recorded into the pattern")
-            .clicked()
-        {
+        let rec_b = ui.add(egui::Button::new(big("⏺").color(if rec { theme::REC } else { theme::TEXT_DIM })).min_size(Vec2::new(36.0, 30.0)));
+        crate::tutorial::anchor(ui.ctx(), "transport.record", rec_b.rect);
+        if rec_b.on_hover_text("Record (R): armed tracks record audio, otherwise notes are recorded into the pattern").clicked() {
             st.ctx.run("dragon.transport.record", serde_json::Value::Null);
         }
         ui.separator();
@@ -69,10 +67,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let p = &st.session.project;
         let (met, lp, punch) = (p.metronome.enabled, p.loop_enabled, p.punch_enabled);
         let count_in = p.metronome.count_in_bars;
-        if widgets::toggle(ui, met, "♩ CLICK", theme::ACCENT_2).on_hover_text("Metronome (M)").clicked() {
+        let click = widgets::toggle(ui, met, "♩ CLICK", theme::ACCENT_2).on_hover_text("Metronome (M)");
+        if click.clicked() {
             st.ctx.run("dragon.transport.metronome", serde_json::Value::Null);
         }
-        if widgets::toggle(ui, count_in > 0, "COUNT", theme::ACCENT_2).on_hover_text("Count-in before recording (1 bar)").clicked() {
+        let count = widgets::toggle(ui, count_in > 0, "COUNT", theme::ACCENT_2).on_hover_text("Count-in before recording (1 bar)");
+        crate::tutorial::anchor(ui.ctx(), "transport.click", click.rect.union(count.rect));
+        if count.clicked() {
             st.session.edit("Count-in", |p| p.metronome.count_in_bars = if count_in > 0 { 0 } else { 1 });
         }
         if widgets::toggle(ui, lp, "⟲ LOOP", theme::PLAYHEAD).on_hover_text("Loop (Ctrl+L)").clicked() {

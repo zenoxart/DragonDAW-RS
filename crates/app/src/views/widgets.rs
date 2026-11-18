@@ -421,6 +421,37 @@ pub fn snap_floor(beat: f64, grid: f64) -> f64 {
     }
 }
 
+/// The editing tools as large buttons: icon over its name, the active one lit, with a tooltip that says
+/// what the tool does and its key.
+pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
+    use crate::state::Tool;
+    ui.spacing_mut().item_spacing.x = 3.0;
+    for (t, icon, key) in Tool::ALL {
+        let (name, what) = t.describe();
+        let on = st.ui.tool == t;
+        let (r, resp) = ui.allocate_exact_size(Vec2::new(46.0, 38.0), Sense::click());
+        let p = ui.painter();
+        let fill = if on {
+            theme::ACCENT
+        } else if resp.hovered() {
+            theme::GRID_BAR
+        } else {
+            theme::PANEL_2
+        };
+        p.rect_filled(r, 6.0, fill);
+        if on {
+            p.rect_stroke(r, 6.0, Stroke::new(1.5_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
+        }
+        let ink = if on { Color32::BLACK } else { theme::TEXT };
+        p.text(Pos2::new(r.center().x, r.top() + 13.0), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(16.0), ink);
+        p.text(Pos2::new(r.center().x, r.bottom() - 8.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(10.0), if on { Color32::BLACK } else { theme::TEXT_DIM });
+        let key = key.rsplit('(').next().unwrap_or("").trim_end_matches(')');
+        if resp.on_hover_text(format!("{name} tool  ·  key {key}\n{what}")).clicked() {
+            st.ui.tool = t;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Right-click on the tempo display lists examples from 70 to 160 BPM, every 5 BPM, each with styles.

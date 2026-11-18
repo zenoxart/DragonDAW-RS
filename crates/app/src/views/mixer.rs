@@ -220,6 +220,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         st.ui.mixer_sel.clear();
                     }
                     ui.vertical(|ui| {
+                        let rec = ui
+                            .add(egui::Button::new(RichText::new("+\nrecord").small().color(theme::REC)).min_size(Vec2::new(46.0, 40.0)))
+                            .on_hover_text("Add a recording channel: a mixer channel with an armed track that records your mic or instrument into it");
+                        crate::tutorial::anchor(ui.ctx(), "mixer.add_rec", rec.rect);
+                        if rec.clicked() {
+                            st.ctx.run("dragon.add.recording", serde_json::Value::Null);
+                        }
                         if ui.add(egui::Button::new(RichText::new("+\ninsert").small()).min_size(Vec2::new(46.0, 40.0))).on_hover_text("Add a mixer insert").clicked() {
                             st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
                         }
@@ -450,6 +457,7 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 hresp.context_menu(|ui| strip_menu(ui, st, m, is_master));
             }
             if !vca {
+                super::recording::strip_row(ui, st, m, width);
                 // Pan above separation, each centred.
                 let mut pan = m.pan;
                 let r = knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", widgets::pan_fmt);
@@ -460,7 +468,7 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 widgets::apply(st, &r, "Stereo separation", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.width = w));
             }
             // Meter, fader and its dB scale, centred as one group; they fill the strip's height.
-            let fader_h = (height - if vca { 110.0 } else { 272.0 }).max(50.0);
+            let fader_h = (height - if vca { 110.0 } else { 295.0 }).max(50.0);
             const GROUP_W: f32 = 12.0 + 4.0 + 18.0 + 2.0 + 24.0;
             centred_row(ui, width, GROUP_W, |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -771,6 +779,7 @@ pub(super) fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &
         options(ui, st, m, all);
         return;
     }
+    super::recording::panel(ui, st, m, is_master);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new("EFFECT SLOTS").small().color(theme::TEXT_DIM));

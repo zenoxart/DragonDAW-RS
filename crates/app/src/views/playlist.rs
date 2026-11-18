@@ -60,6 +60,44 @@ pub enum DragKind {
     Gain {
         y: f32,
     },
+    /// Dragging an audio clip's fade-in (`out` = false) or fade-out handle sideways.
+    Fade {
+        out: bool,
+    },
+}
+
+/// The fade handles of an audio clip drawn in `r` (fade-in, fade-out), when the clip is large enough:
+/// small squares on the title bar's lower edge, at the end of each fade.
+pub fn fade_handles(r: Rect, length: f64, fade_in: f64, fade_out: f64) -> Option<(Rect, Rect)> {
+    if r.width() < 28.0 || r.height() < 24.0 {
+        return None;
+    }
+    let w = |b: f64| (b / length.max(1e-9)) as f32 * r.width();
+    let y = r.top() + 13.0;
+    let xi = (r.left() + w(fade_in)).clamp(r.left() + 5.0, r.right() - 5.0);
+    let xo = (r.right() - w(fade_out)).clamp(r.left() + 5.0, r.right() - 5.0);
+    Some((Rect::from_center_size(Pos2::new(xi, y), Vec2::splat(10.0)), Rect::from_center_size(Pos2::new(xo, y), Vec2::splat(10.0))))
+}
+
+/// The gain the clip's fades give at `b` beats into a clip of `len` beats.
+fn fade_env(a: &AudioClip, len: f64, b: f64) -> f32 {
+    let mut g = 1.0;
+    if a.fade_in > 0.0 && b < a.fade_in {
+        g *= dragon_engine::render::fade_gain(a.fade_curve, b / a.fade_in);
+    }
+    if a.fade_out > 0.0 && b > len - a.fade_out {
+        g *= dragon_engine::render::fade_gain(a.fade_curve, (len - b) / a.fade_out);
+    }
+    g
+}
+
+/// "250 ms", "1.20 s".
+fn ms_label(secs: f64) -> String {
+    if secs < 1.0 {
+        format!("{:.0} ms", secs * 1000.0)
+    } else {
+        format!("{secs:.2} s")
+    }
 }
 
 /// The playlist's geometry for file drops: timeline rect, track rows (id, top, bottom), view and grid.
@@ -457,6 +495,28 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let row_at = |y: f32| rows.iter().position(|r| y >= r.y && y < r.y + r.h);
     let take_at = |y: f32| rows.iter().find_map(|r| r.takes.iter().find(|(_, _, ky)| y >= *ky && y < *ky + TAKE_H).map(|(k, _, _)| (r.track, *k)));
     let clip_at = |pos: Pos2| clip_rects.iter().rev().find(|(_, _, r)| r.contains(pos)).copied();
+    // A fade handle under `pos`: (track, clip, fade-out?).
+    let fade_rects: Vec<(Id, Id, Rect, Rect)> = clip_rects
+        .iter()
+        .filter_map(|(tid, cid, r)| {
+            let c = st.session.project.track(*tid)?.clips.iter().find(|c| c.id == *cid)?;
+            let ClipKind::Audio(a) = &c.kind else { return None };
+            let (hi, ho) = fade_handles(*r, c.length, a.fade_in, a.fade_out)?;
+            Some((*tid, *cid, hi, ho))
+        })
+        .collect();
+    let fade_hit = |pos: Pos2| -> Option<(Id, Id, bool)> {
+        let (tid, cid, _) = clip_rects.iter().rev().find(|(_, _, r)| r.expand(4.0).contains(pos)).copied()?;
+        let &(_, _, hi, ho) = fade_rects.iter().find(|f| f.0 == tid && f.1 == cid)?;
+        let (on_in, on_out) = (hi.expand(3.0).contains(pos), ho.expand(3.0).contains(pos));
+        match (on_in, on_out) {
+            // Where the two meet: the left half grabs the fade in, the right half the fade out.
+            (true, true) => Some((tid, cid, pos.x >= (hi.center().x + ho.center().x) / 2.0)),
+            (true, false) => Some((tid, cid, false)),
+            (false, true) => Some((tid, cid, true)),
+            _ => None,
+        }
+    };
     let tool = st.ui.tool;
     let grid = st.ui.snap;
 
@@ -555,6 +615,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             } else if tool == Tool::Slice || rsh {
                 st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Knife { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y, delete_small: false } });
+            } else if let Some((tid, cid, out)) = fade_hit(pos) {
+                // A fade handle: drag it sideways to lengthen / shorten the fade.
+                st.ui.pl_drag = Some(Drag { clip: cid, track: tid, kind: DragKind::Fade { out } });
             } else if let Some((tid, cid, r)) = clip_at(pos).filter(|(tid, cid, r)| {
                 gain_handle(*r).is_some_and(|h| h.contains(pos)) && st.session.project.track(*tid).and_then(|t| t.clips.iter().find(|c| c.id == *cid)).is_some_and(|c| matches!(c.kind, ClipKind::Audio(_)))
             }) {
@@ -813,6 +876,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 });
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
             }
+            DragKind::Fade { out } => {
+                let b = if ui.input(|i| i.modifiers.shift) { snap(beat, grid) } else { beat };
+                st.session.gesture(if out { "Fade out" } else { "Fade in" }, |p| {
+                    if let Some(c) = p.track_mut(d.track).and_then(|t| t.clips.iter_mut().find(|c| c.id == d.clip)) {
+                        let (start, len) = (c.start, c.length);
+                        if let ClipKind::Audio(a) = &mut c.kind {
+                            if out {
+                                a.fade_out = (start + len - b).clamp(0.0, (len - a.fade_in).max(0.0));
+                            } else {
+                                a.fade_in = (b - start).clamp(0.0, (len - a.fade_out).max(0.0));
+                            }
+                        }
+                    }
+                });
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
             DragKind::Slip { from, offset } => {
                 let secs = (beat - from) * 60.0 / st.session.project.bpm.max(1.0);
                 let new = (offset - secs).max(0.0);
@@ -987,7 +1066,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
     if resp.double_clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
+        if let Some((tid, cid, out)) = resp.interact_pointer_pos().and_then(fade_hit) {
+            // Double-click a fade handle: no fade.
+            st.session.edit(if out { "Remove fade out" } else { "Remove fade in" }, |p| {
+                if let Some(ClipKind::Audio(a)) = p.track_mut(tid).and_then(|t| t.clips.iter_mut().find(|c| c.id == cid)).map(|c| &mut c.kind) {
+                    if out {
+                        a.fade_out = 0.0;
+                    } else {
+                        a.fade_in = 0.0;
+                    }
+                }
+            });
+        } else if let Some(pos) = resp.interact_pointer_pos() {
             let on_gain = clip_at(pos).filter(|(_, _, r)| gain_handle(*r).is_some_and(|h| h.contains(pos)));
             if let Some((tid, cid, _)) = on_gain.filter(|(tid, cid, _)| st.session.project.track(*tid).and_then(|t| t.clips.iter().find(|c| c.id == *cid)).is_some_and(|c| matches!(c.kind, ClipKind::Audio(_)))) {
                 // Double-click the gain handle: back to 0 dB.
@@ -1014,7 +1104,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
     // Cursor hints.
     if let Some(pos) = hover {
-        if let Some((_, _, r)) = clip_at(pos) {
+        if fade_hit(pos).is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        } else if let Some((_, _, r)) = clip_at(pos) {
             if pos.x > r.right() - 6.0 || pos.x < r.left() + 6.0 {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
@@ -1110,20 +1202,68 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
                 let f1 = (((a.offset + (tm.beat_to_seconds(b1) - s0) * a.speed) * rate) as usize / WAVE_BUCKET).max(f0 + 1);
                 if f0 < w.len() {
                     let (lo, hi) = w[f0..f1.min(w.len())].iter().fold((0.0f32, 0.0f32), |(l, h), (a, b)| (l.min(*a), h.max(*b)));
-                    p.line_segment([Pos2::new(x, mid - (hi * gain).min(1.0) * half), Pos2::new(x, mid - (lo * gain).max(-1.0) * half)], Stroke::new(1.0_f32, col));
+                    // The fades shape the waveform as they will sound.
+                    let g = gain * fade_env(a, c.length, b0 - c.start);
+                    p.line_segment([Pos2::new(x, mid - (hi * g).min(1.0) * half), Pos2::new(x, mid - (lo * g).max(-1.0) * half)], Stroke::new(1.0_f32, col));
                 }
                 x += 1.0;
             }
-            // Fades.
-            let fx = |secs: f64| (tm.seconds_to_beat(s0 + secs) - c.start) / c.length * r.width() as f64;
-            if a.fade_in > 0.0 {
-                let w = fx(a.fade_in) as f32;
-                p.line_segment([Pos2::new(r.left(), body.bottom()), Pos2::new(r.left() + w, body.top())], Stroke::new(1.0_f32, theme::ACCENT_2));
+            // Fades: the curve, the faded-out part shaded, and a handle at each fade's end.
+            let bx = |b: f64| r.left() + (b / c.length.max(1e-9)) as f32 * r.width();
+            let curve = |from: f64, to: f64, out: bool| -> Vec<Pos2> {
+                (0..=24)
+                    .map(|k| {
+                        let b = from + (to - from) * k as f64 / 24.0;
+                        let x = if out { (to - b) / (to - from).max(1e-9) } else { (b - from) / (to - from).max(1e-9) };
+                        Pos2::new(bx(b), body.bottom() - dragon_engine::render::fade_gain(a.fade_curve, x) * body.height())
+                    })
+                    .collect()
+            };
+            for (on, from, to, out) in [(a.fade_in > 0.0, 0.0, a.fade_in, false), (a.fade_out > 0.0, c.length - a.fade_out, c.length, true)] {
+                if !on {
+                    continue;
+                }
+                let line = curve(from, to, out);
+                // Shade above the curve (what the fade takes away).
+                for w in line.windows(2) {
+                    p.add(egui::Shape::convex_polygon(vec![Pos2::new(w[0].x, body.top()), Pos2::new(w[1].x, body.top()), w[1], w[0]], Color32::from_black_alpha(95), Stroke::NONE));
+                }
+                p.add(egui::Shape::line(line, Stroke::new(1.5_f32, theme::ACCENT_2)));
             }
-            if a.fade_out > 0.0 {
-                let e = tm.beat_to_seconds(c.end()) - s0;
-                let w = (fx(e) - fx(e - a.fade_out)) as f32;
-                p.line_segment([Pos2::new(r.right() - w, body.top()), Pos2::new(r.right(), body.bottom())], Stroke::new(1.0_f32, theme::ACCENT_2));
+            if let Some((hi, ho)) = fade_handles(r, c.length, a.fade_in, a.fade_out) {
+                let hover = p.ctx().pointer_hover_pos();
+                let active = match st.ui.pl_drag {
+                    Some(Drag { clip, kind: DragKind::Fade { out }, .. }) if clip == c.id => Some(out),
+                    _ => None,
+                };
+                let over_clip = hover.is_some_and(|h| r.expand(4.0).contains(h));
+                let secs = |b0: f64, b1: f64| tm.beat_to_seconds(b1) - tm.beat_to_seconds(b0);
+                for (h, out, len) in [(hi, false, a.fade_in), (ho, true, a.fade_out)] {
+                    let hot = active == Some(out) || hover.is_some_and(|q| h.expand(3.0).contains(q));
+                    // Handles show on a hovered or selected clip, and wherever a fade is set.
+                    if !(over_clip || selected || len > 0.0 || hot) {
+                        continue;
+                    }
+                    let fill = if hot {
+                        Color32::WHITE
+                    } else if len > 0.0 {
+                        theme::ACCENT_2
+                    } else {
+                        Color32::from_white_alpha(150)
+                    };
+                    p.rect_filled(h.shrink(1.0), 2.0, fill);
+                    p.rect_stroke(h.shrink(1.0), 2.0, Stroke::new(1.0_f32, Color32::BLACK), egui::StrokeKind::Inside);
+                    if hot {
+                        let t = if out { secs(c.end() - len, c.end()) } else { secs(c.start, c.start + len) };
+                        let text = format!("{} {}", if out { "Fade out" } else { "Fade in" }, if len > 0.0 { ms_label(t) } else { "– drag".into() });
+                        let at = Pos2::new(h.center().x, h.bottom() + 3.0);
+                        let galley = p.layout_no_wrap(text, egui::FontId::proportional(10.5), Color32::WHITE);
+                        let pos = Pos2::new(if out { at.x - galley.size().x - 4.0 } else { at.x + 4.0 }, at.y);
+                        let bg = Rect::from_min_size(pos, galley.size()).expand(3.0);
+                        p.with_clip_rect(p.clip_rect().expand(40.0)).rect_filled(bg, 3.0, Color32::from_black_alpha(200));
+                        p.with_clip_rect(p.clip_rect().expand(40.0)).galley(pos, galley, Color32::WHITE);
+                    }
+                }
             }
         }
         ClipKind::Pattern { pattern } => {
@@ -1306,11 +1446,7 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
 
 fn toolbar(ui: &mut Ui, st: &mut State) {
     ui.horizontal(|ui| {
-        for (t, icon, name) in Tool::ALL {
-            if ui.selectable_label(st.ui.tool == t, icon).on_hover_text(name).clicked() {
-                st.ui.tool = t;
-            }
-        }
+        widgets::tool_buttons(ui, st);
         ui.separator();
         ui.label("Snap");
         let cur = widgets::SNAPS.iter().find(|s| (s.1 - st.ui.snap).abs() < 1e-9).map(|s| s.0).unwrap_or("custom");

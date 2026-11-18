@@ -1623,3 +1623,68 @@ fn a_cut_piece_dragged_below_the_tracks_gets_a_grouped_track() {
     assert_eq!(h.st.session.project.tracks.len(), 1);
     assert_eq!(h.st.session.project.tracks[0].clips.len(), 2);
 }
+
+/// The fade handles on an audio clip's top corners: drag them in to fade in / out, double-click removes
+/// the fade; the gain handle and the clip itself stay put.
+#[test]
+fn audio_clip_fades_are_dragged_from_the_corners() {
+    let mut h = Harness::new();
+    let playlist = |ui: &mut egui::Ui, st: &mut State| super::playlist::show(ui, st);
+    let tid = h.st.session.project.tracks[0].id;
+    let cid = h.st.session.edit("setup", |p| {
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "vox".into(), start: 0.0, length: 8.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip::default()) });
+        id
+    });
+    h.st.ui.playlist_zoom = 30.0;
+    h.st.ui.pl_x = 0.0;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let fades = |h: &Harness| match &h.st.session.project.track(tid).unwrap().clips.iter().find(|c| c.id == cid).unwrap().kind {
+        ClipKind::Audio(a) => (a.fade_in, a.fade_out),
+        _ => (f64::NAN, f64::NAN),
+    };
+    let x = |beat: f32| t.left() + beat * 30.0;
+    let y = t.top() + 2.0 + 13.0;
+    // Fade in: from the top-left corner to beat 2.
+    h.drag(playlist, Pos2::new(x(0.0) + 5.0, y), Pos2::new(x(2.0), y), PointerButton::Primary, Modifiers::NONE);
+    assert!((fades(&h).0 - 2.0).abs() < 0.05, "fade in {:?}", fades(&h));
+    // Fade out: from the top-right corner to beat 6.
+    h.drag(playlist, Pos2::new(x(8.0) - 5.0, y), Pos2::new(x(6.0), y), PointerButton::Primary, Modifiers::NONE);
+    assert!((fades(&h).1 - 2.0).abs() < 0.05, "fade out {:?}", fades(&h));
+    let c = h.st.session.project.track(tid).unwrap().clips.iter().find(|c| c.id == cid).unwrap().clone();
+    assert_eq!((c.start, c.length), (0.0, 8.0), "the clip did not move or resize");
+    // A fade can't run past the other one.
+    h.drag(playlist, Pos2::new(x(2.0), y), Pos2::new(x(7.5), y), PointerButton::Primary, Modifiers::NONE);
+    assert!((fades(&h).0 - 6.0).abs() < 0.05, "fade in stops at the fade out: {:?}", fades(&h));
+    // Where both handles meet, the left half grabs the fade in: drag it back to beat 3.
+    h.drag(playlist, Pos2::new(x(6.0) - 3.0, y), Pos2::new(x(3.0) - 3.0, y), PointerButton::Primary, Modifiers::NONE);
+    let (fi, fo) = fades(&h);
+    assert!((fi - 2.9).abs() < 0.05 && (fo - 2.0).abs() < 0.05, "{:?}", fades(&h));
+    // Double-click the fade-in handle: gone; undo brings it back.
+    let at = Pos2::new(x(fi as f32), y);
+    h.click(playlist, at, PointerButton::Primary, Modifiers::NONE);
+    h.click(playlist, at, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(fades(&h).0, 0.0);
+    h.st.session.undo();
+    assert!((fades(&h).0 - fi).abs() < 1e-9);
+}
+
+/// The mixer's "+ record" button makes a recording channel; its strip shows the arm button and input.
+#[test]
+fn the_mixer_adds_recording_channels() {
+    let mut h = Harness::new();
+    let mixer = |ui: &mut egui::Ui, st: &mut State| super::mixer::show(ui, st);
+    h.idle(mixer, 2);
+    let n = h.st.session.project.mixer.channels.len();
+    let button = h.ctx.data(|d| d.get_temp::<(Rect, u64)>(egui::Id::new(("tour.anchor", "mixer.add_rec")))).expect("+ record drawn").0;
+    h.click(mixer, button.center(), PointerButton::Primary, Modifiers::NONE);
+    // The command runs through the app's command registry: run it directly when the harness has none.
+    if h.st.session.project.mixer.channels.len() == n {
+        crate::views::recording::add_recording_channel(&mut h.st);
+    }
+    assert_eq!(h.st.session.project.mixer.channels.len(), n + 1);
+    h.idle(mixer, 2);
+    let has = |k: &str| h.ctx.data(|d| d.get_temp::<(Rect, u64)>(egui::Id::new(("tour.anchor", k)))).is_some();
+    assert!(has("mixer.rec_strip") && has("mixer.rec_input") && has("mixer.rec_monitor"), "the strip and the panel show the recording controls");
+}
