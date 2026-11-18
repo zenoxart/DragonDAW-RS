@@ -40,6 +40,9 @@ jobs:
             ext: .exe
           - name: linux-x86_64
             os: ubuntu-latest
+            # Built on Ubuntu 22.04 (glibc 2.35) so it runs on older distributions too; ubuntu-latest's
+            # glibc made the binary refuse to start on anything older than itself.
+            container: ubuntu:22.04
             target: x86_64-unknown-linux-gnu
             ext: ""
           - name: macos-arm64
@@ -51,13 +54,16 @@ jobs:
             target: x86_64-apple-darwin
             ext: ""
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Install system libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update && apt-get install -y --no-install-recommends build-essential curl ca-certificates git pkg-config libasound2-dev cmake clang
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
