@@ -227,6 +227,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         if rec.clicked() {
                             st.ctx.run("dragon.add.recording", serde_json::Value::Null);
                         }
+                        let compact = st.settings.compact_mixer;
+                        let cb = egui::Button::new(RichText::new(if compact { "Full\nstrips" } else { "Compact\nstrips" }).small().color(if compact { Color32::BLACK } else { theme::TEXT })).fill(if compact { theme::ACCENT_2 } else { theme::PANEL_2 }).min_size(Vec2::new(46.0, 40.0));
+                        if ui.add(cb).on_hover_text("Compact: narrow strips with just meter, fader, mute and solo – pan and effects stay in the panel on the right").clicked() {
+                            st.ctx.run("dragon.view.compact_mixer", serde_json::Value::Null);
+                        }
                         if ui.add(egui::Button::new(RichText::new("+\ninsert").small()).min_size(Vec2::new(46.0, 40.0))).on_hover_text("Add a mixer insert").clicked() {
                             st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
                         }
@@ -374,7 +379,13 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
     let is_sel = sel.id == id;
     let in_sel = !is_sel && st.ui.mixer_sel.len() > 1 && st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.contains(&sel.id);
     let vca = m.kind == ChannelKind::Vca;
-    let width = if is_master { 96.0 } else { 88.0 };
+    let compact = st.settings.compact_mixer;
+    let width = match (compact, is_master) {
+        (true, true) => 52.0,
+        (true, false) => 46.0,
+        (false, true) => 96.0,
+        (false, false) => 88.0,
+    };
     let fill = if is_sel || in_sel { theme::PANEL_2 } else { theme::PANEL };
     let stroke = if is_sel {
         Stroke::new(1.5_f32, theme::ACCENT)
@@ -456,7 +467,7 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 name.context_menu(|ui| strip_menu(ui, st, m, is_master));
                 hresp.context_menu(|ui| strip_menu(ui, st, m, is_master));
             }
-            if !vca {
+            if !vca && !compact {
                 super::recording::strip_row(ui, st, m, width);
                 // Pan above separation, each centred.
                 let mut pan = m.pan;
@@ -468,13 +479,14 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 widgets::apply(st, &r, "Stereo separation", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.width = w));
             }
             // Meter, fader and its dB scale, centred as one group; they fill the strip's height.
-            let fader_h = (height - if vca { 110.0 } else { 295.0 }).max(50.0);
-            const GROUP_W: f32 = 12.0 + 4.0 + 18.0 + 2.0 + 24.0;
-            centred_row(ui, width, GROUP_W, |ui| {
+            let fader_h = (height - if vca || compact { 140.0 } else { 295.0 }).max(50.0);
+            // Compact: meter and fader only (no dB scale).
+            let group_w: f32 = if compact { 12.0 + 3.0 + 18.0 } else { 12.0 + 4.0 + 18.0 + 2.0 + 24.0 };
+            centred_row(ui, width, group_w, |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));
                 widgets::meter(ui, l, rr, fader_h);
-                ui.add_space(4.0);
+                ui.add_space(if compact { 3.0 } else { 4.0 });
                 let mut v = m.volume;
                 let r = widgets::fader(ui, &mut v, 2.0, fader_h);
                 if r.hovered() || r.dragged() {
@@ -482,15 +494,24 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 }
                 widgets::apply(st, &r, "Volume", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.volume = v));
                 r.context_menu(|ui| learn_menu(ui, st, Target::MixerVolume(id)));
-                ui.add_space(2.0);
-                widgets::fader_scale(ui, 2.0, fader_h);
+                if !compact {
+                    ui.add_space(2.0);
+                    widgets::fader_scale(ui, 2.0, fader_h);
+                }
             });
             // The fader's level in dB (what you balance with) and the current peak.
             let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));
             let pk = dragon_engine::dsp::gain_to_db(l.max(rr).max(1e-6));
             let vol = dragon_engine::dsp::gain_to_db(m.volume);
-            ui.label(RichText::new(if vol < -99.0 { "-∞ dB".to_string() } else { format!("{vol:+.1} dB") }).size(11.0).monospace().strong().color(theme::TEXT)).on_hover_text("Fader level");
-            ui.label(RichText::new(if pk < -99.0 { "peak -∞".to_string() } else { format!("peak {pk:.1}") }).size(9.0).monospace().color(theme::meter_color(l.max(rr))));
+            let vol_text = match (vol < -99.0, compact) {
+                (true, _) => "-∞".to_string(),
+                (false, true) => format!("{vol:+.1}"),
+                (false, false) => format!("{vol:+.1} dB"),
+            };
+            ui.label(RichText::new(if vol < -99.0 && !compact { "-∞ dB".to_string() } else { vol_text }).size(if compact { 9.5 } else { 11.0 }).monospace().strong().color(theme::TEXT)).on_hover_text("Fader level (dB)");
+            if !compact {
+                ui.label(RichText::new(if pk < -99.0 { "peak -∞".to_string() } else { format!("peak {pk:.1}") }).size(9.0).monospace().color(theme::meter_color(l.max(rr))));
+            }
             let solo_w = if is_master { 0.0 } else { 3.0 + 22.0 };
             centred_row(ui, width, 16.0 + solo_w, |ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;

@@ -33,6 +33,10 @@ pub struct Settings {
     pub show_start: bool,
     /// Plays the Dragon startup sound when the app opens.
     pub startup_sound: bool,
+    /// Compact playlist tracks: one thin row each (name, mute, solo, arm).
+    pub compact_tracks: bool,
+    /// Compact mixer strips: narrow, without the pan / separation knobs and the dB scale.
+    pub compact_mixer: bool,
     /// Looks for a new Dragon DAW version when the app opens.
     pub check_updates: bool,
     /// A version the user chose to skip (not offered again at start).
@@ -58,6 +62,8 @@ impl Default for Settings {
             show_splash: true,
             show_start: true,
             startup_sound: true,
+            compact_tracks: false,
+            compact_mixer: false,
             check_updates: true,
             skipped_update: None,
             reduced_motion: false,

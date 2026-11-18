@@ -152,6 +152,9 @@ pub struct Drag {
     pub kind: DragKind,
 }
 
+/// A track's height in compact mode.
+pub const COMPACT_H: f32 = 22.0;
+
 struct Row {
     track: Id,
     y: f32,
@@ -285,7 +288,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let mut y = timeline.top() - st.ui.pl_y;
     for t in &p.tracks {
         let mut takes = Vec::new();
-        let h = (t.height.clamp(28.0, 200.0) * st.ui.pl_vzoom).clamp(18.0, 600.0);
+        // Compact: one thin row per track.
+        let h = if st.settings.compact_tracks { COMPACT_H } else { (t.height.clamp(28.0, 200.0) * st.ui.pl_vzoom).clamp(18.0, 600.0) };
         let mut yy = y + h;
         if t.show_takes {
             for k in &t.takes {
@@ -1338,7 +1342,8 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
             p.circle_filled(Pos2::new(r.left() + 5.5, r.center().y - 5.0 + k as f32 * 5.0), 1.2, theme::TEXT);
         }
     }
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(Vec2::new(8.0, 3.0))));
+    let compact = r.height() < 26.0;
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(Vec2::new(8.0, if compact { 2.0 } else { 3.0 }))));
     child.horizontal(|ui| {
         let mut name = t.name.clone();
         let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(78.0).frame(false).font(egui::TextStyle::Small));
@@ -1468,6 +1473,10 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
             st.ui.pl_x = 0.0;
         }
         ui.checkbox(&mut st.settings.follow_playhead, "Follow");
+        let compact = st.settings.compact_tracks;
+        if widgets::toggle(ui, compact, "Compact", theme::ACCENT_2).on_hover_text("Compact tracks: one thin row each, so many more fit on screen").clicked() {
+            st.ctx.run("dragon.view.compact_tracks", serde_json::Value::Null);
+        }
         ui.toggle_value(&mut st.ui.pl_picker, "Picker").on_hover_text("Show the patterns, audio and automation clips to drag into the playlist");
         ui.separator();
         ui.label(

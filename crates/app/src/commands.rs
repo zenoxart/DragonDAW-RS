@@ -203,6 +203,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("view.close_windows", "Close all floating windows", "View", 2, "F12"),
     ("view.palette", "Command palette", "View", 3, "Ctrl+Shift+P"),
     ("view.reset_layout", "Reset layout", "View", 3, ""),
+    ("view.compact_tracks", "Compact playlist tracks", "View", 3, ""),
+    ("view.compact_mixer", "Compact mixer strips", "View", 3, ""),
     ("tools.scan_plugins", "Scan plugins", "Tools", 0, ""),
     ("tools.detect", "Detect tempo & key of selected clip", "Tools", 1, ""),
     ("tools.normalize", "Normalize selected clips", "Tools", 1, ""),
@@ -1231,6 +1233,14 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "tools.separate" => st.separate_selected(),
         "help.about" => st.ui.about = true,
+        "view.compact_tracks" => {
+            st.settings.compact_tracks = !st.settings.compact_tracks;
+            st.save_settings();
+        }
+        "view.compact_mixer" => {
+            st.settings.compact_mixer = !st.settings.compact_mixer;
+            st.save_settings();
+        }
         "help.tour" => crate::tutorial::start(st),
         "help.record_tour" => crate::tutorial::start_recording(st),
         "help.quests" => st.quests.window_open = true,

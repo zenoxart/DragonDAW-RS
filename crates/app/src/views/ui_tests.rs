@@ -1688,3 +1688,26 @@ fn the_mixer_adds_recording_channels() {
     let has = |k: &str| h.ctx.data(|d| d.get_temp::<(Rect, u64)>(egui::Id::new(("tour.anchor", k)))).is_some();
     assert!(has("mixer.rec_strip") && has("mixer.rec_input") && has("mixer.rec_monitor"), "the strip and the panel show the recording controls");
 }
+
+/// Compact mode: playlist tracks become thin rows; mixer strips get narrow.
+#[test]
+fn compact_mode_shrinks_tracks_and_strips() {
+    let mut h = Harness::new();
+    let playlist = |ui: &mut egui::Ui, st: &mut State| super::playlist::show(ui, st);
+    let mixer = |ui: &mut egui::Ui, st: &mut State| super::mixer::show(ui, st);
+    let rows = |h: &mut Harness| {
+        h.idle(playlist, 2);
+        super::playlist::DropInfo::get(&h.ctx).unwrap().tracks.iter().map(|t| t.2 - t.1).collect::<Vec<f32>>()
+    };
+    let strips = |h: &mut Harness| {
+        h.idle(mixer, 2);
+        h.ctx.data(|d| d.get_temp::<Vec<(Id, Rect)>>(egui::Id::new("mixer.rects"))).unwrap().iter().map(|r| r.1.width()).fold(0.0f32, f32::max)
+    };
+    let (full_rows, full_w) = (rows(&mut h), strips(&mut h));
+    h.st.settings.compact_tracks = true;
+    h.st.settings.compact_mixer = true;
+    let (small_rows, small_w) = (rows(&mut h), strips(&mut h));
+    assert!(small_rows.iter().all(|r| (*r - super::playlist::COMPACT_H).abs() < 0.5), "{small_rows:?}");
+    assert!(small_rows.iter().sum::<f32>() < full_rows.iter().sum::<f32>() * 0.6);
+    assert!(small_w < full_w * 0.65, "strips {small_w} vs {full_w}");
+}
