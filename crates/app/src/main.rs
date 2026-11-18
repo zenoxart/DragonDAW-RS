@@ -87,7 +87,9 @@ fn main() -> eframe::Result {
                 let path = std::path::PathBuf::from(path);
                 st.add_audio_clip_at(&path, None, 0.0);
                 if let Some(cid) = st.ui.clips.first().copied() {
-                    views::repair::open(&mut st, cid);
+                    // DRAGON_REPAIR_PITCH=1 opens the note editor instead.
+                    let tool = if std::env::var_os("DRAGON_REPAIR_PITCH").is_some() { views::repair::Tool::Pitch } else { views::repair::Tool::Denoise };
+                    views::repair::open_with(&mut st, cid, tool);
                 }
             }
             Ok(Box::new(app::DragonApp::new(cc, st)))

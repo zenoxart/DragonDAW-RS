@@ -297,6 +297,9 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
     }
     let id = id.strip_prefix("dragon.").unwrap_or(id);
     use crate::state::Editor as Ed;
+    if st.ui.editor == Ed::Repair && crate::views::repair::key(st, id) {
+        return true;
+    }
     match id {
         // ---------------- FL keys that depend on the editor under the mouse (rack / piano roll / playlist)
         "edit.legato" if st.ui.editor == Ed::Rack => rack_route_free(st),

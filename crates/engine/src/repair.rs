@@ -346,12 +346,17 @@ pub fn declick(data: &AudioData, sensitivity: f32) -> (AudioData, usize) {
 
 // ------------------------------------------------------------------------------------------------ de-clip
 
-/// Rebuilds clipped peaks: runs of samples stuck at the clip level (within `threshold` × peak) are
+/// Rebuilds clipped peaks: runs of samples stuck at the clip level (within `threshold` × the level where
+/// the waveform runs flat, or × the peak) are
 /// replaced by a cubic through the waveform's slope on either side; the result is turned down if the
 /// restored peaks would clip again. Returns the audio and the number of repaired runs.
 pub fn declip(data: &AudioData, threshold: f32) -> (AudioData, usize) {
     let peak = data.l.iter().chain(&data.r).fold(0.0f32, |m, v| m.max(v.abs())).max(1e-9);
-    let level = peak * threshold.clamp(0.5, 1.0);
+    // The clip level: where the waveform runs flat (three identical samples up high) – a click louder
+    // than the clipping must not hide it – else the peak.
+    let flat = data.l.windows(3).chain(data.r.windows(3)).filter(|w| w[1].abs() > 0.2 * peak && (w[1] - w[0]).abs() < 1e-6 && (w[2] - w[1]).abs() < 1e-6).map(|w| w[1].abs()).fold(f32::MAX, f32::min);
+    let base = if flat < f32::MAX { flat } else { peak };
+    let level = base * threshold.clamp(0.5, 1.0);
     let mut count = 0;
     let mut out = per_channel(data, |x| {
         let mut y = x.to_vec();
@@ -691,6 +696,81 @@ pub fn apply_pitch(data: &AudioData, notes: &[NoteBlob], edits: &[PitchEdit]) ->
     })
 }
 
+// ------------------------------------------------------------------------------------------------ diagnosis
+
+/// What a recording seems to suffer from (the repair view's "check the recording").
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Diagnosis {
+    /// Mains hum: its frequency and how far it stands out of its surroundings (dB).
+    pub hum: Option<(f32, f32)>,
+    /// Clicks found.
+    pub clicks: usize,
+    /// Places where the waveform is cut flat.
+    pub clipping: usize,
+    /// How far the quiet parts (noise) sit below the loud ones (dB).
+    pub snr_db: f32,
+    /// The loudest sample (dBFS).
+    pub peak_db: f32,
+}
+
+fn goertzel(x: &[f32], f: f32, rate: f32) -> f32 {
+    let w = 2.0 * PI * f / rate;
+    let c = 2.0 * w.cos();
+    let (mut s1, mut s2) = (0.0f32, 0.0f32);
+    for v in x {
+        let s0 = v + c * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    (s1 * s1 + s2 * s2 - c * s1 * s2).max(0.0) / (x.len().max(1) as f32).powi(2)
+}
+
+/// Looks the recording over: hum, clicks, clipping, background noise.
+pub fn diagnose(data: &AudioData) -> Diagnosis {
+    let rate = data.rate as f32;
+    let x = mono(data);
+    let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-9);
+    // Hum: the mains frequency and its first harmonics against tones a little beside them.
+    let probe = &x[..x.len().min((rate * 20.0) as usize)];
+    let hum = [50.0f32, 60.0]
+        .iter()
+        .map(|&b| {
+            let on: f32 = (1..=3).map(|k| goertzel(probe, b * k as f32, rate)).sum();
+            let off: f32 = (1..=3).map(|k| goertzel(probe, b * k as f32 + 13.0, rate) + goertzel(probe, b * k as f32 - 13.0, rate)).sum::<f32>() / 2.0;
+            (b, 10.0 * ((on + 1e-20) / (off + 1e-20)).log10(), on)
+        })
+        .filter(|(_, above, on)| *above > 12.0 && on.sqrt() > peak * 0.003)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(b, above, _)| (b, above));
+    // Clipping: flat tops – three or more identical samples up near the top of the waveform.
+    let top = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let mut clipping = 0;
+    let mut run = 0;
+    for w in x.windows(2) {
+        if w[1].abs() > 0.3 * top && w[1].abs() > 0.2 && (w[1] - w[0]).abs() < 1e-6 {
+            run += 1;
+            if run == 2 {
+                clipping += 1;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    // Clicks, counted on a de-clipped copy (the corners of clipped peaks are not clicks).
+    let (_, clicks) = if clipping > 0 { declick(&declip(data, 0.995).0, 5.0) } else { declick(data, 5.0) };
+    // Noise: the quietest tenth of 20 ms frames against the loudest half.
+    let frame = (rate * 0.02) as usize;
+    let mut e: Vec<f32> = x.chunks(frame.max(1)).map(|c| c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).collect();
+    e.sort_by(f32::total_cmp);
+    let n = e.len().max(1);
+    let quiet = e[..(n / 10).max(1)].iter().sum::<f32>() / (n / 10).max(1) as f32;
+    let loud = e[n / 2..].iter().sum::<f32>() / (n - n / 2).max(1) as f32;
+    let snr_db = 10.0 * ((loud + 1e-20) / (quiet + 1e-20)).log10();
+    // Channels are counted separately by the repairs; report places, not channel hits.
+    let ch = if data.l == data.r { 2 } else { 1 };
+    Diagnosis { hum, clicks: clicks / ch, clipping, snr_db, peak_db: 20.0 * peak.log10() }
+}
+
 // ------------------------------------------------------------------------------------------------ files
 
 /// Writes `data` as a 32-bit float stereo WAV.
@@ -916,5 +996,30 @@ mod tests {
         let again = detect_notes(&y);
         assert!(again.iter().any(|n| (n.midi - 71.0).abs() < 0.35 && n.start < 0.2), "{again:?}");
         assert!(again.iter().any(|n| (n.midi - 72.0).abs() < 0.3 && n.start > 0.45), "the second note stays");
+    }
+
+    #[test]
+    fn diagnosis_finds_what_is_wrong_and_nothing_else() {
+        let n = noise(11);
+        // A clean, loud tone with gaps between phrases (10 ms fades: an abrupt start would be a click).
+        let gate = |t: f32| ((t % 1.0) / 0.01).min((0.8 - (t % 1.0)) / 0.01).clamp(0.0, 1.0);
+        let clean = audio(move |t| gate(t) * 0.5 * (2.0 * PI * 330.0 * t).sin(), 3.0);
+        let d = diagnose(&clean);
+        assert_eq!(d.hum, None);
+        assert_eq!(d.clicks, 0);
+        assert_eq!(d.clipping, 0);
+        assert!(d.snr_db > 60.0, "{}", d.snr_db);
+        // The same with hum, hiss, clicks and clipping.
+        let mut dirty = audio(move |t| (gate(t) * 1.3 * (2.0 * PI * 330.0 * t).sin() + 0.02 * (2.0 * PI * 50.0 * t).sin() + 0.01 * n(t)).clamp(-1.0, 1.0), 3.0);
+        for k in 0..6 {
+            let i = (0.85 + k as f32 * 0.37) as usize * RATE as usize + 900 * k;
+            dirty.l[i] += 0.5;
+            dirty.r[i] += 0.5;
+        }
+        let d = diagnose(&dirty);
+        assert_eq!(d.hum.map(|h| h.0), Some(50.0), "{d:?}");
+        assert!(d.clicks >= 3, "{d:?}");
+        assert!(d.clipping > 100, "{d:?}");
+        assert!(d.snr_db < 45.0, "{d:?}");
     }
 }

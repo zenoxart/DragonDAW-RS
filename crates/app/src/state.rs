@@ -102,6 +102,8 @@ pub enum Editor {
     Rack,
     /// The mixer (Alt+Left / Right move the selected tracks there).
     Mixer,
+    /// Audio Repair (Ctrl+A selects all notes / the whole clip, arrows move notes there).
+    Repair,
 }
 
 /// Copied clips (with their track index) or notes.
