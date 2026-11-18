@@ -268,6 +268,8 @@ pub fn poll(st: &mut State) {
                 st.ui.repair.original = old;
             }
             st.toast(format!("{label} done – Ctrl+Z to undo"), Severity::Success);
+            let e = if label == "Notes" { crate::views::quests::Event::NotesEdited } else { crate::views::quests::Event::Repaired };
+            crate::views::quests::event(st, e);
         }
         Err(e) => st.toast(format!("Repair failed: {e}"), Severity::Error),
     }

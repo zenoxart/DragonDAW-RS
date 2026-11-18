@@ -210,6 +210,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.to_midi_melody", "Convert selected clip to MIDI (melody)", "Tools", 2, ""),
     ("tools.to_midi_drums", "Convert selected clip to MIDI (drums)", "Tools", 2, ""),
     ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
+    ("help.tour", "Take the tour", "Help", 0, ""),
+    ("help.quests", "Dragon Quests", "Help", 0, ""),
     ("help.about", "About Dragon DAW", "Help", 0, ""),
 ];
 
@@ -1219,6 +1221,8 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "tools.separate" => st.separate_selected(),
         "help.about" => st.ui.about = true,
+        "help.tour" => crate::tutorial::start(st),
+        "help.quests" => st.quests.window_open = true,
         _ => return false,
     }
     true

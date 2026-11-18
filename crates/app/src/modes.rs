@@ -151,6 +151,7 @@ pub fn start(st: &mut State, mode: Mode) {
         Mode::Film => "Load the picture with Add › Video, then drop dialogue, music and effects on their tracks",
     };
     st.toast(hint, Severity::Info);
+    crate::views::quests::event(st, crate::views::quests::Event::ModeChosen);
 }
 
 /// The album bus every song of an album master goes through.
@@ -317,6 +318,11 @@ pub fn show(ctx: &egui::Context, st: &mut State) -> bool {
         ui.horizontal(|ui| {
             if ui.button(RichText::new("Just an empty project").size(13.0)).clicked() {
                 open = false;
+            }
+            let tour = egui::Button::new(RichText::new("Take the 2-minute tour").size(13.0).strong().color(Color32::BLACK)).fill(theme::ACCENT_2);
+            if ui.add(tour).on_hover_text("A click-through tour of the interface (Help › Take the tour brings it back)").clicked() {
+                open = false;
+                crate::tutorial::start(st);
             }
             let mut show = st.settings.show_start;
             if ui.checkbox(&mut show, "Show this at start").changed() {

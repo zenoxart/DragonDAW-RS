@@ -18,6 +18,7 @@ mod session;
 mod splash;
 mod state;
 mod theme;
+mod tutorial;
 mod views;
 
 use redhive_client_framework::AppContext;

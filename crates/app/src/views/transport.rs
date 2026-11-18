@@ -24,8 +24,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         ui.separator();
         let big = |s: &str| RichText::new(s).size(18.0);
-        if ui.add(egui::Button::new(big(if ts.playing { "⏸" } else { "▶" }).color(if ts.playing { theme::OK } else { Color32::WHITE })).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Play / pause (Space)").clicked()
-        {
+        let play = ui.add(egui::Button::new(big(if ts.playing { "⏸" } else { "▶" }).color(if ts.playing { theme::OK } else { Color32::WHITE })).min_size(Vec2::new(36.0, 30.0)));
+        crate::tutorial::anchor(ui.ctx(), "transport.play", play.rect);
+        if play.on_hover_text("Play / pause (Space)").clicked() {
             st.toggle_play();
         }
         if ui.add(egui::Button::new(big("⏹")).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Stop (Ctrl+Space)").clicked() {
@@ -54,6 +55,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         // Tempo.
         let mut bpm = st.session.project.bpm;
         let r = widgets::bpm_display(ui, &mut bpm);
+        crate::tutorial::anchor(ui.ctx(), "transport.tempo", r.rect);
         widgets::apply(st, &r, "Tempo", |p| p.bpm = bpm);
         ui.label(RichText::new("BPM").small().color(theme::TEXT_DIM));
         if ui.small_button("TAP").on_hover_text("Tap tempo (T)").clicked() {

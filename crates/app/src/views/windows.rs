@@ -474,6 +474,9 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     }
     // Tabs: the controls, or the effect's Hammerstein graph with the current settings.
     if super::hammerstein::tabs(ui, egui::Id::new(("fx.tab", m, i)), ccol) {
+        if !st.quests.progress.done.contains("hammerstein") {
+            crate::views::quests::event(st, crate::views::quests::Event::Hammerstein);
+        }
         ui.separator();
         let bpm = st.session.project.bpm;
         super::hammerstein::view(ui, &ins, bpm, egui::Id::new(("fx.hammerstein", m, i)), ccol);

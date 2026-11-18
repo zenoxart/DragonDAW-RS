@@ -99,6 +99,7 @@ pub fn poll(st: &mut State) {
             }
         }
     });
+    crate::views::quests::event(st, crate::views::quests::Event::AlbumMatched);
     st.toast(format!("Matched {n} song{} to {target:.1} LUFS before the master chain – Ctrl+Z to undo", if n == 1 { "" } else { "s" }), Severity::Info);
 }
 

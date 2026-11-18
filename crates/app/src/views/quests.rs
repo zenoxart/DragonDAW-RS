@@ -18,6 +18,12 @@ pub enum Event {
     Recorded,
     MixAnalysed,
     PluginGui,
+    TourDone,
+    ModeChosen,
+    Repaired,
+    NotesEdited,
+    Hammerstein,
+    AlbumMatched,
 }
 
 pub struct Quest {
@@ -27,25 +33,35 @@ pub struct Quest {
     pub hint: &'static str,
     pub xp: u32,
     pub icon: &'static str,
+    /// The chapter it belongs to (the Quests window groups by it).
+    pub chapter: &'static str,
 }
 
 /// The quests in the order they are suggested.
 pub const QUESTS: &[Quest] = &[
-    Quest { id: "beat", title: "First beat", hint: "Channel rack: switch on at least 4 steps in a pattern.", xp: 50, icon: "♪" },
-    Quest { id: "melody", title: "Melody maker", hint: "Piano roll: draw 8 notes or more.", xp: 50, icon: "🎹" },
-    Quest { id: "arrange", title: "Arranger", hint: "Drag patterns from the picker into the playlist: 4 clips.", xp: 60, icon: "⊞" },
-    Quest { id: "split", title: "Pattern surgeon", hint: "Clone, split or make a pattern unique (the ⏷ menu on a pattern clip).", xp: 40, icon: "✂" },
-    Quest { id: "effect", title: "Sound sculptor", hint: "Mixer: put an effect into an empty slot of an insert.", xp: 60, icon: "⚙" },
-    Quest { id: "route", title: "Cable guy", hint: "Mixer: pull a cable from an insert's jack onto another insert (or click its arrow).", xp: 70, icon: "🔌" },
-    Quest { id: "automation", title: "Automation artist", hint: "Create an automation lane, then drag its clip from the picker into the playlist.", xp: 60, icon: "↗" },
-    Quest { id: "save", title: "Safe keeper", hint: "Save the project (it gets its own folder).", xp: 30, icon: "💾" },
-    Quest { id: "reference", title: "Ear training", hint: "Mastering: load a reference song and analyse your mix against it.", xp: 60, icon: "🎧" },
-    Quest { id: "plugin", title: "Plugin wrangler", hint: "Open a VST3 / CLAP plugin's own window.", xp: 50, icon: "🔌" },
-    Quest { id: "record", title: "Studio session", hint: "Arm a track and record audio.", xp: 80, icon: "⏺" },
-    Quest { id: "export", title: "Release day", hint: "File › Export your song.", xp: 100, icon: "🚀" },
+    Quest { id: "tour", title: "Tour guide", hint: "Help › Take the tour – all the way to the end.", xp: 40, icon: "★", chapter: "Basics" },
+    Quest { id: "start", title: "Fresh start", hint: "Pick what you want to do on the start screen (File › Start screen…).", xp: 30, icon: "⊞", chapter: "Basics" },
+    Quest { id: "beat", title: "First beat", hint: "Channel rack: switch on at least 4 steps in a pattern.", xp: 50, icon: "♪", chapter: "Basics" },
+    Quest { id: "melody", title: "Melody maker", hint: "Piano roll: draw 8 notes or more.", xp: 50, icon: "🎹", chapter: "Basics" },
+    Quest { id: "arrange", title: "Arranger", hint: "Drag patterns from the picker into the playlist: 4 clips.", xp: 60, icon: "⊞", chapter: "Basics" },
+    Quest { id: "split", title: "Pattern surgeon", hint: "Clone, split or make a pattern unique (the ⏷ menu on a pattern clip).", xp: 40, icon: "✂", chapter: "Basics" },
+    Quest { id: "save", title: "Safe keeper", hint: "Save the project (it gets its own folder).", xp: 30, icon: "💾", chapter: "Basics" },
+    Quest { id: "effect", title: "Sound sculptor", hint: "Mixer: put an effect into an empty slot of an insert.", xp: 60, icon: "⚙", chapter: "Mixing" },
+    Quest { id: "route", title: "Cable guy", hint: "Mixer: pull a cable from an insert's jack onto another insert (or click its arrow).", xp: 70, icon: "🔌", chapter: "Mixing" },
+    Quest { id: "automation", title: "Automation artist", hint: "Create an automation lane, then drag its clip from the picker into the playlist.", xp: 60, icon: "↗", chapter: "Mixing" },
+    Quest { id: "group", title: "Organiser", hint: "Playlist: cut a clip and drag a piece below the last track – a grouped track on the same mixer channel.", xp: 40, icon: "✂", chapter: "Mixing" },
+    Quest { id: "hammerstein", title: "Harmonic detective", hint: "Open an effect's Hammerstein tab and see what its distortion does.", xp: 40, icon: "↗", chapter: "Mixing" },
+    Quest { id: "plugin", title: "Plugin wrangler", hint: "Open a VST3 / CLAP plugin's own window.", xp: 50, icon: "🔌", chapter: "Mixing" },
+    Quest { id: "record", title: "Studio session", hint: "Arm a track and record audio.", xp: 80, icon: "⏺", chapter: "Recording & repair" },
+    Quest { id: "repair", title: "Audio surgeon", hint: "Double-click an audio clip › Audio repair…, then render a repair (de-noise, de-click …).", xp: 70, icon: "⚙", chapter: "Recording & repair" },
+    Quest { id: "notes", title: "Pitch doctor", hint: "Audio repair › Notes: move a note (or centre the pitch) and render it.", xp: 60, icon: "♪", chapter: "Recording & repair" },
+    Quest { id: "master", title: "Mastering engineer", hint: "Mastering: add a mastering chain (the limiter goes last).", xp: 60, icon: "🎧", chapter: "Mastering & release" },
+    Quest { id: "reference", title: "Ear training", hint: "Mastering: load a reference song and analyse your mix against it.", xp: 60, icon: "🎧", chapter: "Mastering & release" },
+    Quest { id: "album", title: "Album producer", hint: "Start an album master, add your songs and match their loudness.", xp: 80, icon: "💾", chapter: "Mastering & release" },
+    Quest { id: "export", title: "Release day", hint: "File › Export your song.", xp: 100, icon: "🚀", chapter: "Mastering & release" },
 ];
 
-const LEVELS: &[(&str, u32)] = &[("Hatchling", 0), ("Whelp", 80), ("Fledgling", 200), ("Drake", 360), ("Wyvern", 560), ("Fire dragon", 800), ("Elder dragon", 1100)];
+const LEVELS: &[(&str, u32)] = &[("Hatchling", 0), ("Whelp", 80), ("Fledgling", 200), ("Drake", 360), ("Wyvern", 560), ("Fire dragon", 800), ("Elder dragon", 1100), ("Ancient dragon", 1250), ("Dragon lord", 1500)];
 
 /// Saved progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,8 +138,18 @@ impl Quests {
 
 /// Records an event; it is evaluated with the next check.
 pub fn event(st: &mut State, e: Event) {
-    st.quests.events.push(e);
+    if !st.quests.events.contains(&e) {
+        st.quests.events.push(e);
+    }
     st.quests.last_check = -10.0;
+}
+
+impl Quests {
+    /// Whether `e` was reported and not evaluated yet.
+    #[cfg(test)]
+    pub fn events_pending(&self, e: Event) -> bool {
+        self.events.contains(&e)
+    }
 }
 
 /// Whether a quest's goal is met by the project / the recorded events.
@@ -144,6 +170,14 @@ fn achieved(id: &str, p: &Project, events: &[Event]) -> bool {
         "export" => events.contains(&Event::Exported),
         "record" => events.contains(&Event::Recorded),
         "plugin" => events.contains(&Event::PluginGui),
+        "tour" => events.contains(&Event::TourDone),
+        "start" => events.contains(&Event::ModeChosen),
+        "group" => p.tracks.iter().any(|t| t.group.is_some() && p.tracks.iter().any(|o| o.id != t.id && o.group == t.group)),
+        "hammerstein" => events.contains(&Event::Hammerstein),
+        "repair" => events.contains(&Event::Repaired),
+        "notes" => events.contains(&Event::NotesEdited),
+        "master" => p.mixer.master.inserts.last().is_some_and(|i| i.effect == "limiter") && p.mixer.master.inserts.len() >= 2,
+        "album" => events.contains(&Event::AlbumMatched),
         _ => false,
     }
 }
@@ -198,9 +232,21 @@ pub fn tick(st: &mut State, now: f64) {
     }
 }
 
-/// The next quest to suggest.
+/// The chapter that fits what the project was set up for on the start screen.
+fn chapter_for(mode: &str) -> Option<&'static str> {
+    match mode {
+        "beat" => Some("Basics"),
+        "mix" | "film" => Some("Mixing"),
+        "record" => Some("Recording & repair"),
+        "master" | "stems" | "album" => Some("Mastering & release"),
+        _ => None,
+    }
+}
+
+/// The next quest to suggest: from the chapter that fits the project, else the first one not done.
 pub fn next_quest(st: &State) -> Option<&'static Quest> {
-    QUESTS.iter().find(|q| !st.quests.progress.done.contains(q.id))
+    let open = |q: &&Quest| !st.quests.progress.done.contains(q.id);
+    chapter_for(&st.session.project.mode).and_then(|c| QUESTS.iter().filter(open).find(|q| q.chapter == c)).or_else(|| QUESTS.iter().find(open))
 }
 
 /// The dragon-level badge with an XP bar, for the transport bar. Click opens the quests.
@@ -213,6 +259,7 @@ pub fn badge(ui: &mut Ui, st: &mut State) {
     }
     let (lvl, title, into, need) = st.quests.progress.level();
     let (rect, r) = ui.allocate_exact_size(Vec2::new(170.0, 26.0), egui::Sense::click());
+    crate::tutorial::anchor(ui.ctx(), "quests", rect);
     let p = ui.painter();
     let hover = r.hovered();
     p.rect_filled(rect, 13.0, if hover { theme::PANEL_2 } else { theme::BG });
@@ -243,7 +290,7 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     let now = ctx.input(|i| i.time);
     tick(st, now);
     let mut open = st.quests.window_open;
-    egui::Window::new("Dragon Quests").open(&mut open).default_width(420.0).resizable(false).collapsible(false).show(ctx, |ui| window(ui, st));
+    egui::Window::new("Dragon Quests").open(&mut open).default_width(440.0).default_height(560.0).resizable(true).vscroll(true).collapsible(false).show(ctx, |ui| window(ui, st));
     st.quests.window_open = open;
     celebrations(ctx, st, now);
 }
@@ -262,7 +309,18 @@ fn window(ui: &mut Ui, st: &mut State) {
     let done = st.quests.progress.done.len();
     ui.label(RichText::new(format!("QUESTS  {done} / {}", QUESTS.len())).small().color(theme::TEXT_DIM));
     let next = next_quest(st).map(|q| q.id);
+    let mut chapter = "";
     for q in QUESTS {
+        if q.chapter != chapter {
+            chapter = q.chapter;
+            let all = QUESTS.iter().filter(|x| x.chapter == chapter).count();
+            let got = QUESTS.iter().filter(|x| x.chapter == chapter && st.quests.progress.done.contains(x.id)).count();
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(chapter.to_uppercase()).small().strong().color(theme::ACCENT));
+                ui.label(RichText::new(format!("{got} / {all}")).small().color(if got == all { theme::OK } else { theme::TEXT_DIM }));
+            });
+        }
         let is_done = st.quests.progress.done.contains(q.id);
         let is_next = Some(q.id) == next;
         let fill = if is_next { theme::PANEL_2 } else { theme::BG };
@@ -290,6 +348,10 @@ fn window(ui: &mut Ui, st: &mut State) {
         if ui.checkbox(&mut on, "Show quests and celebrations").changed() {
             st.quests.progress.enabled = on;
             st.ctx.paths.save_json("quests.json", &st.quests.progress);
+        }
+        if ui.small_button("Take the tour").clicked() {
+            crate::tutorial::start(st);
+            st.quests.window_open = false;
         }
         if ui.small_button("Reset progress").clicked() {
             st.quests.progress = Progress { enabled: st.quests.progress.enabled, ..Default::default() };
@@ -473,5 +535,45 @@ mod tests {
 
     fn clone(p: &mut Project, pat: Id) {
         dragon_engine::edit::clone_pattern(p, pat);
+    }
+}
+
+#[cfg(test)]
+mod quest_goals {
+    use super::*;
+
+    #[test]
+    fn quests_are_grouped_by_chapter_and_unique() {
+        let mut seen: Vec<&str> = Vec::new();
+        for w in QUESTS.windows(2) {
+            if w[0].chapter != w[1].chapter {
+                assert!(!seen.contains(&w[1].chapter), "chapter {} comes back later", w[1].chapter);
+                seen.push(w[0].chapter);
+            }
+        }
+        let mut ids: Vec<&str> = QUESTS.iter().map(|q| q.id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), QUESTS.len());
+        // Every quest can be reached by the levels: the top level needs no more than all of them give.
+        let all: u32 = QUESTS.iter().map(|q| q.xp).sum();
+        assert!(LEVELS.last().unwrap().1 <= all + 400, "the top level is reachable");
+    }
+
+    #[test]
+    fn the_new_quests_see_their_goals() {
+        let mut p = Project::default();
+        assert!(!achieved("master", &p, &[]));
+        crate::modes::add_mastering_chain(&mut p);
+        assert!(achieved("master", &p, &[]));
+        let t0 = p.add_track("A");
+        let t1 = p.add_track("B");
+        assert!(!achieved("group", &p, &[]));
+        p.track_mut(t0).unwrap().group = Some(77);
+        p.track_mut(t1).unwrap().group = Some(77);
+        assert!(achieved("group", &p, &[]));
+        for (id, e) in [("tour", Event::TourDone), ("start", Event::ModeChosen), ("repair", Event::Repaired), ("notes", Event::NotesEdited), ("hammerstein", Event::Hammerstein), ("album", Event::AlbumMatched)] {
+            assert!(!achieved(id, &p, &[]) && achieved(id, &p, &[e]), "{id}");
+        }
     }
 }

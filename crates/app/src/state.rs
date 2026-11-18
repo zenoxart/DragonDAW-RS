@@ -157,6 +157,8 @@ pub struct UiState {
     pub album_lufs: Vec<(Id, f32)>,
     /// The Audio Repair tab.
     pub repair: crate::views::repair::RepairUi,
+    /// The click-through tour.
+    pub tour: crate::tutorial::Tour,
     /// The control being touched (hovered or turned) and its value, for the hint at the top left:
     /// (where, what, value, when).
     pub hint: Option<(String, String, String, Instant)>,
@@ -270,6 +272,7 @@ impl UiState {
             start_screen: false,
             album_lufs: Vec::new(),
             repair: Default::default(),
+            tour: Default::default(),
             hint: None,
             preview_started: None,
             clipboard: None,

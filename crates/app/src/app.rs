@@ -296,6 +296,8 @@ impl egui_dock::TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         let st = &mut *self.st;
+        // Where each view is on screen (the tour points at them).
+        crate::tutorial::anchor(ui.ctx(), &tab.key, ui.max_rect());
         match tab.key.as_str() {
             "dragon.playlist" => views::playlist::show(ui, st),
             "dragon.rack" => views::rack::show(ui, st),
@@ -354,6 +356,7 @@ impl eframe::App for DragonApp {
 
         views::windows::show(ctx, &mut self.st);
         views::quests::show(ctx, &mut self.st);
+        crate::tutorial::show(ctx, &mut self.st);
         views::fx_gallery::show(ctx, &mut self.st);
         views::note_tools::show(ctx, &mut self.st);
         views::overlays::palette(ctx, &mut self.st);
