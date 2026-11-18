@@ -1711,3 +1711,37 @@ fn compact_mode_shrinks_tracks_and_strips() {
     assert!(small_rows.iter().sum::<f32>() < full_rows.iter().sum::<f32>() * 0.6);
     assert!(small_w < full_w * 0.65, "strips {small_w} vs {full_w}");
 }
+
+/// Dragging a short sample (a one-shot) from the browser onto a playlist track adds it there, where it
+/// was dropped, as a clip at least a grid cell wide (so it can be seen and grabbed).
+#[test]
+fn a_short_sample_dragged_from_the_browser_lands_in_the_playlist() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("kick.wav");
+    // 80 ms.
+    let d = dragon_engine::samples::AudioData::from_planar(48_000, vec![0.5; 3840], vec![0.5; 3840]);
+    dragon_engine::repair::write_wav(&path, &d).unwrap();
+    let mut h = Harness::new();
+    let playlist = |ui: &mut egui::Ui, st: &mut State| super::playlist::show(ui, st);
+    h.st.ui.playlist_zoom = 30.0;
+    h.st.ui.pl_x = 0.0;
+    h.idle(playlist, 3);
+    let t = h.rect("pl.timeline");
+    let tid = h.st.session.project.tracks[1].id;
+    let info = super::playlist::DropInfo::get(&h.ctx).unwrap();
+    let row = info.tracks.iter().find(|r| r.0 == tid).copied().unwrap();
+    let at = Pos2::new(t.left() + 8.0 * 30.0 + 3.0, (row.1 + row.2) / 2.0);
+    // The drag starts elsewhere (in the browser): the payload is set while the button is down.
+    let start = Pos2::new(t.left() + 5.0, t.bottom() - 5.0);
+    h.frame(playlist, vec![Event::PointerMoved(start), Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    egui::DragAndDrop::set_payload(&h.ctx, path.clone());
+    for k in 1..=4 {
+        let p = start + (at - start) * (k as f32 / 4.0);
+        h.frame(playlist, vec![Event::PointerMoved(p)], Modifiers::NONE);
+    }
+    h.frame(playlist, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    h.idle(playlist, 1);
+    let clip = h.st.session.project.track(tid).unwrap().clips.iter().find(|c| matches!(&c.kind, ClipKind::Audio(a) if a.source == path)).cloned();
+    let clip = clip.expect("the sample landed on the track it was dropped on");
+    assert!((clip.start - 8.0).abs() < 0.3, "at the drop point: {}", clip.start);
+}

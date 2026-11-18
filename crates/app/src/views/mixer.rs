@@ -541,7 +541,7 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 ui.painter().rect_stroke(resp.response.rect, 4.0, Stroke::new(2.0_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
             }
         }
-        if let Some(payload) = resp.response.dnd_release_payload::<SlotDrag>() {
+        if let Some(payload) = super::widgets::dnd_release::<SlotDrag>(&resp.response) {
             if payload.mixer != id {
                 let shift = ui.input(|i| i.modifiers.shift);
                 let done = st.session.edit(if shift { "Move effect to track" } else { "Copy effect to track" }, |p| crate::chains::copy_insert(p, payload.mixer, payload.index, id, None, shift));
@@ -884,7 +884,7 @@ pub(super) fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &
                     });
                 });
             });
-        if let Some(payload) = row.response.dnd_release_payload::<SlotDrag>() {
+        if let Some(payload) = super::widgets::dnd_release::<SlotDrag>(&row.response) {
             if payload.mixer == id && payload.index != k {
                 drop = Some((payload.index, k));
             } else if payload.mixer != id {

@@ -560,19 +560,36 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             ui.ctx().request_repaint();
         }
     }
-    if let Some(items) = resp.dnd_release_payload::<Vec<super::picker::PickItem>>() {
+    if let Some(items) = super::widgets::dnd_release::<Vec<super::picker::PickItem>>(&resp) {
         if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
             let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
             let track = row_at(pos.y).map(|i| rows[i].track);
             super::picker::place_many(st, &items, track, beat);
         }
     }
-    // Drop from the browser.
-    if let Some(path) = resp.dnd_release_payload::<PathBuf>() {
-        if let Some(pos) = hover {
+    // Drop from the browser. (While something is dragged, egui reports no hover for the playlist, so
+    // the pointer position is used – this is why dropped samples used to vanish.)
+    if let Some(path) = resp.dnd_hover_payload::<PathBuf>() {
+        if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
+            let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
+            let p = ui.painter_at(timeline);
+            let (y, h) = row_at(pos.y).and_then(|i| rows.get(i)).map(|r| (r.y, r.h)).unwrap_or((pos.y - 12.0, 24.0));
+            // The sample's real length when it is cached, else a bar.
+            let secs = st.session.cache.peek(&path, st.audio.rate()).map(|d| d.duration());
+            let len = secs.map(|s| s * st.session.project.bpm / 60.0).unwrap_or(4.0);
+            let ghost = Rect::from_min_size(Pos2::new(x_of(beat, sx), y + 1.0), Vec2::new(((len * zoom) as f32).max(10.0), h - 2.0));
+            p.rect_filled(ghost, 3.0, theme::ACCENT.gamma_multiply(0.25));
+            p.rect_stroke(ghost, 3.0, Stroke::new(1.5_f32, theme::ACCENT), egui::StrokeKind::Inside);
+            let name = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            p.text(ghost.left_top() + Vec2::new(3.0, -2.0), egui::Align2::LEFT_BOTTOM, name, egui::FontId::proportional(11.0), theme::TEXT);
+            ui.ctx().request_repaint();
+        }
+    }
+    if let Some(path) = super::widgets::dnd_release::<PathBuf>(&resp) {
+        if let Some(pos) = dnd_pos.filter(|p| timeline.contains(*p)) {
             let beat = snap(beat_of(pos.x, sx).max(0.0), grid);
             let track = row_at(pos.y).map(|i| rows[i].track);
-            st.add_audio_clip(&path, track, beat);
+            st.add_audio_clip_at(&path, track, beat);
         }
     }
 

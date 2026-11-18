@@ -1123,7 +1123,7 @@ fn sampler_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SamplerParams, env: E
                 st.session.gesture("Sample range", |p| set_sampler(p, cid, |x| if start { x.start = v.min(x.end - 0.001) } else { x.end = v.max(x.start + 0.001) }));
             }
         }
-        if let Some(path) = resp.dnd_release_payload::<PathBuf>() {
+        if let Some(path) = super::widgets::dnd_release::<PathBuf>(&resp) {
             let path = (*path).clone();
             st.session.edit("Load sample", |p| set_sampler(p, cid, |x| x.path = path));
         }
@@ -1265,7 +1265,7 @@ fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
                 st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOn { channel: cid, note: pad.note, velocity: 0.9 }));
                 st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOff { channel: cid, note: pad.note }));
             }
-            if let Some(path) = r.dnd_release_payload::<PathBuf>() {
+            if let Some(path) = super::widgets::dnd_release::<PathBuf>(&r) {
                 let path = (*path).clone();
                 let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 st.session.edit("Assign pad", |p| {

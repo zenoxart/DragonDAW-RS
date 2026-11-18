@@ -452,6 +452,17 @@ pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
     }
 }
 
+/// The drag-and-drop payload released on `resp`, if it is a `T`. egui's own `dnd_release_payload` takes
+/// the payload whatever its type, so asking for another type first (say the picker's) would swallow a
+/// file dropped from the browser.
+pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &egui::Response) -> Option<std::sync::Arc<T>> {
+    if egui::DragAndDrop::has_payload_of_type::<T>(&resp.ctx) {
+        resp.dnd_release_payload::<T>()
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// Right-click on the tempo display lists examples from 70 to 160 BPM, every 5 BPM, each with styles.
