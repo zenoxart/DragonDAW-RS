@@ -69,11 +69,12 @@ jobs:
           # What the build is, for its update check (see crates/app/build.rs).
           DRAGON_BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           DRAGON_BUILD_CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'nightly' }}
-          # ASIO (Windows): asio-sys fetches Steinberg's ASIO SDK and runs bindgen on it with the runner's LLVM.
-          LIBCLANG_PATH: ${{ runner.os == 'Windows' && 'C:\Program Files\LLVM\bin' || '' }}
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # ASIO: asio-sys fetches Steinberg's ASIO SDK and runs bindgen on it with the runner's LLVM.
+            # (Only here: an empty LIBCLANG_PATH breaks coreaudio-sys on macOS.)
+            export LIBCLANG_PATH="C:\\Program Files\\LLVM\\bin"
             # With ASIO drivers; should the ASIO SDK be unreachable, still ship a build (WASAPI only).
             cargo build --release --locked --target ${{ matrix.target }} -p dragon-daw -p dragon-cli --features dragon-daw/asio \
               || { echo "::warning::ASIO build failed - building without ASIO"; cargo build --release --locked --target ${{ matrix.target }} -p dragon-daw -p dragon-cli; }
