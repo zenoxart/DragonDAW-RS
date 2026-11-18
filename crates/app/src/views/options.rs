@@ -66,10 +66,31 @@ fn audio(ui: &mut Ui, st: &mut State) {
         egui::ComboBox::from_id_salt("audio.host").selected_text(cfg.host.clone().unwrap_or("default".into())).show_ui(ui, |ui| {
             ui.selectable_value(&mut cfg.host, None, "default");
             for h in device::hosts() {
-                ui.selectable_value(&mut cfg.host, Some(h.clone()), h);
+                let tip = match h.as_str() {
+                    "ASIO" => "Your interface's own driver: the lowest latency, every input and output. Only one program can use it at a time",
+                    "WASAPI" => "Windows audio: works with every device, shared with other programs",
+                    "ALSA" => "Linux audio",
+                    "JACK" => "JACK audio server (low latency, routable)",
+                    "CoreAudio" => "macOS audio",
+                    _ => "",
+                };
+                ui.selectable_value(&mut cfg.host, Some(h.clone()), h).on_hover_text(tip);
             }
         });
         ui.end_row();
+        if cfg.host.as_deref() == Some("ASIO") {
+            ui.label("");
+            ui.label(
+                RichText::new("ASIO: pick your interface as Output and Input. Set the buffer here or in the interface's own control panel; the sample rate must be one the interface supports.")
+                    .small()
+                    .color(theme::TEXT_DIM),
+            );
+            ui.end_row();
+        } else if cfg!(windows) && !device::ASIO {
+            ui.label("");
+            ui.label(RichText::new("This build has no ASIO support (build with --features asio).").small().color(theme::TEXT_DIM));
+            ui.end_row();
+        }
         ui.label("Output");
         egui::ComboBox::from_id_salt("audio.out").selected_text(cfg.output.clone().unwrap_or("default".into())).width(260.0).show_ui(ui, |ui| {
             ui.selectable_value(&mut cfg.output, None, "default");

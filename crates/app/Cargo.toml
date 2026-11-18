@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# ASIO drivers on Windows (see dragon-engine's `asio` feature); on in the Windows release builds.
+asio = ["dragon-engine/asio"]
+
 [[bin]]
 name = "dragon-daw"
 path = "src/main.rs"

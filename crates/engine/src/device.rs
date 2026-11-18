@@ -32,6 +32,9 @@ pub struct DeviceConfig {
     pub midi_inputs: Vec<String>,
 }
 
+/// Whether this build can use ASIO drivers (Windows builds made with the `asio` feature).
+pub const ASIO: bool = cfg!(all(windows, feature = "asio"));
+
 pub fn hosts() -> Vec<String> {
     cpal::available_hosts().into_iter().map(|h| h.name().to_string()).collect()
 }
@@ -204,9 +207,11 @@ impl AudioEngine {
         let def = out_dev.default_output_config().map_err(|e| EngineError::Device(e.to_string()))?;
         let rate = cfg.sample_rate.unwrap_or(def.sample_rate().0);
         let channels = def.channels().max(1);
-        let buffer = match cfg.buffer {
-            Some(b) => cpal::BufferSize::Fixed(b),
-            None => cpal::BufferSize::Default,
+        // A fixed buffer the driver can't do (ASIO drivers report their range) is clamped to its range.
+        let buffer = match (cfg.buffer, def.buffer_size()) {
+            (Some(b), cpal::SupportedBufferSize::Range { min, max }) => cpal::BufferSize::Fixed(b.clamp(*min, (*max).max(*min))),
+            (Some(b), cpal::SupportedBufferSize::Unknown) => cpal::BufferSize::Fixed(b),
+            (None, _) => cpal::BufferSize::Default,
         };
         let config = cpal::StreamConfig { channels, sample_rate: cpal::SampleRate(rate), buffer_size: buffer };
 
