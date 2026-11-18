@@ -3,6 +3,7 @@
 pub mod album;
 pub mod automation;
 pub mod browser;
+pub mod clip_view;
 pub mod envelope;
 pub mod export;
 pub mod fx_gallery;

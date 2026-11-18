@@ -170,6 +170,8 @@ pub struct UiState {
     /// (where, what, value, when).
     pub hint: Option<(String, String, String, Instant)>,
     pub preview_started: Option<Instant>,
+    /// Where in the file the running preview started (seconds).
+    pub preview_offset: f64,
     pub clipboard: Option<Clipboard>,
     /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
     pub last_undo: Option<u64>,
@@ -284,6 +286,7 @@ impl UiState {
             ffmpeg_job: None,
             hint: None,
             preview_started: None,
+            preview_offset: 0.0,
             clipboard: None,
             last_undo: None,
             pl_anim: None,
@@ -1270,9 +1273,29 @@ impl State {
             Ok(d) => {
                 self.audio.send(Command::Live(LiveEvent::Preview(d)));
                 self.ui.preview_started = Some(Instant::now());
+                self.ui.preview_offset = 0.0;
             }
             Err(e) => self.ui.status = format!("Cannot preview: {e}"),
         }
+    }
+
+    /// Plays `path` from `seconds` on (the clip window's preview; `preview_offset` keeps where it started).
+    pub fn preview_from(&mut self, path: &Path, seconds: f64) {
+        match self.session.cache.get(path, self.audio.rate()) {
+            Ok(d) => {
+                let at = (seconds.max(0.0) * d.rate as f64) as usize;
+                self.audio.send(Command::Live(LiveEvent::PreviewAt(d, at)));
+                self.ui.browser_sel = Some(path.to_path_buf());
+                self.ui.preview_started = Some(Instant::now());
+                self.ui.preview_offset = seconds.max(0.0);
+            }
+            Err(e) => self.ui.status = format!("Cannot preview: {e}"),
+        }
+    }
+
+    pub fn stop_preview(&mut self) {
+        self.audio.send(Command::Live(LiveEvent::StopPreview));
+        self.ui.preview_started = None;
     }
 
     /// Applies an incoming MIDI message: notes to the selected channel, CC to mappings / MIDI learn.

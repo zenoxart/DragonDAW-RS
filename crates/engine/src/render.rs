@@ -1037,6 +1037,8 @@ pub enum LiveEvent {
     AllNotesOff,
     /// Plays a one-shot of an audio file (browser preview) through the master.
     Preview(Arc<AudioData>),
+    /// Preview from a frame on.
+    PreviewAt(Arc<AudioData>, usize),
     StopPreview,
     /// Clip launcher: starts `pattern` looping on `lane` (or stops the lane with `None`) at the next multiple
     /// of `quantize` beats (0 = immediately). Launched patterns play on top of the song.
@@ -1398,6 +1400,10 @@ impl Renderer {
                 }
                 LiveEvent::AllNotesOff => self.all_notes_off(0.01),
                 LiveEvent::Preview(d) => self.preview = Some(Preview { data: d, pos: 0 }),
+                LiveEvent::PreviewAt(d, at) => {
+                    let pos = at.min(d.frames());
+                    self.preview = Some(Preview { data: d, pos });
+                }
                 LiveEvent::StopPreview => self.preview = None,
                 LiveEvent::Launch { lane, pattern, quantize } => {
                     let at = quantize_up(self.transport.beat.max(0.0), quantize);

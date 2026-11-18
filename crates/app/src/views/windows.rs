@@ -69,7 +69,15 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     }
     if let Some(cid) = st.ui.clip_window {
         let mut open = true;
-        egui::Window::new("Audio clip").id(egui::Id::new("clipwin")).open(&mut open).default_width(320.0).show(ctx, |ui| clip_editor(ui, st, cid));
+        egui::Window::new("Audio clip")
+            .id(egui::Id::new("clipwin"))
+            .open(&mut open)
+            .default_width(600.0)
+            .default_height(760.0)
+            .min_width(460.0)
+            .resizable(true)
+            .vscroll(true)
+            .show(ctx, |ui| super::clip_view::show(ui, st, cid));
         if !open {
             st.ui.clip_window = None;
         }
@@ -1310,197 +1318,6 @@ fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
             });
             if k % 4 == 3 {
                 ui.end_row();
-            }
-        }
-    });
-}
-
-/// The clip's file as a waveform (for the clip window).
-fn clip_wave(ui: &mut Ui, st: &mut State, path: &std::path::Path) {
-    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(200.0), 60.0), egui::Sense::hover());
-    let p = ui.painter_at(r);
-    p.rect_filled(r, 4.0, theme::BG);
-    let Ok(d) = st.session.cache.get(path, st.audio.rate()) else { return };
-    let cols = r.width() as usize;
-    let mid = r.center().y;
-    for c in 0..cols {
-        let (a, b) = (c * d.frames() / cols.max(1), ((c + 1) * d.frames() / cols.max(1)).min(d.frames()));
-        let step = ((b - a) / 32).max(1);
-        let (mut lo, mut hi) = (0.0f32, 0.0f32);
-        let mut i = a;
-        while i < b {
-            let v = 0.5 * (d.l[i] + d.r[i]);
-            lo = lo.min(v);
-            hi = hi.max(v);
-            i += step;
-        }
-        let x = r.left() + c as f32 + 0.5;
-        p.line_segment([egui::pos2(x, mid - hi * r.height() * 0.48), egui::pos2(x, mid - lo * r.height() * 0.48)], egui::Stroke::new(1.0_f32, theme::ACCENT_2));
-    }
-}
-
-fn clip_editor(ui: &mut Ui, st: &mut State, cid: Id) {
-    let Some((tid, clip)) = st.session.project.tracks.iter().find_map(|t| t.clips.iter().find(|c| c.id == cid).map(|c| (t.id, c.clone()))) else {
-        st.ui.clip_window = None;
-        return;
-    };
-    let Some(a) = clip.audio().cloned() else { return };
-    let set = move |p: &mut Project, f: &dyn Fn(&mut Clip)| {
-        if let Some(c) = p.track_mut(tid).and_then(|t| t.clips.iter_mut().find(|c| c.id == cid)) {
-            f(c);
-        }
-    };
-    ui.label(RichText::new(a.source.display().to_string()).small().color(theme::TEXT_DIM));
-    // Preview and the way into Audio Repair.
-    ui.horizontal(|ui| {
-        if ui.button("▶ Preview").on_hover_text("Hear the clip's file").clicked() {
-            st.preview(&a.source);
-        }
-        let b = egui::Button::new(RichText::new("Audio repair…").strong()).fill(theme::ACCENT.gamma_multiply(0.5));
-        if ui.add(b).on_hover_text("Open the clip in Audio Repair: de-noise, de-hum, de-click, de-clip, distortion repair, de-reverb, spectral editing and note (pitch) editing").clicked() {
-            super::repair::open(st, cid);
-        }
-    });
-    clip_wave(ui, st, &a.source);
-    let mut name = clip.name.clone();
-    if ui.text_edit_singleline(&mut name).changed() {
-        st.session.gesture("Rename clip", |p| set(p, &|c| c.name = name.clone()));
-    }
-    egui::Grid::new("clipgrid").num_columns(2).show(ui, |ui| {
-        let mut g = a.gain_db;
-        ui.label("Gain");
-        let r = ui.add(egui::Slider::new(&mut g, -48.0..=24.0).suffix(" dB"));
-        widgets::apply(st, &r, "Clip gain", |p| {
-            set(p, &|c| {
-                if let Some(x) = c.audio_mut() {
-                    x.gain_db = g
-                }
-            })
-        });
-        ui.end_row();
-        let mut pan = a.pan;
-        ui.label("Pan");
-        let r = ui.add(egui::Slider::new(&mut pan, -1.0..=1.0));
-        widgets::apply(st, &r, "Clip pan", |p| {
-            set(p, &|c| {
-                if let Some(x) = c.audio_mut() {
-                    x.pan = pan
-                }
-            })
-        });
-        ui.end_row();
-        let mut fi = a.fade_in as f32;
-        ui.label("Fade in");
-        let r = ui.add(egui::Slider::new(&mut fi, 0.0..=10.0).suffix(" s").logarithmic(true));
-        widgets::apply(st, &r, "Fade in", |p| {
-            set(p, &|c| {
-                if let Some(x) = c.audio_mut() {
-                    x.fade_in = fi as f64
-                }
-            })
-        });
-        ui.end_row();
-        let mut fo = a.fade_out as f32;
-        ui.label("Fade out");
-        let r = ui.add(egui::Slider::new(&mut fo, 0.0..=10.0).suffix(" s").logarithmic(true));
-        widgets::apply(st, &r, "Fade out", |p| {
-            set(p, &|c| {
-                if let Some(x) = c.audio_mut() {
-                    x.fade_out = fo as f64
-                }
-            })
-        });
-        ui.end_row();
-        ui.label("Fade curve");
-        let mut fc = a.fade_curve;
-        ui.horizontal(|ui| {
-            for (v, n) in [(FadeCurve::Linear, "linear"), (FadeCurve::EqualPower, "equal power"), (FadeCurve::Exponential, "exponential")] {
-                ui.selectable_value(&mut fc, v, n);
-            }
-        });
-        if fc != a.fade_curve {
-            st.session.edit("Fade curve", |p| {
-                set(p, &|c| {
-                    if let Some(x) = c.audio_mut() {
-                        x.fade_curve = fc
-                    }
-                })
-            });
-        }
-        ui.end_row();
-        let mut pitch = a.pitch;
-        ui.label("Pitch");
-        let r = ui.add(egui::Slider::new(&mut pitch, -24.0..=24.0).suffix(" st"));
-        widgets::apply(st, &r, "Clip pitch", |p| {
-            set(p, &|c| {
-                if let Some(x) = c.audio_mut() {
-                    x.pitch = pitch
-                }
-            })
-        });
-        ui.end_row();
-        ui.label("Time");
-        let mut mode = a.stretch;
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut mode, StretchMode::Resample, "resample");
-            ui.selectable_value(&mut mode, StretchMode::Stretch, "stretch (keep pitch)");
-        });
-        if mode != a.stretch {
-            st.session.edit("Stretch mode", |p| {
-                set(p, &|c| {
-                    if let Some(x) = c.audio_mut() {
-                        x.stretch = mode
-                    }
-                })
-            });
-        }
-        ui.end_row();
-        let mut speed = a.speed as f32;
-        ui.label("Speed");
-        let r = ui.add(egui::Slider::new(&mut speed, 0.25..=4.0).logarithmic(true));
-        widgets::apply(st, &r, "Clip speed", |p| {
-            set(p, &|c| {
-                if let Some(x) = c.audio_mut() {
-                    x.speed = speed as f64
-                }
-            })
-        });
-        ui.end_row();
-    });
-    ui.horizontal(|ui| {
-        let mut rev = a.reverse;
-        if ui.checkbox(&mut rev, "Reverse").changed() {
-            st.session.edit("Reverse clip", |p| {
-                set(p, &|c| {
-                    if let Some(x) = c.audio_mut() {
-                        x.reverse = rev
-                    }
-                })
-            });
-        }
-        let mut muted = clip.muted;
-        if ui.checkbox(&mut muted, "Muted").changed() {
-            st.session.edit("Mute clip", |p| set(p, &|c| c.muted = muted));
-        }
-        if ui.button("Fit to project tempo").on_hover_text("Detects the clip's tempo and stretches it to the project tempo").clicked() {
-            if let Ok(d) = st.session.cache.get(&a.source, st.audio.rate()) {
-                let (bpm, _) = dragon_engine::analysis::detect_bpm(&d);
-                match bpm {
-                    Some(b) => {
-                        let target = st.session.project.bpm;
-                        st.session.edit("Fit to tempo", |p| {
-                            set(p, &|c| {
-                                if let Some(x) = c.audio_mut() {
-                                    x.source_bpm = Some(b);
-                                    x.stretch = StretchMode::Stretch;
-                                    x.speed = target / b;
-                                }
-                            })
-                        });
-                        st.ui.status = format!("Detected {b:.1} BPM");
-                    }
-                    None => st.toast("No clear tempo found in this clip", redhive_contracts::ui::Severity::Info),
-                }
             }
         }
     });

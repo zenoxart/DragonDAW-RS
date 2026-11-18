@@ -116,6 +116,20 @@ impl RepairUi {
     }
 }
 
+impl RepairUi {
+    /// Whether `tool` is the one shown.
+    #[cfg(test)]
+    pub fn tool_is(&self, tool: Tool) -> bool {
+        self.tool == tool
+    }
+}
+
+/// Opens `clip` in the Audio Repair tab on `tool` (`Tool::Pitch` = the note editor).
+pub fn open_with(st: &mut State, clip: Id, tool: Tool) {
+    open(st, clip);
+    st.ui.repair.tool = tool;
+}
+
 /// Opens `clip` in the Audio Repair tab.
 pub fn open(st: &mut State, clip: Id) {
     st.ui.repair.clip = Some(clip);

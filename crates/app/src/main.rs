@@ -57,7 +57,8 @@ fn main() -> eframe::Result {
                 && crashed.is_none()
                 && std::env::var_os("DRAGON_STARTUP_COMMANDS").is_none()
                 && std::env::var_os("DRAGON_OPEN_FX").is_none()
-                && std::env::var_os("DRAGON_OPEN_REPAIR").is_none();
+                && std::env::var_os("DRAGON_OPEN_REPAIR").is_none()
+                && std::env::var_os("DRAGON_OPEN_CLIP").is_none();
             match (open, &crashed) {
                 // The last run died opening this very project: ask first instead of crashing again.
                 (Some(p), Some(c)) if c.project.as_deref() == Some(p.as_path()) && !safe_flag => {}
@@ -75,6 +76,11 @@ fn main() -> eframe::Result {
             }
             if let Ok(id) = std::env::var("DRAGON_OPEN_FX") {
                 st.open_effect_on_master(&id);
+            }
+            // DRAGON_OPEN_CLIP=<audio file> puts the file on a track and opens its clip window.
+            if let Ok(path) = std::env::var("DRAGON_OPEN_CLIP") {
+                st.add_audio_clip_at(&std::path::PathBuf::from(path), None, 0.0);
+                st.ui.clip_window = st.ui.clips.first().copied();
             }
             // DRAGON_OPEN_REPAIR=<audio file> puts the file on a track and opens it in Audio Repair.
             if let Ok(path) = std::env::var("DRAGON_OPEN_REPAIR") {
