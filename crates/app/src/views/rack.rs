@@ -61,6 +61,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
         });
         ui.menu_button("Pattern ⏷", |ui| pattern_menu(ui, st, pat, None));
+        // Fill the selected channels' steps (every step, every 2nd, 4th …).
+        let targets: Vec<Id> = if st.ui.rack_sel.is_empty() { st.ui.channel.into_iter().collect() } else { st.ui.rack_sel.clone() };
+        ui.add_enabled_ui(!targets.is_empty(), |ui| {
+            ui.menu_button("Fill ⏷", |ui| fill_menu(ui, st, &targets)).response.on_hover_text("Fill the selected channel's steps: every step, every 2nd, every 4th … (also on a channel's right-click menu)");
+        });
         if ui.button("Clear").clicked() {
             st.session.edit("Clear pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.channels.clear()));
         }
@@ -382,6 +387,96 @@ fn mini_roll(p: &egui::Painter, rect: Rect, notes: &[Note], len_beats: f64) {
     }
 }
 
+/// The step fills: (name, every n steps, starting at step, what it is good for).
+pub const FILLS: [(&str, usize, usize, &str); 7] = [
+    ("Each step", 1, 0, "Every 16th: rolls, fast hats"),
+    ("Every 2 steps", 2, 0, "Every 8th: hi-hats, shakers"),
+    ("Every 3 steps", 3, 0, "Dotted 8ths: syncopated hats, percs"),
+    ("Every 4 steps", 4, 0, "Every beat: four-on-the-floor kick"),
+    ("Every 8 steps", 8, 0, "Every half bar: kick on 1 and 3"),
+    ("Off-beats", 4, 2, "Between the beats: open hats, house bass"),
+    ("Backbeat (2 and 4)", 8, 4, "Beats 2 and 4: claps and snares"),
+];
+
+/// Sets channel `cid`'s steps in `pat` to every `every`th step from `start` (the rest off); the pattern's
+/// step count decides the length. Velocities of steps that stay on are kept.
+pub fn fill_steps(p: &mut Project, pat: Id, cid: Id, every: usize, start: usize) {
+    let Some(pt) = p.pattern_mut(pat) else { return };
+    let n = pt.steps.max(1) as usize;
+    let pc = pt.channels.entry(cid).or_default();
+    pc.steps.resize(n.max(pc.steps.len()), Step::default());
+    for (i, s) in pc.steps.iter_mut().enumerate() {
+        s.on = i < n && i >= start && (i - start).is_multiple_of(every.max(1));
+    }
+}
+
+/// The fill choices for `targets` (one undo step).
+fn fill_menu(ui: &mut Ui, st: &mut State, targets: &[Id]) {
+    let pat = st.ui.pattern;
+    let what = match targets {
+        [one] => st.session.project.channel(*one).map(|c| c.name.clone()).unwrap_or_else(|| "this channel".into()),
+        _ => format!("{} channels", targets.len()),
+    };
+    ui.label(RichText::new(format!("Fill {what}")).small().color(theme::TEXT_DIM));
+    for (name, every, start, tip) in FILLS {
+        if ui.button(name).on_hover_text(tip).clicked() {
+            st.session.edit(&format!("Fill: {}", name.to_lowercase()), |p| {
+                for cid in targets {
+                    fill_steps(p, pat, *cid, every, start);
+                }
+            });
+            close(ui);
+        }
+    }
+    ui.separator();
+    if ui.button("Invert").on_hover_text("On steps off, off steps on").clicked() {
+        st.session.edit("Invert steps", |p| {
+            if let Some(pt) = p.pattern_mut(pat) {
+                let n = pt.steps as usize;
+                for cid in targets {
+                    let pc = pt.channels.entry(*cid).or_default();
+                    pc.steps.resize(n.max(pc.steps.len()), Step::default());
+                    pc.steps.iter_mut().take(n).for_each(|s| s.on = !s.on);
+                }
+            }
+        });
+        close(ui);
+    }
+    for (label, dir) in [("Shift left", -1i32), ("Shift right", 1)] {
+        if ui.button(label).on_hover_text("Move every step one place (wraps around)").clicked() {
+            st.session.edit(label, |p| {
+                if let Some(pt) = p.pattern_mut(pat) {
+                    let n = pt.steps as usize;
+                    for cid in targets {
+                        let pc = pt.channels.entry(*cid).or_default();
+                        pc.steps.resize(n.max(pc.steps.len()), Step::default());
+                        if n > 0 {
+                            if dir < 0 {
+                                pc.steps[..n].rotate_left(1);
+                            } else {
+                                pc.steps[..n].rotate_right(1);
+                            }
+                        }
+                    }
+                }
+            });
+            close(ui);
+        }
+    }
+    if ui.button("Clear").clicked() {
+        st.session.edit("Clear steps", |p| {
+            if let Some(pt) = p.pattern_mut(pat) {
+                for cid in targets {
+                    if let Some(pc) = pt.channels.get_mut(cid) {
+                        pc.steps.iter_mut().for_each(|s| s.on = false);
+                    }
+                }
+            }
+        });
+        close(ui);
+    }
+}
+
 fn channel_menu(ui: &mut Ui, st: &mut State, c: &RackChannel) {
     let cid = c.id;
     if ui.button("Settings…").clicked() {
@@ -404,21 +499,10 @@ fn channel_menu(ui: &mut Ui, st: &mut State, c: &RackChannel) {
         });
         ui.close_menu();
     }
-    if ui.button("Fill every 2 / 4 steps").clicked() {
-        let pat = st.ui.pattern;
-        st.session.edit("Fill steps", |p| {
-            if let Some(pt) = p.pattern_mut(pat) {
-                let n = pt.steps as usize;
-                let pc = pt.channels.entry(cid).or_default();
-                pc.steps.resize(n, Step::default());
-                let every = if pc.steps.iter().step_by(4).all(|s| s.on) { 2 } else { 4 };
-                for (i, s) in pc.steps.iter_mut().enumerate() {
-                    s.on = i % every == 0;
-                }
-            }
-        });
-        ui.close_menu();
-    }
+    ui.menu_button("Fill steps", |ui| {
+        let targets = if st.ui.rack_sel.contains(&cid) { st.ui.rack_sel.clone() } else { vec![cid] };
+        fill_menu(ui, st, &targets);
+    });
     if ui.button("Solo").clicked() {
         st.session.edit("Solo channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.solo = !c.solo));
         ui.close_menu();
@@ -449,5 +533,32 @@ fn channel_menu(ui: &mut Ui, st: &mut State, c: &RackChannel) {
             st.ui.channel = st.session.project.channels.first().map(|c| c.id);
         }
         ui.close_menu();
+    }
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    #[test]
+    fn fills_set_every_nth_step_from_a_start() {
+        let mut p = Project::new_default();
+        let pat = p.patterns[0].id;
+        let ch = p.add_channel("Hat", Instrument::Synth(Default::default()));
+        let on = |p: &Project| -> Vec<usize> { p.pattern(pat).unwrap().channels[&ch].steps.iter().enumerate().filter(|(_, s)| s.on).map(|(i, _)| i).collect() };
+        fill_steps(&mut p, pat, ch, 4, 0);
+        assert_eq!(on(&p), [0, 4, 8, 12]);
+        fill_steps(&mut p, pat, ch, 2, 0);
+        assert_eq!(on(&p).len(), 8);
+        fill_steps(&mut p, pat, ch, 1, 0);
+        assert_eq!(on(&p).len(), 16);
+        fill_steps(&mut p, pat, ch, 4, 2);
+        assert_eq!(on(&p), [2, 6, 10, 14], "off-beats");
+        fill_steps(&mut p, pat, ch, 8, 4);
+        assert_eq!(on(&p), [4, 12], "backbeat");
+        // A longer pattern is filled to its end.
+        p.pattern_mut(pat).unwrap().steps = 32;
+        fill_steps(&mut p, pat, ch, 8, 0);
+        assert_eq!(on(&p), [0, 8, 16, 24]);
     }
 }
