@@ -246,6 +246,7 @@ impl DragonApp {
         self.st.poll_auto_balance();
         crate::views::album::poll(&mut self.st);
         crate::views::repair::poll(&mut self.st);
+        crate::update::poll(&mut self.st);
         self.st.poll_ffmpeg_install();
         if self.st.session.latency_moved() {
             self.st.session.force_recompile();
@@ -346,6 +347,12 @@ impl eframe::App for DragonApp {
 
         egui::TopBottomPanel::top("dragon.menu").show(ctx, |ui| self.menu_bar(ui));
         egui::TopBottomPanel::top("dragon.transport").exact_height(46.0).show(ctx, |ui| views::transport::show(ui, &mut self.st));
+        if crate::update::visible(&self.st) {
+            egui::TopBottomPanel::top("dragon.update").exact_height(30.0).frame(egui::Frame::NONE.fill(theme::PANEL_2).inner_margin(egui::Margin::symmetric(10, 0))).show(ctx, |ui| crate::update::bar(ui, &mut self.st));
+        }
+        if std::mem::take(&mut self.st.ui.update.quit) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         egui::TopBottomPanel::bottom("dragon.status").exact_height(22.0).show(ctx, |ui| views::transport::status_bar(ui, &mut self.st));
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::BG)).show(ctx, |ui| {
             let mut style = egui_dock::Style::from_egui(ui.style());

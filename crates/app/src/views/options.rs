@@ -183,6 +183,7 @@ fn general(ui: &mut Ui, st: &mut State) {
     }
     ui.checkbox(&mut s.show_splash, "Show the splash screen at start");
     ui.checkbox(&mut s.startup_sound, "Play the Dragon startup sound");
+    ui.checkbox(&mut s.check_updates, "Look for a new version at start").on_hover_text(format!("This is Dragon DAW {}. Help › Check for updates looks now.", crate::update::Build::current().label()));
     ui.checkbox(&mut s.reduced_motion, "Reduced motion");
     ui.checkbox(&mut s.follow_playhead, "Playlist follows the playhead");
     st.session.history.limit = st.settings.undo_limit;

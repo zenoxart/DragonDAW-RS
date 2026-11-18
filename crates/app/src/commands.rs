@@ -212,6 +212,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
     ("help.tour", "Take the tour", "Help", 0, ""),
     ("help.quests", "Dragon Quests", "Help", 0, ""),
+    ("help.updates", "Check for updates…", "Help", 0, ""),
     ("help.about", "About Dragon DAW", "Help", 0, ""),
 ];
 
@@ -1226,6 +1227,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "help.about" => st.ui.about = true,
         "help.tour" => crate::tutorial::start(st),
         "help.quests" => st.quests.window_open = true,
+        "help.updates" => crate::update::start_check(st, true),
         _ => return false,
     }
     true

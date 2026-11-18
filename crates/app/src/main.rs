@@ -19,6 +19,7 @@ mod splash;
 mod state;
 mod theme;
 mod tutorial;
+mod update;
 mod views;
 
 use redhive_client_framework::AppContext;
@@ -92,6 +93,8 @@ fn main() -> eframe::Result {
                     views::repair::open_with(&mut st, cid, tool);
                 }
             }
+            // A new version on GitHub? (in the background; release builds only, Options can turn it off)
+            update::start_check(&mut st, false);
             Ok(Box::new(app::DragonApp::new(cc, st)))
         }),
     )

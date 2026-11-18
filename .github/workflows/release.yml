@@ -65,6 +65,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
+        env:
+          # What the build is, for its update check (see crates/app/build.rs).
+          DRAGON_BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          DRAGON_BUILD_CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'nightly' }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p dragon-daw -p dragon-cli
       - name: Package
         shell: bash

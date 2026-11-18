@@ -33,6 +33,10 @@ pub struct Settings {
     pub show_start: bool,
     /// Plays the Dragon startup sound when the app opens.
     pub startup_sound: bool,
+    /// Looks for a new Dragon DAW version when the app opens.
+    pub check_updates: bool,
+    /// A version the user chose to skip (not offered again at start).
+    pub skipped_update: Option<String>,
     pub reduced_motion: bool,
     pub follow_playhead: bool,
     /// Mackie Control surface: MIDI input and (optional) output for motor faders and LEDs.
@@ -54,6 +58,8 @@ impl Default for Settings {
             show_splash: true,
             show_start: true,
             startup_sound: true,
+            check_updates: true,
+            skipped_update: None,
             reduced_motion: false,
             follow_playhead: true,
             mackie_input: None,
@@ -162,6 +168,8 @@ pub struct UiState {
     pub album_lufs: Vec<(Id, f32)>,
     /// The Audio Repair tab.
     pub repair: crate::views::repair::RepairUi,
+    /// The update check and its bar.
+    pub update: crate::update::UpdateUi,
     /// The click-through tour.
     pub tour: crate::tutorial::Tour,
     /// ffmpeg can be run (`None` = not checked yet).
@@ -283,6 +291,7 @@ impl UiState {
             start_screen: false,
             album_lufs: Vec::new(),
             repair: Default::default(),
+            update: Default::default(),
             tour: Default::default(),
             ffmpeg_ok: None,
             ffmpeg_job: None,
