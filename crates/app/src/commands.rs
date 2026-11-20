@@ -179,6 +179,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("add.pattern", "Next empty pattern", "Add", 0, "F4"),
     ("add.sampler", "Sampler channel", "Add/Instrument", 1, ""),
     ("add.synth", "Synth channel", "Add/Instrument", 1, ""),
+    ("add.wavetable", "Dragon Wave (wavetable synth)", "Add/Instrument", 1, ""),
     ("add.drums", "Drum pads channel", "Add/Instrument", 1, ""),
     ("add.mixer", "Mixer bus", "Add", 2, ""),
     ("add.recording", "Recording channel", "Add", 2, ""),
@@ -1051,6 +1052,13 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             }
         }
         "add.synth" => st.ui.channel = Some(st.session.edit("Add synth", |p| p.add_channel("Synth", Instrument::Synth(SynthParams::default())))),
+        "add.wavetable" => {
+            let cid = st.session.edit("Add Dragon Wave", |p| p.add_channel("Dragon Wave", Instrument::Wavetable(Default::default())));
+            st.ui.channel = Some(cid);
+            if !st.ui.instrument_windows.contains(&cid) {
+                st.ui.instrument_windows.push(cid);
+            }
+        }
         "add.drums" => {
             let pads = crate::state::kit_pads(&st.kit);
             let id = st.session.edit("Add drums", |p| p.add_channel("Drums", Instrument::DrumPads(pads)));

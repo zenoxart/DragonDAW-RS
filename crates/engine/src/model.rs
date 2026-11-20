@@ -506,6 +506,8 @@ pub enum Instrument {
     Synth(SynthParams),
     DrumPads(Vec<Pad>),
     Plugin(PluginRef),
+    /// Dragon Wave, the wavetable synth.
+    Wavetable(Box<crate::wt::WavetableParams>),
 }
 
 impl Instrument {
@@ -516,6 +518,7 @@ impl Instrument {
             Instrument::Synth(_) => "Synth",
             Instrument::DrumPads(_) => "Drum Pads",
             Instrument::Plugin(_) => "Plugin",
+            Instrument::Wavetable(_) => "Dragon Wave",
         }
     }
 }
@@ -874,16 +877,36 @@ pub enum Target {
     MixerPan(Id),
     MixerWidth(Id),
     MixerMute(Id),
-    SendLevel { channel: Id, target: Id },
-    InsertParam { channel: Id, insert: Id, param: String },
-    InsertMix { channel: Id, insert: Id },
+    SendLevel {
+        channel: Id,
+        target: Id,
+    },
+    InsertParam {
+        channel: Id,
+        insert: Id,
+        param: String,
+    },
+    InsertMix {
+        channel: Id,
+        insert: Id,
+    },
     ChannelVolume(Id),
     ChannelPan(Id),
     ChannelPitch(Id),
     SynthCutoff(Id),
     SynthResonance(Id),
-    PluginParam { channel: Id, insert: Option<Id>, param: u32 },
+    PluginParam {
+        channel: Id,
+        insert: Option<Id>,
+        param: u32,
+    },
     Tempo,
+    /// A named parameter of a stock instrument (Dragon Wave: `macro1`–`macro4`, `pos1`–`pos3`, `cutoff1`,
+    /// `cutoff2`, `master`).
+    InstrumentParam {
+        channel: Id,
+        param: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

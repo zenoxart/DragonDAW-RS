@@ -50,6 +50,22 @@ fn current_value(p: &Project, t: &Target) -> Option<f32> {
         Target::Tempo => p.bpm as f32,
         Target::SynthCutoff(id) => match &p.channel(*id)?.instrument {
             Instrument::Synth(s) => s.cutoff,
+            Instrument::Wavetable(w) => w.filters[0].cutoff,
+            _ => return None,
+        },
+        Target::InstrumentParam { channel, param } => match &p.channel(*channel)?.instrument {
+            Instrument::Wavetable(w) => {
+                let n = |pre: &str| param.strip_prefix(pre).and_then(|d| d.parse::<usize>().ok()).filter(|d| *d >= 1).map(|d| d - 1);
+                if param == "master" {
+                    w.master
+                } else if let Some(k) = n("macro") {
+                    *w.macros.get(k)?
+                } else if let Some(k) = n("pos") {
+                    w.osc.get(k)?.pos
+                } else {
+                    w.filters.get(n("cutoff")?)?.cutoff
+                }
+            }
             _ => return None,
         },
         Target::InsertParam { channel, insert, param } => *p.mixer.get(*channel)?.inserts.iter().find(|i| i.id == *insert)?.params.get(param)?,
@@ -106,6 +122,21 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         if matches!(c.instrument, Instrument::Synth(_)) {
                             opts.push(("Cutoff", Target::SynthCutoff(c.id)));
                             opts.push(("Resonance", Target::SynthResonance(c.id)));
+                        }
+                        if matches!(c.instrument, Instrument::Wavetable(_)) {
+                            for (n, prm) in [
+                                ("Macro 1", "macro1"),
+                                ("Macro 2", "macro2"),
+                                ("Macro 3", "macro3"),
+                                ("Macro 4", "macro4"),
+                                ("Osc A position", "pos1"),
+                                ("Osc B position", "pos2"),
+                                ("Osc C position", "pos3"),
+                                ("Filter 1 cutoff", "cutoff1"),
+                                ("Filter 2 cutoff", "cutoff2"),
+                            ] {
+                                opts.push((n, Target::InstrumentParam { channel: c.id, param: prm.into() }));
+                            }
                         }
                         for (n, t) in opts {
                             if ui.button(n).clicked() {

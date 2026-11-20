@@ -45,6 +45,7 @@ pub mod samples;
 pub mod surround;
 pub mod time;
 pub mod video;
+pub mod wt;
 
 #[cfg(feature = "device")]
 pub mod device;

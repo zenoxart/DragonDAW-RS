@@ -60,6 +60,9 @@ pub fn target_range(t: &Target) -> (f32, f32) {
         Target::SynthResonance(_) => (0.0, 0.95),
         Target::Tempo => (60.0, 200.0),
         Target::InsertParam { .. } | Target::PluginParam { .. } => (0.0, 1.0),
+        Target::InstrumentParam { param, .. } if param.starts_with("cutoff") => (40.0, 16000.0),
+        Target::InstrumentParam { param, .. } if param == "master" => (0.0, 1.5),
+        Target::InstrumentParam { .. } => (0.0, 1.0),
     }
 }
 

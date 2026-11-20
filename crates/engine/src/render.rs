@@ -1557,6 +1557,13 @@ impl Renderer {
                         insert_mix.insert(*insert, v.clamp(0.0, 1.0));
                     }
                     Target::ChannelVolume(_) | Target::ChannelPan(_) | Target::ChannelPitch(_) => {}
+                    Target::InstrumentParam { channel, param } => {
+                        if let Some(&ci) = song.channel_index.get(channel) {
+                            if let Some(i) = &song.channels[ci].instrument {
+                                i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_param(param, v);
+                            }
+                        }
+                    }
                     Target::SynthCutoff(id) | Target::SynthResonance(id) => {
                         if let Some(&ci) = song.channel_index.get(id) {
                             if let Some(i) = &song.channels[ci].instrument {
@@ -2113,6 +2120,8 @@ impl Renderer {
                 if g.active_voices() == 0 {
                     continue;
                 }
+                // Tempo for synced LFOs (instruments that don't use it ignore it).
+                g.set_param("__bpm", song.base_bpm as f32);
                 g.process(cl, cr);
             }
             let (gl, gr) = balance(c.pan);

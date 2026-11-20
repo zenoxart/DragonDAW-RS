@@ -1600,14 +1600,28 @@ pub fn set_target(p: &mut Project, t: &Target, v: f32) {
                 c.pitch = v;
             }
         }
-        Target::SynthCutoff(id) => {
-            if let Some(Instrument::Synth(s)) = p.channel_mut(*id).map(|c| &mut c.instrument) {
-                s.cutoff = v;
-            }
-        }
-        Target::SynthResonance(id) => {
-            if let Some(Instrument::Synth(s)) = p.channel_mut(*id).map(|c| &mut c.instrument) {
-                s.resonance = v;
+        Target::SynthCutoff(id) => match p.channel_mut(*id).map(|c| &mut c.instrument) {
+            Some(Instrument::Synth(s)) => s.cutoff = v,
+            Some(Instrument::Wavetable(w)) => w.filters[0].cutoff = v,
+            _ => {}
+        },
+        Target::SynthResonance(id) => match p.channel_mut(*id).map(|c| &mut c.instrument) {
+            Some(Instrument::Synth(s)) => s.resonance = v,
+            Some(Instrument::Wavetable(w)) => w.filters[0].resonance = v,
+            _ => {}
+        },
+        Target::InstrumentParam { channel, param } => {
+            if let Some(Instrument::Wavetable(w)) = p.channel_mut(*channel).map(|c| &mut c.instrument) {
+                let n = |pre: &str| param.strip_prefix(pre).and_then(|d| d.parse::<usize>().ok()).filter(|d| *d >= 1).map(|d| d - 1);
+                if param == "master" {
+                    w.master = v;
+                } else if let Some(k) = n("macro").filter(|k| *k < 4) {
+                    w.macros[k] = v;
+                } else if let Some(k) = n("pos").filter(|k| *k < 3) {
+                    w.osc[k].pos = v;
+                } else if let Some(k) = n("cutoff").filter(|k| *k < 2) {
+                    w.filters[k].cutoff = v;
+                }
             }
         }
         Target::PluginParam { channel, insert, param } => {
@@ -1644,6 +1658,13 @@ pub fn target_name(p: &Project, t: &Target) -> String {
         Target::SynthResonance(id) => format!("{} resonance", ch(id)),
         Target::PluginParam { channel, param, .. } => format!("{} param {param}", ch(channel)),
         Target::Tempo => "Tempo".into(),
+        Target::InstrumentParam { channel, param } => {
+            let what = match p.channel(*channel).map(|c| &c.instrument) {
+                Some(Instrument::Wavetable(w)) => param.strip_prefix("macro").and_then(|d| d.parse::<usize>().ok()).and_then(|d| w.macro_names.get(d.wrapping_sub(1)).cloned()).unwrap_or_else(|| param.clone()),
+                _ => param.clone(),
+            };
+            format!("{} {what}", ch(channel))
+        }
     }
 }
 

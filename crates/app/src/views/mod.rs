@@ -32,6 +32,7 @@ pub mod repair;
 pub mod track_icons;
 pub mod transport;
 pub mod video;
+pub mod wave_ui;
 pub mod widgets;
 pub mod windows;
 

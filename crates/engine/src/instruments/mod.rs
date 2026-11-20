@@ -5,10 +5,12 @@ mod drums;
 pub mod kit;
 mod sampler;
 mod synth;
+mod wavetable;
 
 pub use drums::{default_pads, DrumPads};
 pub use sampler::{detect_slices as sampler_slices, Sampler};
 pub use synth::Synth;
+pub use wavetable::Wavetable;
 
 use crate::model::Instrument as Model;
 use crate::samples::SampleCache;
@@ -74,6 +76,7 @@ pub fn create(model: &Model, rate: f32, cache: &SampleCache) -> Option<Box<dyn I
         Model::Sampler(_) => Box::new(Sampler::new(rate)),
         Model::Synth(_) => Box::new(Synth::new(rate)),
         Model::DrumPads(_) => Box::new(DrumPads::new(rate)),
+        Model::Wavetable(_) => Box::new(Wavetable::new(rate)),
         Model::Plugin(_) => return None,
     };
     i.update(model, cache);
