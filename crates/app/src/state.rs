@@ -193,6 +193,8 @@ pub struct UiState {
     pub update: crate::update::UpdateUi,
     /// The click-through tour.
     pub tour: crate::tutorial::Tour,
+    /// Dragon Wave's preset browser.
+    pub wave: crate::views::wave_ui::Browser,
     /// ffmpeg can be run (`None` = not checked yet).
     pub ffmpeg_ok: Option<bool>,
     /// Why ffmpeg can't be used (the places tried and what went wrong).
@@ -318,6 +320,7 @@ impl UiState {
             tour: Default::default(),
             ffmpeg_ok: None,
             ffmpeg_why: None,
+            wave: Default::default(),
             ffmpeg_job: None,
             hint: None,
             preview_started: None,

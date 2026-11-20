@@ -55,7 +55,7 @@ docking, command pool, shortcuts, palette, navigation and i18n. Dragon DAW is no
 | | |
 |---|---|
 | 🚀 **Start screen** | "What do you want to do?" – **Make a beat, Record, Mix, Master, Stem master, Album master or Film sound design**: each sets up the tracks, buses, chains and views for it. Recent projects, an empty project or the tour are one click away |
-| 🌊 **Dragon Wave synth** | A wavetable synth built in: 3 wavetable oscillators (12 factory tables, or drop any audio file to make your own), up to 16-voice unison with detune / blend / stereo width, 8 warp modes (sync, bend, PWM, FM, fold, crush …), sub and noise oscillators, 2 filters (low / high / band pass, notch, comb, formant) in series or parallel, 4 envelopes, 4 LFOs (tempo sync, one-shot), a mod matrix, 4 macros, a 12-slot FX rack, mono / legato / glide and 17 presets from supersaws to growl basses — all automatable |
+| 🌊 **Dragon Wave synth** | A wavetable synth built in: 3 wavetable oscillators (12 factory tables, or drop any audio file to make your own), up to 16-voice unison with detune / blend / stereo width, 8 warp modes (sync, bend, PWM, FM, fold, crush …), sub and noise oscillators, 2 filters (low / high / band pass, notch, comb, formant) in series or parallel, 4 envelopes, 4 LFOs (tempo sync, one-shot), a mod matrix, 4 macros, a 12-slot FX rack, mono / legato / glide. **Drag-and-drop modulation** (drag an envelope, LFO, macro, velocity or note onto any knob), a playable keyboard, and **2,167 presets** (bass, lead, pad, pluck, keys, bells, arps, stabs, atmospheres, FX, drums) at an even level, with a browser, search, favourites and your own presets — all automatable |
 | 🥁 **Make beats** | Channel rack with step sequencer (per-step velocity, swing, up to 64 steps), **Fill** a channel every step, every 2 / 3 / 4 / 8 steps, off-beats or backbeat (plus invert, shift and clear), drop a sample on a channel to replace its sound, patterns as clips with **clone / make unique / split by channel / split at a bar**, pattern / song mode, a built-in synthesised **Dragon Kit** so a fresh install makes sound with no sample library, sampler (slices, glide, a **volume envelope** drawn over the waveform), subtractive synth (3 oscillators, unison, SVF filter, envelopes, LFO), drum pads with velocity layers and choke groups |
 | 🎹 **Piano roll** | Big, labelled tool buttons (draw, paint, select, slice, delete, mute, slip, play, zoom), drag notes (Shift = copy), arrow-key nudge, snap, **key + scale** (26 scales) with snap-to-scale, chord stamps and progressions, arpeggiator, strum, flam, quantize, legato, humanize, slide notes, velocity lane, ghost notes, typing keyboard, retro MIDI capture |
 | 🎙️ **Record** | **Recording channels in the mixer** (`+ record`): pick the interface **input** (mono 1, 2 … or stereo 1+2 …), **monitoring** (Auto / Always / Off) and the channel it records **into**; arm from the strip; metronome with count-in, loop and punch, automatic latency compensation, takes in lanes with **comping**, MIDI note recording. **Help › How to record** walks you through interface, input, level, monitoring and the take |
@@ -103,11 +103,11 @@ The full list, compared item by item with the prioritised roadmap, is in **[docs
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/dragon-wave.png" alt="Dragon Wave wavetable synth: three oscillators with 3D wavetable views, sub, noise and two filters" /></td>
-    <td width="50%"><img src="docs/images/dragon-wave-mod.png" alt="Dragon Wave modulation: envelopes, LFOs and the mod matrix" /></td>
+    <td width="50%"><img src="docs/images/dragon-wave-mod.png" alt="Dragon Wave preset browser with categories, search and favourites" /></td>
   </tr>
   <tr>
-    <td align="center"><b>Dragon Wave</b> — wavetable synth with 3D table views and draggable filter curves</td>
-    <td align="center"><b>Modulation</b> — 4 envelopes, 4 LFOs, a mod matrix and 4 macros</td>
+    <td align="center"><b>Dragon Wave</b> — oscillators, filters, envelopes and LFOs on one page; drag a mod source onto any knob</td>
+    <td align="center"><b>Preset browser</b> — 2,167 presets in 12 categories, search, favourites, your own presets</td>
   </tr>
 </table>
 
