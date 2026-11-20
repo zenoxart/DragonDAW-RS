@@ -813,8 +813,7 @@ fn filter_module(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams, w: f
         w,
         h,
         |ui, _| {
-            for j in 0..2 {
-                let fj = &p.filters[j];
+            for (j, fj) in p.filters.iter().enumerate() {
                 let (rect, r) = ui.allocate_exact_size(Vec2::new(12.0, 12.0), Sense::click());
                 ui.painter().rect_filled(rect, 2.0, if fj.on { FILTER_COL } else { theme::GRID });
                 if r.clicked() {
