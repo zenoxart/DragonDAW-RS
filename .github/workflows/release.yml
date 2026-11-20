@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update && apt-get install -y --no-install-recommends build-essential curl ca-certificates git pkg-config libasound2-dev cmake clang
+          apt-get update && apt-get install -y --no-install-recommends build-essential curl ca-certificates git pkg-config libasound2-dev cmake clang xz-utils
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -110,6 +110,15 @@ jobs:
             7z a -tzip "$DIR.zip" "$DIR" > /dev/null
             echo "ASSET=$DIR.zip" >> "$GITHUB_ENV"
           else
+            if [ "${{ runner.os }}" = "Linux" ]; then
+              # Ship ffmpeg on Linux too (BtbN's static LGPL build), found in ffmpeg/ beside the app.
+              curl -fsSL -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-lgpl.tar.xz \
+                && mkdir -p ffmpeg-src && tar -xJf ffmpeg.tar.xz -C ffmpeg-src \
+                && mkdir -p "$DIR/ffmpeg" \
+                && cp ffmpeg-src/*/bin/ffmpeg ffmpeg-src/*/bin/ffprobe "$DIR/ffmpeg/" \
+                && cp ffmpeg-src/*/LICENSE.txt "$DIR/ffmpeg/LICENSE-ffmpeg.txt" \
+                || echo "::warning::ffmpeg could not be bundled (video import will offer to download it)"
+            fi
             tar czf "$DIR.tar.gz" "$DIR"
             echo "ASSET=$DIR.tar.gz" >> "$GITHUB_ENV"
           fi

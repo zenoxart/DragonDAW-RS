@@ -502,6 +502,8 @@ pub struct WavetableParams {
     pub velocity: f32,
     /// Linear gain.
     pub master: f32,
+    /// The preset's level trim in dB (evens out the library's loudness), applied after the FX.
+    pub trim_db: f32,
 }
 
 impl Default for WavetableParams {
@@ -531,6 +533,7 @@ impl Default for WavetableParams {
             glide: 0.0,
             velocity: 0.5,
             master: 0.7,
+            trim_db: 0.0,
         }
     }
 }

@@ -73,22 +73,64 @@ fn tool(var: &str, name: &str) -> PathBuf {
     search_dirs().into_iter().map(|d| d.join(exe(name))).find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(name))
 }
 
+/// Every place a program could be, best first: `var`, the search folders, then the bare name (PATH).
+fn candidates(var: &str, name: &str) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::env::var_os(var).map(PathBuf::from).into_iter().collect();
+    v.extend(search_dirs().into_iter().map(|d| d.join(exe(name))).filter(|p| p.is_file()));
+    v.push(PathBuf::from(name));
+    v.dedup();
+    v
+}
+
+/// Runs `p -version`; the error says why it could not be used.
+fn runs(p: &Path) -> std::result::Result<(), String> {
+    let mut c = Command::new(p);
+    no_window(&mut c);
+    match c.arg("-version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => Err(format!("exits with {} {}", o.status, String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("").trim())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err("not found".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The working ffmpeg and ffprobe, found once (a copy that doesn't run is skipped, so a broken
+/// download can't hide the copy shipped with the app). [`recheck`] looks again.
+static FOUND: std::sync::Mutex<Option<std::result::Result<(PathBuf, PathBuf), String>>> = std::sync::Mutex::new(None);
+
+fn first_working(var: &str, name: &str) -> std::result::Result<PathBuf, String> {
+    let mut tried = Vec::new();
+    for p in candidates(var, name) {
+        match runs(&p) {
+            Ok(()) => return Ok(p),
+            Err(e) => tried.push(format!("{} ({e})", p.display())),
+        }
+    }
+    Err(format!("no working {name}: tried {}", tried.join("; ")))
+}
+
+/// Where ffmpeg and ffprobe are, or why they can't be used.
+pub fn check() -> std::result::Result<(PathBuf, PathBuf), String> {
+    let mut f = FOUND.lock().unwrap_or_else(|e| e.into_inner());
+    f.get_or_insert_with(|| Ok((first_working("DRAGON_FFMPEG", "ffmpeg")?, first_working("DRAGON_FFPROBE", "ffprobe")?))).clone()
+}
+
+/// Forgets what [`check`] found (after installing ffmpeg).
+pub fn recheck() {
+    *FOUND.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 fn ffmpeg() -> PathBuf {
-    tool("DRAGON_FFMPEG", "ffmpeg")
+    check().map(|p| p.0).unwrap_or_else(|_| tool("DRAGON_FFMPEG", "ffmpeg"))
 }
 
 fn ffprobe() -> PathBuf {
-    tool("DRAGON_FFPROBE", "ffprobe")
+    check().map(|p| p.1).unwrap_or_else(|_| tool("DRAGON_FFPROBE", "ffprobe"))
 }
 
 /// `true` when ffmpeg and ffprobe can be run.
 pub fn available() -> bool {
-    let ok = |p: PathBuf| {
-        let mut c = Command::new(p);
-        no_window(&mut c);
-        c.arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
-    };
-    ok(ffmpeg()) && ok(ffprobe())
+    check().is_ok()
 }
 
 /// No console window flashing up for each call on Windows.
@@ -102,45 +144,87 @@ fn no_window(cmd: &mut Command) {
     let _ = cmd;
 }
 
-/// The LGPL ffmpeg build for Windows (BtbN's official automated builds).
+/// The LGPL ffmpeg builds (BtbN's official automated builds) for Windows and Linux.
 pub const FFMPEG_WIN_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip";
+pub const FFMPEG_LINUX_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-lgpl.tar.xz";
 
-/// Downloads ffmpeg and ffprobe into the tools folder (Windows, through PowerShell). Elsewhere it says
-/// how to install them with the system's package manager.
-pub fn install_ffmpeg() -> Result<PathBuf> {
-    let dir = tools_dir().ok_or_else(|| EngineError::Io("no tools folder set".into()))?.join("ffmpeg");
-    if !cfg!(windows) {
-        let how = if cfg!(target_os = "macos") { "brew install ffmpeg" } else { "sudo apt install ffmpeg (or your distribution's package manager)" };
-        return Err(EngineError::Io(format!("install ffmpeg with: {how}")));
-    }
-    std::fs::create_dir_all(&dir).map_err(|e| EngineError::Io(e.to_string()))?;
-    let tmp = std::env::temp_dir().join("dragon-ffmpeg");
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).map_err(|e| EngineError::Io(e.to_string()))?;
-    let zip = tmp.join("ffmpeg.zip");
-    let ps = |s: &str| s.replace('\'', "''");
-    let script = format!(
-        "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
-         Invoke-WebRequest -UseBasicParsing -Uri '{url}' -OutFile '{zip}'; \
-         Expand-Archive -Force -Path '{zip}' -DestinationPath '{tmp}'; \
-         $bin = Get-ChildItem -Path '{tmp}' -Recurse -Filter ffmpeg.exe | Select-Object -First 1; \
-         Copy-Item -Force (Join-Path $bin.DirectoryName 'ffmpeg.exe') '{dir}'; \
-         Copy-Item -Force (Join-Path $bin.DirectoryName 'ffprobe.exe') '{dir}'; \
-         Get-ChildItem -Path $bin.DirectoryName -Filter *.dll | Copy-Item -Force -Destination '{dir}'",
-        url = FFMPEG_WIN_URL,
-        zip = ps(&zip.to_string_lossy()),
-        tmp = ps(&tmp.to_string_lossy()),
-        dir = ps(&dir.to_string_lossy()),
-    );
-    let mut cmd = Command::new("powershell");
-    no_window(&mut cmd);
-    run(cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script]))?;
-    let _ = std::fs::remove_dir_all(&tmp);
-    if dir.join("ffmpeg.exe").is_file() && dir.join("ffprobe.exe").is_file() {
-        Ok(dir)
+/// Whether [`install_ffmpeg`] can fetch ffmpeg on this system (Windows and x86-64 Linux).
+pub fn can_install() -> bool {
+    cfg!(windows) || (cfg!(target_os = "linux") && cfg!(target_arch = "x86_64"))
+}
+
+/// The download link [`install_ffmpeg`] uses here.
+pub fn install_url() -> &'static str {
+    if cfg!(windows) {
+        FFMPEG_WIN_URL
     } else {
-        Err(EngineError::Io("the download did not contain ffmpeg.exe / ffprobe.exe".into()))
+        FFMPEG_LINUX_URL
     }
+}
+
+/// Downloads ffmpeg and ffprobe into the tools folder (with curl and tar, which Windows 10+ ships too).
+/// On macOS it says how to install them with Homebrew.
+pub fn install_ffmpeg() -> Result<PathBuf> {
+    let io = |e: std::io::Error| EngineError::Io(e.to_string());
+    let dir = tools_dir().ok_or_else(|| EngineError::Io("no tools folder set".into()))?.join("ffmpeg");
+    if !can_install() {
+        let how = if cfg!(target_os = "macos") { "brew install ffmpeg" } else { "your package manager (e.g. sudo apt install ffmpeg)" };
+        return Err(EngineError::Io(format!("install ffmpeg with {how}")));
+    }
+    let tmp = std::env::temp_dir().join(format!("dragon-ffmpeg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(io)?;
+    let archive = tmp.join(if cfg!(windows) { "ffmpeg.zip" } else { "ffmpeg.tar.xz" });
+    let result = (|| {
+        run(Command::new(if cfg!(windows) { "curl.exe" } else { "curl" }).args(["-fL", "--retry", "3", "-o"]).arg(&archive).arg(install_url()))?;
+        // tar unpacks zip files too on Windows (bsdtar); fall back to PowerShell if it is missing.
+        let tar = run(Command::new(if cfg!(windows) { "tar.exe" } else { "tar" }).arg("-xf").arg(&archive).arg("-C").arg(&tmp));
+        if tar.is_err() && cfg!(windows) {
+            let ps = |p: &Path| p.to_string_lossy().replace('\'', "''");
+            run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command"]).arg(format!("Expand-Archive -Force -Path '{}' -DestinationPath '{}'", ps(&archive), ps(&tmp))))?;
+        } else {
+            tar?;
+        }
+        let bin = find_file(&tmp, &exe("ffmpeg")).and_then(|p| p.parent().map(Path::to_path_buf)).ok_or_else(|| EngineError::Io("the download did not contain ffmpeg".into()))?;
+        std::fs::create_dir_all(&dir).map_err(io)?;
+        for name in ["ffmpeg", "ffprobe"] {
+            let to = dir.join(exe(name));
+            let _ = std::fs::remove_file(&to);
+            std::fs::copy(bin.join(exe(name)), &to).map_err(io)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755)).map_err(io)?;
+            }
+        }
+        // Shared builds keep their DLLs next to the programs.
+        for e in std::fs::read_dir(&bin).map_err(io)?.flatten() {
+            if e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")) {
+                let _ = std::fs::copy(e.path(), dir.join(e.file_name()));
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    result?;
+    recheck();
+    let (a, b) = (dir.join(exe("ffmpeg")), dir.join(exe("ffprobe")));
+    runs(&a).and_then(|_| runs(&b)).map_err(|e| EngineError::Io(format!("ffmpeg was downloaded to {} but does not run: {e}", dir.display())))?;
+    Ok(dir)
+}
+
+fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if let Some(f) = find_file(&p, name) {
+                return Some(f);
+            }
+        } else if p.file_name().is_some_and(|n| n.eq_ignore_ascii_case(name)) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn run(cmd: &mut Command) -> Result<Vec<u8>> {
@@ -259,6 +343,22 @@ mod tests {
         // An explicit variable wins.
         std::env::set_var("DRAGON_TEST_SET_VAR", "/x/y");
         assert_eq!(tool("DRAGON_TEST_SET_VAR", name), PathBuf::from("/x/y"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_that_does_not_run_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("dragon-tool-bad");
+        std::fs::write(&bad, b"#!/bin/sh\nexit 3\n").unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(runs(&bad).unwrap_err().contains("exit"));
+        let good = dir.path().join("dragon-tool-good");
+        std::fs::write(&good, b"#!/bin/sh\necho ok\n").unwrap();
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(runs(&good).is_ok());
+        assert_eq!(runs(Path::new("dragon-no-such-program-anywhere")).unwrap_err(), "not found");
     }
 
     #[test]

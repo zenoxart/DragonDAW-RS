@@ -195,6 +195,8 @@ pub struct UiState {
     pub tour: crate::tutorial::Tour,
     /// ffmpeg can be run (`None` = not checked yet).
     pub ffmpeg_ok: Option<bool>,
+    /// Why ffmpeg can't be used (the places tried and what went wrong).
+    pub ffmpeg_why: Option<String>,
     /// An ffmpeg download running in the background.
     pub ffmpeg_job: Option<FfmpegJob>,
     /// The control being touched (hovered or turned) and its value, for the hint at the top left:
@@ -315,6 +317,7 @@ impl UiState {
             update: Default::default(),
             tour: Default::default(),
             ffmpeg_ok: None,
+            ffmpeg_why: None,
             ffmpeg_job: None,
             hint: None,
             preview_started: None,
@@ -1377,10 +1380,21 @@ impl State {
 impl State {
     /// Whether ffmpeg / ffprobe can be run (checked once, again after an install).
     pub fn ffmpeg_ready(&mut self) -> bool {
-        *self.ui.ffmpeg_ok.get_or_insert_with(dragon_engine::video::available)
+        if self.ui.ffmpeg_ok.is_none() {
+            let r = dragon_engine::video::check();
+            self.ui.ffmpeg_why = r.as_ref().err().cloned();
+            self.ui.ffmpeg_ok = Some(r.is_ok());
+        }
+        self.ui.ffmpeg_ok == Some(true)
     }
 
-    /// Downloads ffmpeg in the background (Windows); `poll_ffmpeg_install` finishes it.
+    /// Looks for ffmpeg again (after installing it).
+    pub fn recheck_ffmpeg(&mut self) {
+        dragon_engine::video::recheck();
+        self.ui.ffmpeg_ok = None;
+    }
+
+    /// Downloads ffmpeg in the background (Windows, Linux); `poll_ffmpeg_install` finishes it.
     pub fn install_ffmpeg(&mut self) {
         if self.ui.ffmpeg_job.is_some() {
             return;
@@ -1401,10 +1415,10 @@ impl State {
         let Some(job) = &self.ui.ffmpeg_job else { return };
         let Some(r) = job.lock().ok().and_then(|mut g| g.take()) else { return };
         self.ui.ffmpeg_job = None;
-        self.ui.ffmpeg_ok = None;
+        self.recheck_ffmpeg();
         match r {
             Ok(_) if self.ffmpeg_ready() => self.toast("ffmpeg is ready – you can import video now", Severity::Success),
-            Ok(dir) => self.toast(format!("ffmpeg was downloaded to {} but does not run", dir.display()), Severity::Error),
+            Ok(dir) => self.toast(format!("ffmpeg was downloaded to {} but does not run: {}", dir.display(), self.ui.ffmpeg_why.clone().unwrap_or_default()), Severity::Error),
             Err(e) => self.toast(format!("Could not get ffmpeg: {e}"), Severity::Error),
         }
     }

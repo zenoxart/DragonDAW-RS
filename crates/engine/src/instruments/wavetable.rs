@@ -687,9 +687,11 @@ impl InstrumentVoice for Wavetable {
         for (_, fx) in self.fx.iter_mut() {
             fx.process(&mut sl[..n], &mut sr[..n], None);
         }
+        // The preset's level trim, after the effects so it doesn't change how they sound.
+        let trim = 10f32.powf(self.p.trim_db.clamp(-36.0, 36.0) / 20.0);
         for i in 0..n {
-            l[i] += sl[i];
-            r[i] += sr[i];
+            l[i] += sl[i] * trim;
+            r[i] += sr[i] * trim;
         }
         self.scratch = (sl, sr);
     }
@@ -766,6 +768,91 @@ mod tests {
             s.process(a, b);
         }
         (l, r)
+    }
+
+    /// The loudest 50 ms of a note (dBFS RMS, both channels), its peak and its biggest jump.
+    fn loudness(p: WavetableParams, note: u8, secs: f32) -> (f32, f32, f32) {
+        let rate = 48000.0;
+        let mut s = Wavetable::new(rate);
+        s.set_param("__bpm", 120.0);
+        s.update(&Model::Wavetable(Box::new(p)), &SampleCache::default());
+        s.note_on(NoteOn { note, velocity: 0.8, pan: 0.0, detune: 0.0, slide: false });
+        let n = (secs * rate) as usize;
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            s.process(a, b);
+        }
+        let win = 2400;
+        let mut best = 0.0f32;
+        for k in (0..n.saturating_sub(win)).step_by(win / 2) {
+            let e: f32 = l[k..k + win].iter().chain(&r[k..k + win]).map(|v| v * v).sum::<f32>() / (2 * win) as f32;
+            best = best.max(e);
+        }
+        let peak = l.iter().chain(&r).fold(0.0f32, |m, v| m.max(v.abs()));
+        let jump = l.windows(2).chain(r.windows(2)).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        (10.0 * best.max(1e-12).log10(), peak, jump)
+    }
+
+    const TARGET_DB: f32 = -17.0;
+
+    fn audition_secs(c: crate::wt_library::Category) -> f32 {
+        use crate::wt_library::Category::*;
+        match c {
+            Pad | Atmosphere => 5.0,
+            Fx => 3.0,
+            _ => 1.5,
+        }
+    }
+
+    #[test]
+    fn library_presets_play_cleanly_at_an_even_level() {
+        let lib = crate::wt_library::library();
+        for p in lib.iter().filter(|p| p.category != crate::wt_library::Category::Signature).step_by(23) {
+            let (db, peak, jump) = loudness(p.params.clone(), p.category.audition_note(), audition_secs(p.category));
+            assert!(peak.is_finite() && peak < 3.0, "{}: peak {peak}", p.name);
+            assert!(jump < 1.5, "{}: jump {jump}", p.name);
+            assert!((db - TARGET_DB).abs() < 4.0, "{} ({}): {db:.1} dB", p.name, p.kind);
+        }
+    }
+
+    /// Measures every generated preset and writes the level corrections (run in release).
+    #[test]
+    #[ignore]
+    fn measure_preset_levels() {
+        let lib = crate::wt_library::library();
+        let gen: Vec<_> = lib.iter().filter(|p| p.category != crate::wt_library::Category::Signature).collect();
+        let old = crate::wt_library::LEVELS;
+        let threads = 4;
+        let chunk = gen.len().div_ceil(threads);
+        let results: Vec<(usize, f32, f32, f32)> = std::thread::scope(|sc| {
+            let hs: Vec<_> = gen
+                .chunks(chunk)
+                .enumerate()
+                .map(|(ci, c)| {
+                    sc.spawn(move || {
+                        c.iter()
+                            .enumerate()
+                            .map(|(j, p)| {
+                                let (db, pk, jp) = loudness(p.params.clone(), p.category.audition_note(), audition_secs(p.category));
+                                (ci * chunk + j, db, pk, jp)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+        let mut levels = vec![0.0f32; gen.len()];
+        for (i, db, pk, jp) in results {
+            let prev = old.get(i).copied().unwrap_or(0.0);
+            let corr = (prev + TARGET_DB - db).clamp(-36.0, 36.0);
+            levels[i] = (corr * 10.0).round() / 10.0;
+            if pk > 2.0 || jp > 1.0 || db < -50.0 || (prev + TARGET_DB - db).abs() > 36.0 {
+                println!("CHECK {} ({}): {db:.1} dB peak {pk:.2} jump {jp:.2}", gen[i].name, gen[i].kind);
+            }
+        }
+        let text = format!("[{}]\n", levels.iter().map(|v| format!("{v:.1}")).collect::<Vec<_>>().join(", "));
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/src/wt_levels.in"), text).unwrap();
     }
 
     fn pitch(x: &[f32], rate: f32) -> f32 {
