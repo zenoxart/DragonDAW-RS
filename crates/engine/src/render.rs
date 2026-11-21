@@ -265,6 +265,21 @@ impl Pool {
         self.applied.retain(|k, _| instruments.contains(k));
     }
 
+    /// Closes every plugin's own editor window (on close: while the host window still exists, so the
+    /// plugins detach their views from live windows). Returns how many processors were asked.
+    pub fn close_all_editors(&self) -> usize {
+        let mut n = 0;
+        for (_, e) in self.effects.values() {
+            e.lock().unwrap_or_else(std::sync::PoisonError::into_inner).editor(false);
+            n += 1;
+        }
+        for (_, i) in self.instruments.values() {
+            i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).editor(false);
+            n += 1;
+        }
+        n
+    }
+
     pub fn effect_by_id(&self, id: Id) -> Option<SharedEffect> {
         self.effects.get(&id).map(|e| e.1.clone())
     }

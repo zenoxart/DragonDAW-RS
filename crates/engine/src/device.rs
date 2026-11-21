@@ -15,7 +15,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -176,6 +176,28 @@ pub struct StreamHealth {
 }
 
 /// The running audio engine.
+/// Joins `threads`, giving up after `limit` in total (a plugin hanging in its destructor must not
+/// hang the app on close).
+pub fn join_bounded(threads: Vec<std::thread::JoinHandle<()>>, limit: Duration) {
+    let until = Instant::now() + limit;
+    for t in threads {
+        while !t.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if t.is_finished() {
+            let _ = t.join();
+        } else {
+            tracing::warn!("engine thread {:?} did not stop in time", t.thread().name());
+        }
+    }
+}
+
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 pub struct AudioEngine {
     tx: Sender<Command>,
     rec_tx: Sender<RecMsg>,
@@ -192,8 +214,10 @@ pub struct AudioEngine {
     pub latency_frames: u32,
     record_offset: f64,
     pub health: Arc<StreamHealth>,
-    _out: cpal::Stream,
-    _in: Option<cpal::Stream>,
+    out: Option<cpal::Stream>,
+    input: Option<cpal::Stream>,
+    /// The recorder and song-collector threads, joined on shutdown (they may hold plugins).
+    threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl AudioEngine {
@@ -247,12 +271,12 @@ impl AudioEngine {
 
         let (tx, rx) = unbounded::<Command>();
         let (rec_tx, rec_rx) = unbounded::<RecMsg>();
-        std::thread::Builder::new().name("dragon-recorder".into()).spawn(move || recorder_thread(rec_rx)).map_err(|e| EngineError::Device(e.to_string()))?;
+        let recorder = std::thread::Builder::new().name("dragon-recorder".into()).spawn(move || recorder_thread(rec_rx)).map_err(|e| EngineError::Device(e.to_string()))?;
         let recording = Arc::new(Mutex::new(false));
         let mut renderer = Renderer::new(song);
         // Old songs are dropped here, not in the audio callback (freeing can block on the allocator).
         let (gc_tx, gc_rx) = crossbeam_channel::bounded::<Arc<Song>>(64);
-        std::thread::Builder::new().name("dragon-gc".into()).spawn(move || for _ in gc_rx {}).map_err(|e| EngineError::Device(e.to_string()))?;
+        let collector = std::thread::Builder::new().name("dragon-gc".into()).spawn(move || for _ in gc_rx {}).map_err(|e| EngineError::Device(e.to_string()))?;
         // Health: the callback counts its calls; the error callback flags a dead stream.
         let health = Arc::new(StreamHealth::default());
         let hb = health.clone();
@@ -434,13 +458,36 @@ impl AudioEngine {
             latency_frames,
             record_offset: cfg.record_offset_ms as f64 / 1000.0,
             health,
-            _out: stream,
-            _in: in_stream,
+            out: Some(stream),
+            input: in_stream,
+            threads: vec![recorder, collector],
         })
     }
 
     pub fn send(&self, c: Command) {
         let _ = self.tx.send(c);
+    }
+
+    /// Stops the device in a fixed order and waits for the engine's threads: the input stream, then the
+    /// output stream (its callback owns the renderer, the song and the plugins, which are freed here, on
+    /// the calling thread), then the recorder (finishes its files) and the song collector. Called on
+    /// close and by `Drop`; idempotent. Afterwards commands are ignored.
+    ///
+    /// Without this the streams and threads were torn down by process exit, racing the driver (ASIO)
+    /// and plugin libraries still running on them – an intermittent crash when closing the app.
+    pub fn shutdown(&mut self) {
+        if let Some(s) = self.input.take() {
+            let _ = s.pause();
+            drop(s);
+        }
+        if let Some(s) = self.out.take() {
+            let _ = s.pause();
+            drop(s);
+        }
+        // Disconnect the channels so both threads leave their loops.
+        self.tx = unbounded().0;
+        self.rec_tx = unbounded().0;
+        join_bounded(std::mem::take(&mut self.threads), Duration::from_secs(5));
     }
 
     pub fn set_song(&self, s: Arc<Song>) {
@@ -685,5 +732,24 @@ mod input_tests {
         // Smooth: no jumps bigger than a 1 kHz sine's step at 44.1 kHz.
         let max_step = y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
         assert!(max_step < 0.16, "{max_step}");
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    /// Finished threads are joined; one that hangs is given up on after the limit (closing never hangs).
+    #[test]
+    fn join_bounded_joins_and_gives_up_in_time() {
+        let done = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(20)));
+        let (_keep, rx) = unbounded::<()>();
+        let stuck = std::thread::spawn(move || {
+            let _ = rx.recv();
+        });
+        let t0 = Instant::now();
+        join_bounded(vec![done, stuck], Duration::from_millis(300));
+        let took = t0.elapsed();
+        assert!(took >= Duration::from_millis(250) && took < Duration::from_secs(3), "{took:?}");
     }
 }

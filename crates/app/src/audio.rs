@@ -11,6 +11,15 @@ pub struct NullEngine {
     tx: Sender<Command>,
     pub meters: Meters,
     pub transport: Arc<Mutex<SharedTransport>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for NullEngine {
+    fn drop(&mut self) {
+        // Disconnect, then wait for the clock thread (it owns the renderer and the plugins).
+        self.tx = channel().0;
+        dragon_engine::device::join_bounded(self.thread.take().into_iter().collect(), Duration::from_secs(5));
+    }
 }
 
 impl NullEngine {
@@ -20,7 +29,7 @@ impl NullEngine {
         let meters = r.meters.clone();
         let transport = Arc::new(Mutex::new(SharedTransport { state: TransportState::default(), at: Instant::now() }));
         let t2 = transport.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("dragon-null-audio".into())
             .spawn(move || {
                 const BLOCK: usize = 512;
@@ -64,7 +73,7 @@ impl NullEngine {
                 }
             })
             .expect("spawn audio thread");
-        NullEngine { tx, meters, transport }
+        NullEngine { tx, meters, transport, thread: Some(thread) }
     }
 }
 
@@ -80,6 +89,17 @@ impl Audio {
             Err(e) => {
                 tracing::warn!("audio device unavailable: {e}");
                 Audio::Null(NullEngine::start(song), e.to_string())
+            }
+        }
+    }
+
+    /// Stops the audio device and the engine threads (on close, before the windows go away).
+    pub fn shutdown(&mut self) {
+        match self {
+            Audio::Device(e) => e.shutdown(),
+            Audio::Null(n, _) => {
+                n.tx = channel().0;
+                dragon_engine::device::join_bounded(n.thread.take().into_iter().collect(), Duration::from_secs(5));
             }
         }
     }
@@ -171,5 +191,30 @@ impl Audio {
             Audio::Device(e) => e.stop_recording(),
             Audio::Null(..) => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragon_engine::model::Project;
+    use dragon_engine::render::{CompileContext, Pool, StretchCache};
+    use dragon_engine::samples::SampleCache;
+
+    /// Shutting the engine down stops its thread and frees the song (and its plugins) right away, on the
+    /// calling thread, instead of leaving it to process exit.
+    #[test]
+    fn shutdown_frees_the_song_and_stops_the_thread() {
+        let p = Project::new_default();
+        let (cache, stretch, mut pool) = (SampleCache::default(), StretchCache::default(), Pool::new());
+        let song = Arc::new(Song::compile(&p, &mut CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate: 48000.0 }));
+        let mut a = Audio::Null(NullEngine::start(song.clone()), "test".into());
+        a.send(Command::Play(dragon_engine::render::PlayMode::Song));
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(Arc::strong_count(&song) > 1);
+        a.shutdown();
+        assert_eq!(Arc::strong_count(&song), 1, "the engine still holds the song");
+        a.send(Command::Stop); // ignored, no panic
+        a.shutdown(); // idempotent
     }
 }

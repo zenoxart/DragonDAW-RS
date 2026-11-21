@@ -1448,6 +1448,17 @@ impl State {
         self.ui.hint = Some((source.to_string(), name.to_string(), value, Instant::now()));
     }
 
+    /// Orderly teardown on close, while the main window still exists: stop playback, close every plugin
+    /// window (they are owned by the main window; Windows would destroy them under the plugins), then
+    /// stop the audio device and join the engine threads, so nothing runs plugin or driver code while
+    /// the process exits.
+    pub fn shutdown(&mut self) {
+        self.stop();
+        self.session.pool.close_all_editors();
+        self.ui.native_editors.clear();
+        self.audio.shutdown();
+    }
+
     /// Services open native plugin editors (window events, plugin timers); drops the closed ones.
     pub fn pump_plugin_editors(&mut self) -> bool {
         let pool = &self.session.pool;

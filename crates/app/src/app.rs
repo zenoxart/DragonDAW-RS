@@ -442,5 +442,6 @@ impl eframe::App for DragonApp {
         self.st.save_settings();
         self.st.ctx.shortcuts.save();
         self.st.autosave.end_session();
+        self.st.shutdown();
     }
 }
