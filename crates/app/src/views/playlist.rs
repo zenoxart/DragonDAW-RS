@@ -1503,7 +1503,15 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
             st.ui.playlist_zoom = ((ui.available_width() + 400.0) / len as f32).clamp(3.0, 400.0);
             st.ui.pl_x = 0.0;
         }
-        if ui.small_button(RichText::new("⚑ Marker").color(theme::ACCENT_2)).on_hover_text("Add a time marker at the playhead (Alt+T)").clicked() {
+        let marker = match crate::brand::icon_atlas(ui.ctx()) {
+            Some(tex) => {
+                let k = crate::brand::icon::MARKER;
+                let uv = Rect::from_min_size(Pos2::new((k % 6) as f32 * 96.0 / 576.0, (k / 6) as f32 * 96.0 / 480.0), Vec2::new(96.0 / 576.0, 96.0 / 480.0));
+                ui.add(egui::Button::image_and_text(egui::Image::new((tex.id(), Vec2::splat(16.0))).uv(uv), RichText::new("Marker").small().color(theme::ACCENT_2)))
+            }
+            None => ui.small_button(RichText::new("Marker").color(theme::ACCENT_2)),
+        };
+        if marker.on_hover_text("Add a time marker at the playhead (Alt+T)").clicked() {
             st.ctx.run("dragon.add.marker", serde_json::Value::Null);
         }
         ui.checkbox(&mut st.settings.follow_playhead, "Follow");

@@ -1257,7 +1257,7 @@ pub fn add_effect_menu_sized(ui: &mut Ui, st: &mut State, mixer: Id, label: &str
 /// The mixer's menu bar (top of the view): add channels, the strip size and auto-balance.
 fn toolbar(ui: &mut Ui, st: &mut State) {
     egui::menu::bar(ui, |ui| {
-        let add = ui.menu_button(RichText::new("+ Add ▾").strong(), |ui| {
+        let add = ui.menu_button(RichText::new("+ Add ⏷").strong(), |ui| {
             if ui.button(RichText::new("⏺ Recording channel").color(theme::REC)).on_hover_text("A mixer channel with an armed track that records your mic or instrument into it").clicked() {
                 st.ctx.run("dragon.add.recording", serde_json::Value::Null);
                 ui.close_menu();
@@ -1272,14 +1272,14 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
             }
         });
         crate::tutorial::anchor(ui.ctx(), "mixer.add_rec", add.response.rect);
-        ui.menu_button("View ▾", |ui| {
+        ui.menu_button("View ⏷", |ui| {
             let mut compact = st.settings.compact_mixer;
             if ui.checkbox(&mut compact, "Compact strips").on_hover_text("Narrow strips with just meter, fader, mute and solo – pan and effects stay in the panel on the right").clicked() {
                 st.ctx.run("dragon.view.compact_mixer", serde_json::Value::Null);
                 ui.close_menu();
             }
         });
-        ui.menu_button("Tools ▾", |ui| {
+        ui.menu_button("Tools ⏷", |ui| {
             let busy = st.balance_job.is_some();
             let b = ui.add_enabled(!busy, egui::Button::new("Auto-balance all channels")).on_hover_text(
                 "Measures each channel's loudness over the song and sets every fader for an even starting mix (lead vocals and the low end forward, hats and pads back). Buses, VCAs and silent channels keep their faders. One undo step.",

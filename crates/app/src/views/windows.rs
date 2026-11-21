@@ -506,7 +506,11 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let face = finish.base();
     let plate_at = ui.painter().add(egui::Shape::Noop);
     let ear = super::analog::EAR as i8;
-    let level = st.audio.meters().snapshot().strips.get(&m).copied().unwrap_or((0.0, 0.0));
+    // The unit's own output (RMS, as a VU reads it), measured by the engine right after this insert.
+    let lv = st.audio.meters().snapshot().insert_rms(i);
+    let level = lv.map(|(l, r, _)| (l, r)).unwrap_or((0.0, 0.0));
+    // The display reads the same measured output (its meters show real values, not a demo).
+    ui.data_mut(|d| d.insert_temp(egui::Id::new(("fx.hero", m, i)).with("out_level"), lv.unwrap_or((0.0, 0.0, 0.0))));
     let dev = egui::Frame::NONE.inner_margin(egui::Margin { left: 14 + ear, right: 14 + ear, top: 8, bottom: 14 }).show(ui, |ui| {
         super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: ins.enabled, gr, level, time, key: egui::Id::new(("fx.unit", m, i)) });
         ui.add_space(6.0);

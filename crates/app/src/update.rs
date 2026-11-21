@@ -235,6 +235,8 @@ pub struct UpdateUi {
     pub downloaded: Option<PathBuf>,
     /// Close the app (the installer is waiting for it).
     pub quit: bool,
+    /// The "new version" window (opened at start when a release is found, and from the top-right chip).
+    pub popup: bool,
 }
 
 /// Checks in the background; `manual` = the user asked (Help › Check for updates).
@@ -276,6 +278,7 @@ pub fn poll(st: &mut State) {
             Ok(Some(r)) => {
                 let skipped = !manual && st.settings.skipped_update.as_deref() == Some(r.id.as_str());
                 st.ui.update.hidden = skipped;
+                st.ui.update.popup = !skipped;
                 st.ui.update.found = Some(r);
             }
             Ok(None) if manual => st.toast(format!("Dragon DAW is up to date ({})", Build::current().label()), Severity::Success),
@@ -309,9 +312,86 @@ fn start_download(st: &mut State, release: Release) {
     st.ui.update.downloading = Some(slot);
 }
 
-/// Whether the update bar has something to show.
+/// Whether the update bar has something to show: a download running or done (the offer itself is the
+/// window at start and the chip in the top-right corner).
 pub fn visible(st: &State) -> bool {
-    st.ui.update.found.is_some() && !st.ui.update.hidden
+    st.ui.update.found.is_some() && !st.ui.update.hidden && (st.ui.update.downloading.is_some() || st.ui.update.downloaded.is_some())
+}
+
+/// The chip left of the quest level (top right): shown while a new version is available; opens the
+/// update window.
+pub fn chip(ui: &mut egui::Ui, st: &mut State) {
+    let Some(r) = st.ui.update.found.clone() else { return };
+    if st.settings.skipped_update.as_deref() == Some(r.id.as_str()) && st.ui.update.hidden {
+        return;
+    }
+    let t = ui.input(|i| i.time) as f32;
+    let pulse = 0.75 + 0.25 * (t * 2.0).sin().abs();
+    let b = egui::Button::new(RichText::new(format!("⬆ Update {}", r.label)).small().strong().color(Color32::BLACK)).fill(theme::ACCENT_2.gamma_multiply(pulse)).corner_radius(10.0);
+    if ui.add(b).on_hover_text(format!("Dragon DAW {} is available (you have {}) – click for details", r.label, Build::current().label())).clicked() {
+        st.ui.update.popup = true;
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+}
+
+/// The update window: what is new, Download / Install, Later and Skip.
+pub fn popup(ctx: &egui::Context, st: &mut State) {
+    let Some(r) = st.ui.update.found.clone() else { return };
+    if !st.ui.update.popup {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("A new version of Dragon DAW is available")
+        .id(egui::Id::new("dragon.update.popup"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        // Above the start screen too.
+        .order(egui::Order::Tooltip)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.label(RichText::new(format!("Dragon DAW {}", r.label)).size(22.0).strong().color(theme::ACCENT_2));
+            ui.label(RichText::new(format!("You have {}.", Build::current().label())).color(theme::TEXT_DIM));
+            if !r.page.is_empty() {
+                ui.hyperlink_to("What's new (release notes)", &r.page);
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if st.ui.update.downloading.is_some() {
+                    ui.spinner();
+                    ui.label(format!("Downloading {} …", mb(r.size)));
+                } else if let Some(file) = st.ui.update.downloaded.clone() {
+                    if cfg!(windows) && file.extension().is_some_and(|e| e == "zip") {
+                        let b = egui::Button::new(RichText::new("Install and restart").strong().color(Color32::BLACK)).fill(theme::ACCENT);
+                        if ui.add(b).clicked() {
+                            st.ui.update.popup = false;
+                            install_and_restart(st, &file);
+                        }
+                    } else if ui.button("Show in folder").clicked() {
+                        crate::chains::reveal(&file.parent().map(Path::to_path_buf).unwrap_or_default());
+                    }
+                } else {
+                    let b = egui::Button::new(RichText::new(format!("Download ({})", mb(r.size))).strong().color(Color32::BLACK)).fill(theme::ACCENT);
+                    if ui.add(b).on_hover_text(format!("Saves {} to your Downloads folder", r.asset_name)).clicked() {
+                        st.ui.update.hidden = false;
+                        start_download(st, r.clone());
+                    }
+                }
+                if ui.button("Later").on_hover_text("The Update chip in the top-right corner brings this back").clicked() {
+                    st.ui.update.popup = false;
+                }
+                if st.ui.update.downloading.is_none() && ui.button("Skip this version").clicked() {
+                    st.settings.skipped_update = Some(r.id.clone());
+                    st.save_settings();
+                    st.ui.update.hidden = true;
+                    st.ui.update.popup = false;
+                }
+            });
+        });
+    if !open {
+        st.ui.update.popup = false;
+    }
 }
 
 /// The bar under the transport: "a new version is available" with Download / install buttons.
@@ -426,12 +506,22 @@ mod bar_tests {
     fn the_bar_shows_a_found_release_and_skip_hides_it() {
         let mut st = State::new(redhive_client_framework::AppContext::new("en"), crate::state::Settings { show_splash: false, ..Default::default() });
         assert!(!visible(&st));
-        st.ui.update.found =
-            Some(Release { id: "v9.0.0".into(), label: "9.0.0".into(), page: String::new(), asset_name: "dragon-daw-9.0.0-windows-x86_64.zip".into(), asset_url: "https://example/x.zip".into(), size: 60_000_000 });
+        let rel = Release { id: "v9.0.0".into(), label: "9.0.0".into(), page: String::new(), asset_name: "dragon-daw-9.0.0-windows-x86_64.zip".into(), asset_url: "https://example/x.zip".into(), size: 60_000_000 };
+        // A start-up check that finds a release opens the window (the chip stays in the corner).
+        st.ui.update.checking = Some(Arc::new(Mutex::new(Some(Ok(Some(rel.clone()))))));
+        poll(&mut st);
+        assert!(st.ui.update.popup && st.ui.update.found.is_some());
+        assert!(!visible(&st), "the bar only shows a download");
+        st.ui.update.downloaded = Some(PathBuf::from("x.zip"));
         assert!(visible(&st));
+        st.ui.update.downloaded = None;
         let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| bar(ui, &mut st));
+            popup(ctx, &mut st);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                bar(ui, &mut st);
+                chip(ui, &mut st);
+            });
         });
         st.settings.skipped_update = Some("v9.0.0".into());
         // A start-up check that finds the skipped version keeps the bar hidden.

@@ -165,6 +165,178 @@ impl PitchShifter {
     }
 }
 
+/// Pitch-synchronous overlap-add (TD-PSOLA) shifter – what gives Auto-Tune / Waves Tune their clean,
+/// formant-preserving sound (the "hard tune" effect at retune speed 0). Grains two periods long are
+/// cut around pitch marks one period apart (aligned to the waveform's peaks) and laid down at the new
+/// period; the voice's formants (the grain shapes) stay where they are, only the pitch moves.
+/// The delay is about one period plus 1 ms (≈ 5 ms on a 220 Hz voice), so it can be monitored.
+pub struct Psola {
+    buf: Vec<f32>,
+    acc: Vec<f32>,
+    /// Samples written (absolute time of the next input sample).
+    w: u64,
+    /// Absolute time of the next output sample.
+    e: u64,
+    /// Analysis marks (absolute time, grain half length).
+    marks: std::collections::VecDeque<(u64, f32)>,
+    last_mark: u64,
+    period: f32,
+    voiced: bool,
+    /// Absolute time of the next synthesis mark.
+    next_syn: f64,
+    delay: u64,
+    started: bool,
+}
+
+const PS_N: usize = 1 << 14;
+const PS_UNVOICED: f32 = 256.0;
+const PS_MARGIN: f32 = 48.0;
+
+impl Psola {
+    pub fn new() -> Self {
+        Psola {
+            buf: vec![0.0; PS_N],
+            acc: vec![0.0; PS_N],
+            w: 0,
+            e: 0,
+            marks: std::collections::VecDeque::with_capacity(64),
+            last_mark: 0,
+            period: PS_UNVOICED,
+            voiced: false,
+            next_syn: 0.0,
+            delay: (PS_UNVOICED + PS_MARGIN) as u64,
+            started: false,
+        }
+    }
+
+    /// The voice's period in samples (`None` = unvoiced: grains at a fixed size, no pitch change).
+    pub fn set_period(&mut self, period: Option<f32>) {
+        match period {
+            Some(p) => {
+                self.period = p.clamp(32.0, 1200.0);
+                self.voiced = true;
+            }
+            None => {
+                self.period = PS_UNVOICED;
+                self.voiced = false;
+            }
+        }
+    }
+
+    /// Current delay through the shifter, in samples.
+    pub fn delay(&self) -> f32 {
+        self.delay as f32
+    }
+
+    pub fn reset(&mut self) {
+        let fresh = Psola::new();
+        *self = fresh;
+    }
+
+    #[inline]
+    fn at(&self, t: u64) -> f32 {
+        self.buf[(t as usize) & (PS_N - 1)]
+    }
+
+    /// One sample in, one out, at pitch `ratio` (2.0 = an octave up).
+    pub fn process(&mut self, x: f32, ratio: f32) -> f32 {
+        let mask = PS_N - 1;
+        self.buf[(self.w as usize) & mask] = x;
+        self.w += 1;
+        let p = self.period;
+        let ip = p.round().max(1.0) as u64;
+        // ---- analysis marks, one period apart, snapped to the waveform's peak (consistent grain shapes)
+        if self.marks.is_empty() {
+            if self.w > ip * 2 {
+                self.last_mark = self.w - ip - 1;
+                self.marks.push_back((self.last_mark, p));
+            }
+        } else {
+            let search = if self.voiced { ip / 4 } else { 0 };
+            while self.last_mark + ip + search + ip < self.w {
+                let cand = self.last_mark + ip;
+                let mut best = cand;
+                if search > 0 {
+                    let mut bv = f32::MIN;
+                    for t in cand - search..=cand + search {
+                        let v = self.at(t);
+                        if v > bv {
+                            bv = v;
+                            best = t;
+                        }
+                    }
+                }
+                self.last_mark = best.max(self.last_mark + ip / 2);
+                self.marks.push_back((self.last_mark, p));
+                while self.marks.len() > 48 {
+                    self.marks.pop_front();
+                }
+            }
+        }
+        // ---- delay: about one period plus a margin, glided by a sample now and then
+        let want = (p + PS_MARGIN) as u64;
+        if !self.started {
+            if self.w <= want || self.marks.is_empty() {
+                return 0.0;
+            }
+            self.started = true;
+            self.delay = want;
+            self.e = self.w - want;
+            self.next_syn = self.e as f64;
+        }
+        // ---- synthesis: lay a grain at each output mark (period / ratio apart) before it is played
+        let out_p = (p / ratio.clamp(0.25, 4.0)).max(16.0) as f64;
+        let lag = 1.25 * p as f64;
+        while self.next_syn <= (self.e as f64) + p as f64 + 1.0 {
+            let s = self.next_syn;
+            let target = s - lag;
+            let (m, half) = self.marks.iter().copied().min_by(|a, b| (a.0 as f64 - target).abs().total_cmp(&(b.0 as f64 - target).abs())).unwrap_or((self.last_mark, p));
+            let hp = half.max(8.0);
+            let hi = hp as i64;
+            let norm = (out_p as f32 / hp).min(1.0);
+            let sc = s.round() as i64;
+            for k in -hi..hi {
+                let ot = sc + k;
+                if ot < self.e as i64 {
+                    continue;
+                }
+                let it = m as i64 + k;
+                if it < 0 || it as u64 >= self.w {
+                    continue;
+                }
+                let wv = 0.5 + 0.5 * (std::f32::consts::PI * k as f32 / hp).cos();
+                self.acc[(ot as usize) & mask] += self.buf[(it as usize) & mask] * wv * norm;
+            }
+            self.next_syn += out_p;
+        }
+        // ---- emit
+        let idx = (self.e as usize) & mask;
+        let y = self.acc[idx];
+        self.acc[idx] = 0.0;
+        self.e += 1;
+        // Glide the delay towards the period's (a skipped or repeated sample every 16 samples at most).
+        if self.w.is_multiple_of(16) {
+            let cur = self.w - self.e;
+            if want + 24 < cur {
+                let i2 = (self.e as usize) & mask;
+                self.acc[i2] = 0.5 * (self.acc[i2] + y);
+                self.e += 1;
+            } else if want > cur + 24 && self.e > 0 {
+                self.e -= 1;
+                self.acc[(self.e as usize) & mask] = y;
+            }
+            self.delay = self.w - self.e;
+        }
+        y
+    }
+}
+
+impl Default for Psola {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub const KEYS: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 pub const TUNE_SCALES: &[(&str, &[u8])] = &[
     ("Chromatic", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
@@ -197,7 +369,8 @@ pub fn nearest_in_scale(midi: f32, root: u8, scale: &[u8]) -> f32 {
 const TUNE_PARAMS: &[ParamInfo] = &[
     ParamInfo::choice("key", "Key", KEYS, 0.0),
     ParamInfo::choice("scale", "Scale", SCALE_NAMES, 0.0),
-    ParamInfo::log("speed", "Retune speed", 1.0, 400.0, 25.0, "ms"),
+    // 0 … 400 ms like Auto-Tune: the bottom is the instant, robotic "hard tune".
+    ParamInfo::log("speed", "Retune speed", 0.1, 400.0, 20.0, "ms"),
     ParamInfo::lin("humanize", "Humanize", 0.0, 1.0, 0.0, ""),
     ParamInfo::lin("flex", "Flex-tune", 0.0, 50.0, 0.0, "ct"),
     ParamInfo::lin("vibrato", "Natural vibrato", 0.0, 1.0, 0.0, ""),
@@ -230,8 +403,8 @@ pub struct PitchCorrect {
     since: usize,
     target_ratio: f32,
     ratio: f32,
-    sl: PitchShifter,
-    sr: PitchShifter,
+    sl: Psola,
+    sr: Psola,
     humanize: f32,
     flex: f32,
     vibrato: f32,
@@ -257,7 +430,7 @@ impl PitchCorrect {
             rate,
             key: 0,
             scale: 0,
-            speed_ms: 25.0,
+            speed_ms: 20.0,
             amount: 1.0,
             mix: 1.0,
             ring: vec![0.0; FRAME],
@@ -268,8 +441,8 @@ impl PitchCorrect {
             since: 0,
             target_ratio: 1.0,
             ratio: 1.0,
-            sl: PitchShifter::new(rate),
-            sr: PitchShifter::new(rate),
+            sl: Psola::new(),
+            sr: Psola::new(),
             humanize: 0.0,
             flex: 0.0,
             vibrato: 0.0,
@@ -337,7 +510,7 @@ impl Effect for PitchCorrect {
         match id {
             "key" => self.key = (v.round() as u8).min(11),
             "scale" => self.scale = (v.round() as usize).min(TUNE_SCALES.len() - 1),
-            "speed" => self.speed_ms = v.max(0.5),
+            "speed" => self.speed_ms = v.max(0.0),
             "amount" => self.amount = v.clamp(0.0, 1.0),
             "mix" => self.mix = v.clamp(0.0, 1.0),
             "humanize" => self.humanize = v.clamp(0.0, 1.0),
@@ -364,7 +537,9 @@ impl Effect for PitchCorrect {
         // Humanize: notes held longer than ~120 ms are retuned more slowly (up to 8× the speed setting).
         let held_s = self.held.1 as f32 * HOP as f32 / self.rate;
         let slow = 1.0 + self.humanize * 7.0 * ((held_s - 0.12) / 0.3).clamp(0.0, 1.0);
-        let coef = (-1.0 / (self.speed_ms * slow * 0.001 * self.rate)).exp();
+        // Retune speed: below ~0.5 ms the pitch snaps at once (hard tune).
+        let tau = self.speed_ms * slow * 0.001 * self.rate;
+        let coef = if self.speed_ms < 0.5 { 0.0 } else { (-1.0 / tau.max(1e-3)).exp() };
         for i in 0..l.len() {
             // Analysis ring (most recent FRAME samples, oldest first).
             self.ring[self.pos] = (l[i] + r[i]) * 0.5;
@@ -437,6 +612,54 @@ mod tests {
         assert!(detect_pitch(&vec![0.0; 2048], 48000.0, 60.0, 1000.0).is_none());
     }
 
+    /// PSOLA moves the pitch by the ratio and keeps a steady level (no grain chorus / tremolo).
+    #[test]
+    fn psola_shifts_cleanly() {
+        for (hz, ratio) in [(220.0f32, 1.0f32), (220.0, 1.12), (300.0, 0.9), (150.0, 1.5)] {
+            let mut s = Psola::new();
+            s.set_period(Some(48000.0 / hz));
+            let x = sine(hz, 1.0);
+            let y: Vec<f32> = x.iter().map(|v| s.process(*v, ratio)).collect();
+            let (f, c) = detect_pitch(&y[30000..32048], 48000.0, 60.0, 1100.0).unwrap();
+            assert!((f - hz * ratio).abs() < hz * ratio * 0.01, "{hz}×{ratio}: {f}");
+            assert!(c > 0.9, "clean: {c}");
+            // Level steady across 10 ms windows (a granular shifter wobbles here).
+            let rms: Vec<f32> = y[24000..48000].chunks(480).map(|w| (w.iter().map(|v| v * v).sum::<f32>() / 480.0).sqrt()).collect();
+            let (lo, hi) = rms.iter().fold((f32::MAX, 0.0f32), |(l, h), v| (l.min(*v), h.max(*v)));
+            assert!(hi / lo < 1.25, "{hz}×{ratio}: level {lo:.3} … {hi:.3}");
+            // A pure tone's "formant" is the tone itself, so big shifts lose level (as PSOLA does on any
+            // sine); within the few semitones of tuning the level holds.
+            if (ratio - 1.0).abs() < 0.15 {
+                assert!((hi - 0.354).abs() < 0.1, "{hz}×{ratio}: level {hi}");
+            }
+        }
+    }
+
+    /// Retune speed 0 makes a gliding voice stair-step onto the notes (the hard-tune effect).
+    #[test]
+    fn hard_tune_snaps_a_glide() {
+        let mut e = PitchCorrect::new(48000.0);
+        e.set_param("speed", 0.1);
+        let mut ph = 0.0f32;
+        let x: Vec<f32> = (0..96000)
+            .map(|i| {
+                let m = 57.0 + 2.0 * i as f32 / 96000.0;
+                ph += 440.0 * 2f32.powf((m - 69.0) / 12.0) / 48000.0;
+                (ph * std::f32::consts::TAU).sin() * 0.5
+            })
+            .collect();
+        let (mut l, mut r) = (x.clone(), x);
+        for (a, b) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+            e.process(a, b, None);
+        }
+        // Inside each note the output pitch sits on it.
+        // The glide is at 57.4 around sample 20000 (→ A3) and at 58.85 around 88000 (→ B3).
+        for (at, want) in [(20000usize, 220.0f32), (86000, 246.94)] {
+            let (f, _) = detect_pitch(&l[at..at + 2048], 48000.0, 60.0, 1100.0).unwrap();
+            assert!((f - want).abs() / want < 0.012, "at {at}: {f} (want {want})");
+        }
+    }
+
     #[test]
     fn scale_snapping() {
         // 61.4 (between C#4 and D4) snaps to D in C major and to C# chromatically.
@@ -465,7 +688,7 @@ mod tests {
             e.process(a, b, None);
         }
         let ms = e.sl.delay() / 48.0;
-        assert!(ms < 6.0, "grain delay {ms:.1} ms");
+        assert!(ms < 6.5, "PSOLA delay {ms:.1} ms");
         let t = e.telemetry();
         assert!((t[0] - 57.0).abs() < 0.1, "detected A3: {t:?}");
     }

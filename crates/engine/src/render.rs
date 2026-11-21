@@ -995,6 +995,9 @@ pub struct TransportState {
 pub struct MeterValues {
     pub strips: HashMap<Id, (f32, f32)>,
     pub gain_reduction: HashMap<Id, f32>,
+    /// Each insert's output: [mean square left (300 ms VU integration), right, held sample peak].
+    /// `insert_rms` turns it into levels.
+    pub insert_levels: HashMap<Id, [f32; 3]>,
     /// Live display values of effects that report them ([`crate::effects::Effect::telemetry`]).
     pub fx_data: HashMap<Id, Vec<f32>>,
     pub momentary: f32,
@@ -1129,6 +1132,7 @@ struct Scratch {
     insert_mix: HashMap<Id, f32>,
     meter_peaks: Vec<(Id, f32, f32)>,
     gr: Vec<(Id, f32)>,
+    lv: Vec<(Id, f32, f32, f32)>,
     /// Telemetry: (insert, start, len) into `tele_data`.
     tele: Vec<(Id, usize, usize)>,
     tele_data: Vec<f32>,
@@ -1165,6 +1169,8 @@ impl StripPtrs {
 #[derive(Default)]
 struct StripSlot {
     gr: Vec<(Id, f32)>,
+    /// Each insert's output this block: (insert, mean square left, right, peak).
+    lv: Vec<(Id, f32, f32, f32)>,
     tele: Vec<(Id, usize, usize)>,
     tele_data: Vec<f32>,
     dry: (Vec<f32>, Vec<f32>),
@@ -1175,7 +1181,13 @@ const TELE_ROOM: usize = 16384;
 
 impl StripSlot {
     fn with_room() -> Self {
-        StripSlot { gr: Vec::with_capacity(64), tele: Vec::with_capacity(64), tele_data: Vec::with_capacity(TELE_ROOM), dry: (Vec::with_capacity(AUTOMATION_BLOCK), Vec::with_capacity(AUTOMATION_BLOCK)) }
+        StripSlot {
+            gr: Vec::with_capacity(64),
+            lv: Vec::with_capacity(64),
+            tele: Vec::with_capacity(64),
+            tele_data: Vec::with_capacity(TELE_ROOM),
+            dry: (Vec::with_capacity(AUTOMATION_BLOCK), Vec::with_capacity(AUTOMATION_BLOCK)),
+        }
     }
 }
 
@@ -1663,6 +1675,7 @@ impl Renderer {
         // ---- mixer graph
         sc.meter_peaks.clear();
         sc.gr.clear();
+        sc.lv.clear();
         sc.tele.clear();
         sc.tele_data.clear();
         // Sizes grow once per song (not per block): room for every strip's reports.
@@ -1722,6 +1735,7 @@ impl Renderer {
                         // handled by exactly one thread; nothing else touches these strips meanwhile.
                         let ((bl, br), slot) = unsafe { ptrs.strip(si) };
                         slot.gr.clear();
+                        slot.lv.clear();
                         slot.tele.clear();
                         slot.tele_data.clear();
                         let (bl, br) = (&mut bl[..n], &mut br[..n]);
@@ -1749,6 +1763,7 @@ impl Renderer {
                                 }
                             }
                             guard_finite(&mut **e, ins.id, bl, br);
+                            slot.lv.push(block_level(ins.id, bl, br));
                             let g = e.gain_reduction();
                             if g > 0.01 {
                                 slot.gr.push((ins.id, g));
@@ -1767,6 +1782,7 @@ impl Renderer {
                     }
                     let slot = &sc.slots[si];
                     sc.gr.extend_from_slice(&slot.gr);
+                    sc.lv.extend_from_slice(&slot.lv);
                     for &(id, start, len) in &slot.tele {
                         sc.tele.push((id, sc.tele_data.len(), len));
                         sc.tele_data.extend_from_slice(&slot.tele_data[start..start + len]);
@@ -1775,7 +1791,7 @@ impl Renderer {
                     self.pre_fader[si].1[..n].copy_from_slice(&self.bufs[si].1[..n]);
                 }
             }
-            let (meter_peaks, gr, tele, tele_data) = (&mut sc.meter_peaks, &mut sc.gr, &mut sc.tele, &mut sc.tele_data);
+            let (meter_peaks, gr, tele, tele_data, lv) = (&mut sc.meter_peaks, &mut sc.gr, &mut sc.tele, &mut sc.tele_data, &mut sc.lv);
             let (sc_buf, dry_buf, par_mark) = (&mut sc.sc, &mut sc.dry, &sc.par);
             for &si in level {
                 let s = &song.strips[si];
@@ -1859,6 +1875,7 @@ impl Renderer {
                             }
                         }
                         guard_finite(&mut **e, ins.id, bl, br);
+                        lv.push(block_level(ins.id, bl, br));
                         let g = e.gain_reduction();
                         if g > 0.01 {
                             gr.push((ins.id, g));
@@ -2005,6 +2022,16 @@ impl Renderer {
             mv.gain_reduction.clear();
             for &(id, g) in sc.gr.iter() {
                 mv.gain_reduction.insert(id, g);
+            }
+            // Each insert's output as a VU reads it: mean square integrated over 300 ms (RMS), and the
+            // sample peak held with a 1.5 s fall – real values for the units' meters.
+            let k = (-(n as f32) / (0.3 * self.rate)).exp();
+            let fall = (-(n as f32) / (1.5 * self.rate)).exp();
+            for &(id, ml, mr, pk) in sc.lv.iter() {
+                let e = mv.insert_levels.entry(id).or_insert([0.0; 3]);
+                e[0] = e[0] * k + ml * (1.0 - k);
+                e[1] = e[1] * k + mr * (1.0 - k);
+                e[2] = (e[2] * fall).max(pk);
             }
             for &(id, start, len) in sc.tele.iter() {
                 // Reuse each insert's vector (no allocation once it exists).
@@ -2236,6 +2263,25 @@ impl Renderer {
                 self.click_left -= 1;
             }
         }
+    }
+}
+
+/// One insert's output over the block: mean squares of both sides and the sample peak.
+fn block_level(id: Id, l: &[f32], r: &[f32]) -> (Id, f32, f32, f32) {
+    let n = l.len().max(1) as f32;
+    let (mut a, mut b, mut p) = (0.0f32, 0.0f32, 0.0f32);
+    for (x, y) in l.iter().zip(r) {
+        a += x * x;
+        b += y * y;
+        p = p.max(x.abs()).max(y.abs());
+    }
+    (id, a / n, b / n, p)
+}
+
+impl MeterValues {
+    /// An insert's output: (RMS left, RMS right, peak), linear.
+    pub fn insert_rms(&self, id: Id) -> Option<(f32, f32, f32)> {
+        self.insert_levels.get(&id).map(|v| (v[0].sqrt(), v[1].sqrt(), v[2]))
     }
 }
 

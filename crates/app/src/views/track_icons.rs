@@ -70,8 +70,21 @@ pub fn guess(name: &str) -> &'static str {
     }
 }
 
-/// Draws icon `key` in `r` with `col` (an unknown key draws nothing).
+/// Draws icon `key` in `r`: the Higgsfield-made gold icon, dimmed when `col` is a dim colour (e.g. not
+/// selected); the vector drawing below if the icon set cannot be loaded. An unknown key draws nothing.
 pub fn draw(p: &Painter, r: Rect, key: &str, col: Color32) {
+    if let Some(k) = ICONS.iter().position(|(k, _)| *k == key) {
+        let bright = (col.r().max(col.g()).max(col.b()) as f32 / 255.0).clamp(0.35, 1.0);
+        let g = (255.0 * bright) as u8;
+        if crate::brand::paint_icon(p, r, k, Color32::from_rgb(g, g, g)) {
+            return;
+        }
+    }
+    draw_vector(p, r, key, col);
+}
+
+/// The vector fallback of [`draw`].
+fn draw_vector(p: &Painter, r: Rect, key: &str, col: Color32) {
     let s = r.width().min(r.height());
     let c = r.center();
     let at = |x: f32, y: f32| Pos2::new(c.x + (x - 0.5) * s, c.y + (y - 0.5) * s);

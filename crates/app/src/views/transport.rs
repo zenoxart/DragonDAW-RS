@@ -99,6 +99,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             super::quests::badge(ui, st);
+            crate::update::chip(ui, st);
             ui.add_space(8.0);
             let m = st.audio.meters().snapshot();
             ui.label(RichText::new(format!("CPU {:>3.0}%  ·  {} voices", m.cpu_load * 100.0, m.voices)).small().color(if m.cpu_load > 0.8 { theme::REC } else { theme::TEXT_DIM }));
@@ -200,27 +201,12 @@ fn mode_switch(ui: &mut Ui, pat_mode: bool) -> Option<bool> {
         } else {
             theme::TEXT_DIM
         };
-        // Icon.
-        let ic = Rect::from_center_size(Pos2::new(h.left() + 17.0, h.center().y), Vec2::splat(16.0));
-        if pat {
-            for row in 0..3 {
-                for col in 0..4 {
-                    let lit = (row + col) % 3 == 0;
-                    let c = Rect::from_min_size(Pos2::new(ic.left() + col as f32 * 4.2, ic.top() + 1.5 + row as f32 * 4.6), Vec2::new(3.2, 3.6));
-                    if lit {
-                        p.rect_filled(c, 0.8, ink);
-                    } else {
-                        p.rect_stroke(c, 0.8, Stroke::new(1.0_f32, ink), egui::StrokeKind::Inside);
-                    }
-                }
-            }
-        } else {
-            for (row, (a, b)) in [(0.0, 0.55), (0.3, 0.95), (0.1, 0.7)].into_iter().enumerate() {
-                let y = ic.top() + 1.5 + row as f32 * 4.8;
-                p.rect_filled(Rect::from_min_max(Pos2::new(ic.left() + a * 16.0, y), Pos2::new(ic.left() + b * 16.0, y + 3.4)), 1.0, ink);
-            }
-            p.line_segment([Pos2::new(ic.left() + 9.0, ic.top() - 1.0), Pos2::new(ic.left() + 9.0, ic.bottom() + 1.0)], Stroke::new(1.2_f32, if on { Color32::BLACK } else { theme::PLAYHEAD }));
+        // Icon (from the Higgsfield icon set), on a dark disc when its half is lit.
+        let ic = Rect::from_center_size(Pos2::new(h.left() + 16.0, h.center().y), Vec2::splat(22.0));
+        if on {
+            p.circle_filled(ic.center(), 12.0, Color32::from_black_alpha(170));
         }
+        crate::brand::paint_icon(&p, ic, if pat { crate::brand::icon::PATTERN } else { crate::brand::icon::SONG }, if on || hot { Color32::WHITE } else { Color32::from_gray(150) });
         p.text(Pos2::new(h.left() + 31.0, h.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), ink);
         if hot {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

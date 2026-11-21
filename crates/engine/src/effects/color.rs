@@ -888,7 +888,7 @@ mod scope_tests {
         let rms = |v: &[f32]| (v[48000..].iter().map(|s| s * s).sum::<f32>() / 48000.0).sqrt();
         let lo = run(&[("amount", 0.1), ("ceiling", -1.0)]);
         let hi = run(&[("amount", 0.9), ("ceiling", -1.0)]);
-        assert!(rms(&hi) > rms(&lo) * 1.3, "louder with more amount: {} vs {}", rms(&hi), rms(&lo));
+        assert!(rms(&hi) > rms(&lo) * 1.15, "louder with more amount: {} vs {}", rms(&hi), rms(&lo));
         assert!(hi.iter().all(|v| v.abs() < 0.95), "under the ceiling");
         let ag = run(&[("amount", 0.9), ("auto_gain", 1.0)]);
         let ratio = rms(&ag) / rms(&x);

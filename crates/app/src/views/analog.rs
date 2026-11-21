@@ -551,6 +551,7 @@ pub struct Plate<'a> {
     /// Gain reduction in dB.
     pub gr: f32,
     /// The channel's output peaks (linear).
+    /// The unit's output RMS, left and right (linear).
     pub level: (f32, f32),
     /// Animation time (None = reduced motion: needles jump, nothing flickers).
     pub time: Option<f32>,
@@ -568,8 +569,8 @@ pub fn nameplate(ui: &mut egui::Ui, pl: &Plate) {
     let ctx = ui.ctx().clone();
     let motion = pl.time.is_some();
     let t = pl.time.unwrap_or(0.0);
-    // The channel meters report peaks; a VU reads the average, about 10 dB under them.
-    let db = |x: f32| 20.0 * x.max(1e-6).log10() - 10.0;
+    // `level` is the unit's output RMS (300 ms integration, measured after this insert): a VU's reading.
+    let db = |x: f32| 20.0 * x.max(1e-6).log10();
     let (l, rr) = pl.level;
     // Lamp: warm amber when the unit is on; it fades in and out like a filament.
     let (glow, m0) = spring(&ctx, pl.key.with("lamp"), if pl.enabled { 1.0 } else { 0.0 }, 1.6, 1.0, motion);

@@ -37,6 +37,45 @@ fn texture(ctx: &Context, name: &'static str, bytes: &[u8]) -> Option<TextureHan
     Some(tex)
 }
 
+const ICON_ATLAS_PNG: &[u8] = include_bytes!("../assets/icons/atlas.png");
+
+/// The app's icon set (made with Higgsfield): 30 glowing gold icons, 96 px each, 6 per row – the 18
+/// track icons in `track_icons::ICONS` order, then the playlist tools, marker, pattern and song.
+pub fn icon_atlas(ctx: &Context) -> Option<TextureHandle> {
+    let id = egui::Id::new(("brand", "icon-atlas"));
+    if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
+        return Some(t);
+    }
+    let img = decode(ICON_ATLAS_PNG)?;
+    let size = [img.width() as usize, img.height() as usize];
+    // Mipmapped: the icons are drawn from 14 to 48 px.
+    let opts = TextureOptions { magnification: egui::TextureFilter::Linear, minification: egui::TextureFilter::Linear, wrap_mode: egui::TextureWrapMode::ClampToEdge, mipmap_mode: Some(egui::TextureFilter::Linear) };
+    let tex = ctx.load_texture("icon-atlas", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), opts);
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Tile indices in the icon atlas beyond the track icons.
+pub mod icon {
+    pub const DRAW: usize = 18;
+    pub const MARKER: usize = 27;
+    pub const PATTERN: usize = 28;
+    pub const SONG: usize = 29;
+}
+
+/// Draws atlas tile `k` into `r` (square, centred), tinted by `tint` (white = its own gold).
+pub fn paint_icon(p: &egui::Painter, r: egui::Rect, k: usize, tint: egui::Color32) -> bool {
+    let Some(tex) = icon_atlas(p.ctx()) else { return false };
+    let s = r.width().min(r.height());
+    let sq = egui::Rect::from_center_size(r.center(), egui::Vec2::splat(s));
+    let (cx, cy) = ((k % 6) as f32, (k / 6) as f32);
+    // A half-texel inset keeps neighbours from bleeding in.
+    let (u0, v0) = ((cx * 96.0 + 0.5) / 576.0, (cy * 96.0 + 0.5) / 480.0);
+    let (u1, v1) = (((cx + 1.0) * 96.0 - 0.5) / 576.0, ((cy + 1.0) * 96.0 - 0.5) / 480.0);
+    p.image(tex.id(), sq, egui::Rect::from_min_max(egui::pos2(u0, v0), egui::pos2(u1, v1)), tint);
+    true
+}
+
 /// The full logo as a texture.
 pub fn logo(ctx: &Context) -> Option<TextureHandle> {
     texture(ctx, "dragon-logo", LOGO_PNG)

@@ -187,6 +187,11 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     (edits, resp.dragged())
 }
 
+/// The insert's measured output (RMS left, RMS right, peak), when the display shows a live insert.
+fn out_level(ctx: &egui::Context, h: &Hero) -> Option<(f32, f32, f32)> {
+    ctx.data(|d| d.get_temp::<(f32, f32, f32)>(h.key.with("out_level")))
+}
+
 /// Square area of the transfer-curve displays (dynamics, shaper), with room for axis labels.
 fn square(r: Rect) -> Rect {
     Rect::from_min_size(r.min + Vec2::new(34.0, 10.0), Vec2::splat(r.height() - 32.0))
@@ -763,7 +768,7 @@ fn eq_band_panel(ui: &Ui, r: Rect, h: &Hero, range: f32, out: &mut Vec<(String, 
                 if ui.selectable_label(soloed, "🎧").on_hover_text("Solo: listen to this band").clicked() {
                     out.push(("solo".into(), if soloed { 0.0 } else { b as f32 }));
                 }
-                if ui.small_button("✕").on_hover_text("Remove the band").clicked() {
+                if ui.small_button("🗑").on_hover_text("Remove the band").clicked() {
                     out.push((k("on"), 0.0));
                 }
             });
@@ -1102,7 +1107,13 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let (anchor, x) = if tx > sq.center().x { (egui::Align2::RIGHT_BOTTOM, tx - 3.0) } else { (egui::Align2::LEFT_BOTTOM, tx + 3.0) };
     p.text(Pos2::new(x, sq.bottom() - 3.0), anchor, format!("thr {thr:.0} dB"), egui::FontId::proportional(9.0), theme::WARN);
     // The ball rides the curve at the level implied by the current gain reduction.
-    let x_in = if h.gr > 0.05 { (thr + h.gr * ratio / (ratio - 1.0).max(0.01)).min(0.0) } else { thr - 6.0 + 3.0 * (h.t() * 1.3).sin() };
+    // The ball sits at the real input level: the measured output peak plus the reduction, minus make-up
+    // (in a mixer window); only the gallery, which has no signal, lets it sway as a demo.
+    let x_in = match out_level(p.ctx(), h) {
+        Some((_, _, pk)) => (gain_to_db_ui(pk) + h.gr - h.v("makeup")).clamp(lo, 0.0),
+        None if h.gr > 0.05 => (thr + h.gr * ratio / (ratio - 1.0).max(0.01)).min(0.0),
+        None => thr - 6.0 + 3.0 * (h.t() * 1.3).sin(),
+    };
     let ball = Pos2::new(to_x(x_in), to_y(curve(x_in)));
     p.circle_filled(ball, 8.0, col.gamma_multiply(0.3));
     p.circle_filled(ball, 4.5, Color32::WHITE);
@@ -1348,8 +1359,23 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let pts: Vec<Pos2> = (0..=120).map(|k| -1.0 + 2.0 * k as f32 / 120.0).map(|x| Pos2::new(ax(x), ay(shape(x).clamp(-1.0, 1.0)))).collect();
     let p2 = p.with_clip_rect(sq.expand(2.0));
     filled_curve(&p2, &pts, c.y, col);
-    // A dot rides the curve with the test sine.
-    let xin = (h.t() * 2.0).sin() * 0.9;
+    // The dot rides the curve at the real level going in (the measured output peak traced back through
+    // the curve); in the gallery, with no signal, a test sine moves it.
+    let xin = match out_level(p.ctx(), h) {
+        Some((_, _, pk)) => {
+            let (mut a, mut b) = (0.0f32, 1.0f32);
+            for _ in 0..24 {
+                let m = 0.5 * (a + b);
+                if shape(m) < pk {
+                    a = m;
+                } else {
+                    b = m;
+                }
+            }
+            0.5 * (a + b)
+        }
+        None => (h.t() * 2.0).sin() * 0.9,
+    };
     let dot = Pos2::new(ax(xin), ay(shape(xin).clamp(-1.0, 1.0)));
     p.circle_filled(dot, 7.0, col.gamma_multiply(0.3));
     p.circle_filled(dot, 3.5, Color32::WHITE);

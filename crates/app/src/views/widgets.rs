@@ -426,7 +426,7 @@ pub fn snap_floor(beat: f64, grid: f64) -> f64 {
 pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
     use crate::state::Tool;
     ui.spacing_mut().item_spacing.x = 3.0;
-    for (t, icon, key) in Tool::ALL {
+    for (ti, (t, icon, key)) in Tool::ALL.into_iter().enumerate() {
         let (name, what) = t.describe();
         let on = st.ui.tool == t;
         let (r, resp) = ui.allocate_exact_size(Vec2::new(46.0, 38.0), Sense::click());
@@ -443,7 +443,14 @@ pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
             p.rect_stroke(r, 6.0, Stroke::new(1.5_f32, theme::ACCENT_2), egui::StrokeKind::Inside);
         }
         let ink = if on { Color32::BLACK } else { theme::TEXT };
-        p.text(Pos2::new(r.center().x, r.top() + 13.0), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(16.0), ink);
+        // The Higgsfield icon (dark on the lit button), the glyph if the icon set is missing.
+        let ir = Rect::from_center_size(Pos2::new(r.center().x, r.top() + 14.0), Vec2::splat(22.0));
+        if on {
+            p.rect_filled(ir.expand(1.0), 5.0, Color32::from_black_alpha(150));
+        }
+        if !crate::brand::paint_icon(p, ir, crate::brand::icon::DRAW + ti, Color32::WHITE) {
+            p.text(Pos2::new(r.center().x, r.top() + 13.0), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(16.0), ink);
+        }
         p.text(Pos2::new(r.center().x, r.bottom() - 8.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(10.0), if on { Color32::BLACK } else { theme::TEXT_DIM });
         let key = key.rsplit('(').next().unwrap_or("").trim_end_matches(')');
         if resp.on_hover_text(format!("{name} tool  ·  key {key}\n{what}")).clicked() {

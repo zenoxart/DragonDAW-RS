@@ -117,7 +117,7 @@ fn meters(ui: &mut Ui, st: &mut State) {
 type Vertex3 = (f32, f32, f32);
 
 /// The 3D spectrum's starting view (yaw, pitch in radians): from the front left, looking down a little.
-const DEFAULT_VIEW: (f32, f32) = (-0.45, 0.55);
+const DEFAULT_VIEW: (f32, f32) = (-0.35, 0.42);
 
 /// Seconds of history the 3D spectrum shows.
 const HISTORY: f64 = 5.0;
@@ -186,7 +186,7 @@ fn spectrum_3d(ui: &mut Ui, scope: &[f32], rate: f32, animate: bool) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
     let w = ui.available_width().clamp(320.0, 760.0);
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 260.0), egui::Sense::click_and_drag());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 320.0), egui::Sense::click_and_drag());
     // The view turns with a left-drag (yaw across, tilt up/down); a double-click resets it.
     let view_id = egui::Id::new("master.spectrum3d.view");
     let (mut yaw, mut pitch): (f32, f32) = ui.data(|d| d.get_temp(view_id)).unwrap_or(DEFAULT_VIEW);
@@ -209,13 +209,23 @@ fn spectrum_3d(ui: &mut Ui, scope: &[f32], rate: f32, animate: bool) {
     // A real 3D projection: f (0 … 1 across), age (0 = now at the front … 1 = five seconds ago, into the
     // depth), level (0 … 1 up); turned by yaw / pitch and drawn orthographically.
     let (cy, sy, cp, sp) = (yaw.cos(), yaw.sin(), pitch.cos(), pitch.sin());
-    let scale = (rect.width() / 2.0).min(rect.height() / 1.25);
-    let centre = Pos2::new(rect.center().x, rect.center().y + rect.height() * 0.08);
     let rot = move |f: f32, age: f32, lvl: f32| {
-        let (x, y, z) = ((f - 0.5) * 1.6, lvl * 0.7 - 0.2, (age - 0.5) * 1.1);
+        let (x, y, z) = ((f - 0.5) * 2.4, lvl * 0.6 - 0.3, (age - 0.5) * 1.0);
         let (x1, z1) = (x * cy + z * sy, -x * sy + z * cy);
         (x1, y * cp + z1 * sp, z1 * cp - y * sp)
     };
+    // Fit the box (all eight corners, as turned now) into the display, with room for the labels.
+    let (mut x0, mut x1, mut u0, mut u1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for f in [0.0, 1.0] {
+        for a in [0.0, 1.0] {
+            for l in [0.0, 1.0] {
+                let (x, u, _) = rot(f, a, l);
+                (x0, x1, u0, u1) = (x0.min(x), x1.max(x), u0.min(u), u1.max(u));
+            }
+        }
+    }
+    let scale = ((rect.width() - 90.0) / (x1 - x0).max(0.1)).min((rect.height() - 44.0) / (u1 - u0).max(0.1));
+    let centre = Pos2::new(rect.center().x - (x0 + x1) * 0.5 * scale, rect.center().y + (u0 + u1) * 0.5 * scale);
     let proj = move |f: f32, age: f32, lvl: f32| {
         let (x, up, _) = rot(f, age, lvl);
         Pos2::new(centre.x + x * scale, centre.y - up * scale)
