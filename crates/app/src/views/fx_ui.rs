@@ -134,7 +134,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let finish = super::analog::finish_of(h.def.id);
     let phosphor = super::fx_mod::phosphor(finish);
     super::fx_mod::set_screen(phosphor);
-    let themed = !matches!(h.def.id, "class_a_strip" | "orbit" | "clipper" | "chorus" | "flanger" | "phaser" | "tremolo");
+    let themed = !matches!(h.def.id, "orbit" | "clipper" | "chorus" | "flanger" | "phaser" | "tremolo");
     let col = if !h.enabled {
         theme::TEXT_DIM
     } else if themed {
@@ -175,6 +175,10 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     if !h.enabled {
         p.rect_filled(r, 6.0, Color32::from_black_alpha(110));
         p.text(r.center(), egui::Align2::CENTER_CENTER, "BYPASSED", egui::FontId::proportional(18.0), theme::TEXT_DIM);
+    }
+    // The gnostic units: a sacred-geometry sigil turning slowly behind everything, in gold light.
+    if finish.gnostic() {
+        super::fx_mod::sigil(&p, r, h.t(), phosphor);
     }
     if themed {
         super::fx_mod::crt_glass(&p, r);
@@ -1799,22 +1803,22 @@ fn ns_fader(r: Rect) -> (Rect, Rect) {
 /// compressor's cell glowing with its gain reduction above a moving-coil GR meter.
 fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::dsp::{Biquad, BiquadKind};
-    p.rect_filled(r, 8.0, Color32::from_rgb(0x3a, 0x44, 0x52));
+    super::fx_mod::screen(p, r, 8.0);
     p.rect_stroke(r.shrink(3.0), 6.0, Stroke::new(1.0_f32, Color32::from_white_alpha(30)), egui::StrokeKind::Inside);
     // ---- noise suppressor (NS1 style: one fader)
     let (track, nsr) = ns_fader(r);
-    p.rect_filled(nsr, 6.0, Color32::from_rgb(0x2b, 0x32, 0x3d));
-    p.text(Pos2::new(nsr.center().x, nsr.top() + 6.0), egui::Align2::CENTER_TOP, "NS", egui::FontId::proportional(11.0), Color32::from_rgb(0x9f, 0xe0, 0x8a));
+    p.rect_filled(nsr, 6.0, Color32::from_black_alpha(120));
+    p.text(Pos2::new(nsr.center().x, nsr.top() + 6.0), egui::Align2::CENTER_TOP, "NS", egui::FontId::proportional(11.0), Color32::from_rgb(0xff, 0xd2, 0x7a));
     let ns = h.v("ns");
     let red = h.tele.get(4).copied().unwrap_or(0.0);
     // Lamp: lights with the suppression happening right now.
     let lamp = Pos2::new(nsr.center().x, nsr.top() + 28.0);
     let lit = (red / 20.0).clamp(0.0, 1.0);
-    p.circle_filled(lamp, 7.0, Color32::from_rgb(0x9f, 0xe0, 0x8a).gamma_multiply(0.12 * lit));
-    p.circle_filled(lamp, 4.0, Color32::from_rgb(0x9f, 0xe0, 0x8a).gamma_multiply(0.2 + 0.8 * lit));
+    p.circle_filled(lamp, 7.0, Color32::from_rgb(0xff, 0xd2, 0x7a).gamma_multiply(0.12 * lit));
+    p.circle_filled(lamp, 4.0, Color32::from_rgb(0xff, 0xd2, 0x7a).gamma_multiply(0.2 + 0.8 * lit));
     p.rect_filled(track, 3.0, Color32::from_rgb(0x14, 0x17, 0x1c));
     let fill = Rect::from_min_max(Pos2::new(track.left(), track.bottom() - track.height() * ns / 100.0), track.max);
-    p.rect_filled(fill, 3.0, Color32::from_rgb(0x9f, 0xe0, 0x8a).gamma_multiply(0.7));
+    p.rect_filled(fill, 3.0, Color32::from_rgb(0xff, 0xd2, 0x7a).gamma_multiply(0.7));
     for k in 0..=10 {
         let y = track.bottom() - track.height() * k as f32 / 10.0;
         let w = if k % 5 == 0 { 9.0 } else { 5.0 };
@@ -1837,8 +1841,8 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let sec = |k: usize| Rect::from_min_size(Pos2::new(r.left() + 10.0 + k as f32 * (w3 + 10.0), r.top() + 10.0), Vec2::new(w3, r.height() - 20.0));
     // ---- preamp
     let pr = sec(0);
-    p.rect_filled(pr, 6.0, Color32::from_rgb(0x2b, 0x32, 0x3d));
-    p.text(pr.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, "PREAMP", egui::FontId::proportional(10.0), Color32::from_rgb(0xe8, 0x5a, 0x4f));
+    p.rect_filled(pr, 6.0, Color32::from_black_alpha(120));
+    p.text(pr.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, "PREAMP", egui::FontId::proportional(10.0), Color32::from_rgb(0xe2, 0xc0, 0x76));
     let drive = h.v("drive");
     let c = Pos2::new(pr.center().x, pr.center().y + 4.0);
     let rad = (pr.width().min(pr.height()) * 0.32).max(20.0);
@@ -1850,9 +1854,9 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.line_segment([Pos2::new(c.x + (rad + 4.0) * a.cos(), c.y + (rad + 4.0) * a.sin()), Pos2::new(c.x + (rad + 9.0) * a.cos(), c.y + (rad + 9.0) * a.sin())], Stroke::new(1.0_f32, Color32::from_white_alpha(120)));
     }
     let nd = drive / 30.0;
-    p.add(Shape::line(arc(a0, a0 + sweep * nd, rad + 1.0), Stroke::new(3.0_f32, Color32::from_rgb(0xe8, 0x5a, 0x4f))));
-    p.circle_filled(c, rad - 4.0, Color32::from_rgb(0xc8, 0x3a, 0x30));
-    p.circle_stroke(c, rad - 4.0, Stroke::new(2.0_f32, Color32::from_rgb(0x8a, 0x24, 0x1d)));
+    p.add(Shape::line(arc(a0, a0 + sweep * nd, rad + 1.0), Stroke::new(3.0_f32, Color32::from_rgb(0xe2, 0xc0, 0x76))));
+    p.circle_filled(c, rad - 4.0, Color32::from_rgb(0x2e, 0x24, 0x16));
+    p.circle_stroke(c, rad - 4.0, Stroke::new(2.0_f32, Color32::from_rgb(0x8c, 0x6c, 0x30)));
     let a = a0 + sweep * nd;
     p.line_segment([c, Pos2::new(c.x + (rad - 6.0) * a.cos(), c.y + (rad - 6.0) * a.sin())], Stroke::new(2.5_f32, Color32::WHITE));
     // Transformer glow with level.
@@ -1861,8 +1865,8 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(pr.center().x, pr.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("drive {drive:+.0} dB"), egui::FontId::proportional(10.0), theme::TEXT);
     // ---- EQ curve
     let er = sec(1);
-    p.rect_filled(er, 6.0, Color32::from_rgb(0x2b, 0x32, 0x3d));
-    p.text(er.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, if h.v("eq_on") > 0.5 { "EQ" } else { "EQ (out)" }, egui::FontId::proportional(10.0), Color32::from_rgb(0x6c, 0xb4, 0xee));
+    p.rect_filled(er, 6.0, Color32::from_black_alpha(120));
+    p.text(er.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, if h.v("eq_on") > 0.5 { "EQ" } else { "EQ (out)" }, egui::FontId::proportional(10.0), Color32::from_rgb(0xe2, 0xc0, 0x76));
     let plot_r = er.shrink2(Vec2::new(8.0, 20.0)).translate(Vec2::new(0.0, 6.0));
     let rate = 48000.0;
     let hpf = [0.0f32, 50.0, 80.0, 160.0, 300.0][(h.v("hpf").round() as usize).min(4)];
@@ -1881,10 +1885,10 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let y_of = |db: f32| plot_r.center().y - db.clamp(-20.0, 20.0) / 20.0 * plot_r.height() * 0.5;
     p.line_segment([Pos2::new(plot_r.left(), plot_r.center().y), Pos2::new(plot_r.right(), plot_r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
     let pts: Vec<Pos2> = (0..=100).map(|k| plot_r.left() + plot_r.width() * k as f32 / 100.0).map(|x| Pos2::new(x, y_of(fs.iter().map(|b| b.response_db(freq_at(plot_r, x), rate)).sum()))).collect();
-    filled_curve(p, &pts, plot_r.center().y, Color32::from_rgb(0x6c, 0xb4, 0xee));
+    filled_curve(p, &pts, plot_r.center().y, Color32::from_rgb(0xe2, 0xc0, 0x76));
     // ---- opto compressor
     let cr = sec(2);
-    p.rect_filled(cr, 6.0, Color32::from_rgb(0x2b, 0x32, 0x3d));
+    p.rect_filled(cr, 6.0, Color32::from_black_alpha(120));
     p.text(cr.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, if h.v("comp_on") > 0.5 { "OPTO COMP" } else { "OPTO COMP (out)" }, egui::FontId::proportional(10.0), col);
     // The cell's lamp brightens with gain reduction.
     let lamp = Pos2::new(cr.right() - 18.0, cr.top() + 14.0);
@@ -1894,18 +1898,18 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     }
     p.circle_filled(lamp, 4.5, Color32::from_rgb(0xff, 0xe0, 0x90).gamma_multiply(0.25 + 0.75 * gl));
     let vu = Rect::from_min_max(Pos2::new(cr.left() + 10.0, cr.top() + 30.0), Pos2::new(cr.right() - 10.0, cr.bottom() - 26.0));
-    p.rect_filled(vu, 5.0, Color32::from_rgb(0xf2, 0xe6, 0xc4));
+    p.rect_filled(vu, 5.0, Color32::from_rgb(0x16, 0x11, 0x0b));
     let pivot = Pos2::new(vu.center().x, vu.bottom() - 6.0);
     let rr = (vu.height() - 12.0).min(vu.width() * 0.55);
     for db in [0.0f32, 2.0, 4.0, 6.0, 10.0, 15.0, 20.0] {
         let a = -std::f32::consts::FRAC_PI_2 + 0.75 - 1.5 * (db / 20.0);
         p.line_segment(
             [Pos2::new(pivot.x + (rr - 6.0) * a.cos(), pivot.y + (rr - 6.0) * a.sin()), Pos2::new(pivot.x + rr * a.cos(), pivot.y + rr * a.sin())],
-            Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xb0, 0x30, 0x30) } else { Color32::from_gray(40) }),
+            Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xb0, 0x30, 0x30) } else { Color32::from_rgb(0xe2, 0xc0, 0x76) }),
         );
     }
     let a = -std::f32::consts::FRAC_PI_2 + 0.75 - 1.5 * (gr.clamp(0.0, 20.0) / 20.0);
-    p.line_segment([pivot, Pos2::new(pivot.x + (rr - 3.0) * a.cos(), pivot.y + (rr - 3.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_gray(25)));
+    p.line_segment([pivot, Pos2::new(pivot.x + (rr - 3.0) * a.cos(), pivot.y + (rr - 3.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_rgb(0xff, 0xe0, 0xa0)));
     p.text(Pos2::new(cr.center().x, cr.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("GR {gr:.1} dB · {:.1}:1 · out {:.0} dB", h.v("ratio"), gain_to_db_ui(pout)), egui::FontId::proportional(10.0), theme::TEXT);
 }
 
@@ -1929,7 +1933,7 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     // Orion-style meters: peak bar, RMS line and a target zone (−12 … −8 dB RMS) for gain staging.
     let meter = |x: f32, peak: f32, rms: f32, label: &str| {
         let mr = Rect::from_min_max(Pos2::new(x - 9.0, r.top() + 22.0), Pos2::new(x + 9.0, r.bottom() - 22.0));
-        p.rect_filled(mr, 4.0, Color32::from_white_alpha(10));
+        super::fx_mod::inset(p, mr, 4.0);
         let y = |db: f32| mr.bottom() - ((db + 36.0) / 36.0).clamp(0.0, 1.0) * mr.height();
         p.rect_filled(Rect::from_min_max(Pos2::new(mr.left(), y(-12.0)), Pos2::new(mr.right(), y(-8.0))), 0.0, theme::OK.gamma_multiply(0.25));
         let pk = gain_to_db_ui(peak);
@@ -1978,7 +1982,7 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         let bw = (area.width() - 12.0) / items.len() as f32;
         for (k, (name, v, max)) in items.iter().enumerate() {
             let br = Rect::from_min_max(Pos2::new(area.left() + 6.0 + k as f32 * bw + 3.0, area.top() + 16.0), Pos2::new(area.left() + 6.0 + (k + 1) as f32 * bw - 3.0, area.bottom() - 14.0));
-            p.rect_filled(br, 3.0, Color32::from_white_alpha(10));
+            super::fx_mod::inset(p, br, 3.0);
             let f = (v / max).clamp(0.0, 1.0);
             p.rect_filled(Rect::from_min_max(Pos2::new(br.left(), br.bottom() - br.height() * f), br.max), 3.0, col.gamma_multiply(0.5 + 0.5 * f));
             p.text(Pos2::new(br.center().x, area.bottom() - 2.0), egui::Align2::CENTER_BOTTOM, name, egui::FontId::proportional(8.0), theme::TEXT_DIM);
@@ -2437,8 +2441,8 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(vx, r.bottom() - 8.0), egui::Align2::CENTER_BOTTOM, if tube_on { "TUBE IN" } else { "TUBE OUT" }, egui::FontId::proportional(9.5), if tube_on { heat } else { theme::TEXT_DIM });
     // ---- two VU meters
     let vu = |rect: Rect, gr: f32, label: &str| {
-        p.rect_filled(rect, 6.0, Color32::from_rgb(0xec, 0xe2, 0xc6));
-        p.rect_stroke(rect, 6.0, Stroke::new(2.0_f32, Color32::from_gray(40)), egui::StrokeKind::Inside);
+        p.rect_filled(rect, 6.0, Color32::from_rgb(0x0c, 0x0e, 0x2a));
+        p.rect_stroke(rect, 6.0, Stroke::new(2.0_f32, Color32::from_rgb(0x8c, 0x6c, 0x30)), egui::StrokeKind::Inside);
         let pivot = Pos2::new(rect.center().x, rect.bottom() - 8.0);
         let rad = rect.height() - 22.0;
         let ang = |db: f32| -std::f32::consts::FRAC_PI_2 - 0.9 * (db.clamp(0.0, 20.0) / 20.0) + 0.0;
@@ -2447,13 +2451,19 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             let a = ang(db) + 0.45;
             let o = Pos2::new(pivot.x + rad * a.cos(), pivot.y + rad * a.sin());
             let i = Pos2::new(pivot.x + (rad - 7.0) * a.cos(), pivot.y + (rad - 7.0) * a.sin());
-            p.line_segment([i, o], Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xc0, 0x30, 0x30) } else { Color32::from_gray(40) }));
-            p.text(Pos2::new(pivot.x + (rad + 7.0) * a.cos(), pivot.y + (rad + 7.0) * a.sin()), egui::Align2::CENTER_CENTER, format!("{}", -(db as i32)), egui::FontId::proportional(8.0), Color32::from_gray(50));
+            p.line_segment([i, o], Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xc0, 0x30, 0x30) } else { Color32::from_rgb(0xb4, 0xc4, 0xff) }));
+            p.text(
+                Pos2::new(pivot.x + (rad + 7.0) * a.cos(), pivot.y + (rad + 7.0) * a.sin()),
+                egui::Align2::CENTER_CENTER,
+                format!("{}", -(db as i32)),
+                egui::FontId::proportional(8.0),
+                Color32::from_rgb(0xb4, 0xc4, 0xff),
+            );
         }
         let a = ang(gr) + 0.45;
-        p.line_segment([pivot, Pos2::new(pivot.x + (rad - 2.0) * a.cos(), pivot.y + (rad - 2.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_rgb(0x20, 0x20, 0x20)));
-        p.circle_filled(pivot, 4.0, Color32::from_gray(30));
-        p.text(Pos2::new(rect.center().x, rect.bottom() - 18.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), Color32::from_gray(60));
+        p.line_segment([pivot, Pos2::new(pivot.x + (rad - 2.0) * a.cos(), pivot.y + (rad - 2.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_rgb(0xe2, 0xc0, 0x76)));
+        p.circle_filled(pivot, 4.0, Color32::from_rgb(0xe2, 0xc0, 0x76));
+        p.text(Pos2::new(rect.center().x, rect.bottom() - 18.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), Color32::from_rgb(0xb4, 0xc4, 0xff));
     };
     let mw = ((r.width() - 120.0) * 0.28).clamp(90.0, 170.0);
     let m1 = Rect::from_min_size(Pos2::new(vx + 46.0, r.top() + 12.0), Vec2::new(mw, (r.height() - 24.0) * 0.62));
@@ -2466,7 +2476,7 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let bw = ((r.right() - 12.0 - bx0) / bars.len() as f32).max(18.0);
     for (k, (name, gr)) in bars.iter().enumerate() {
         let br = Rect::from_min_size(Pos2::new(bx0 + k as f32 * bw + 3.0, r.top() + 22.0), Vec2::new(bw - 10.0, r.height() - 66.0));
-        p.rect_filled(br, 3.0, Color32::from_white_alpha(10));
+        super::fx_mod::inset(p, br, 3.0);
         let f = (gr / 12.0).clamp(0.0, 1.0);
         p.rect_filled(Rect::from_min_max(br.min, Pos2::new(br.right(), br.top() + br.height() * f)), 3.0, col);
         p.text(Pos2::new(br.center().x, br.bottom() + 4.0), egui::Align2::CENTER_TOP, name.replace(' ', "\n"), egui::FontId::proportional(8.0), theme::TEXT_DIM);

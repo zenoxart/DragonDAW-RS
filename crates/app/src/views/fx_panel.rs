@@ -24,6 +24,8 @@ pub enum KnobStyle {
     Chicken,
     /// Cream cap with a red line (valve gear).
     Cream,
+    /// Engraved brass (the gnostic units).
+    Brass,
 }
 
 #[derive(Clone, Copy)]
@@ -454,7 +456,7 @@ pub fn draw_knob(p: &egui::Painter, c: Pos2, rad: f32, n: f32, style: KnobStyle,
         };
         p.circle_filled(c + Vec2::new(1.0, size * 0.18), size * 0.9, Color32::from_black_alpha(70));
         p.circle_filled(c + Vec2::new(0.5, size * 0.08), size * 0.95, Color32::from_black_alpha(60));
-        super::analog::rotated(p, &cap, c, size, ang + PI / 2.0, Color32::WHITE);
+        super::analog::rotated(p, &cap, c, size, ang + PI / 2.0, if style == KnobStyle::Brass { Color32::from_rgb(0xf0, 0xcc, 0x84) } else { Color32::WHITE });
         return;
     }
     match style {
@@ -467,7 +469,7 @@ pub fn draw_knob(p: &egui::Painter, c: Pos2, rad: f32, n: f32, style: KnobStyle,
             p.circle_stroke(c, rad - 6.0, Stroke::new(1.0_f32, Color32::from_white_alpha(22)));
             p.line_segment([pt(ang, rad * 0.25), pt(ang, rad - 9.0)], Stroke::new(2.0_f32, Color32::WHITE));
         }
-        KnobStyle::Metal => {
+        KnobStyle::Metal | KnobStyle::Brass => {
             for t in 0..=10 {
                 let a = a0 + sweep * t as f32 / 10.0;
                 p.line_segment([pt(a, rad + 1.0), pt(a, rad + if t % 5 == 0 { 5.0 } else { 3.0 })], Stroke::new(1.0_f32, Color32::from_white_alpha(110)));
@@ -823,7 +825,8 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                 if dim {
                     ui.multiply_opacity(0.4);
                 }
-                egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).stroke(Stroke::new(1.0_f32, Color32::from_black_alpha(90))).show(ui, |ui| {
+                let edge = if skin.knob == KnobStyle::Brass { Color32::from_rgba_unmultiplied(0xe2, 0xc0, 0x76, 70) } else { Color32::from_black_alpha(90) };
+                egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).stroke(Stroke::new(1.0_f32, edge)).show(ui, |ui| {
                     ui.set_width(inner);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(s.title.to_uppercase()).size(10.0).strong().color(if accent == main_accent { skin.ink } else { accent }));

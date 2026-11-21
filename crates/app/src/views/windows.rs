@@ -510,7 +510,11 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let dev = egui::Frame::NONE.inner_margin(egui::Margin { left: 14 + ear, right: 14 + ear, top: 8, bottom: 14 }).show(ui, |ui| {
         super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: ins.enabled, gr, level, time, key: egui::Id::new(("fx.unit", m, i)) });
         ui.add_space(6.0);
-        let bezel = egui::Frame::NONE.fill(egui::Color32::from_rgb(0x08, 0x09, 0x0b)).corner_radius(7.0).inner_margin(egui::Margin::same(3)).stroke(egui::Stroke::new(2.0_f32, shade(face, 0.55)));
+        let bezel = egui::Frame::NONE.fill(egui::Color32::from_rgb(0x08, 0x09, 0x0b)).corner_radius(7.0).inner_margin(egui::Margin::same(3)).stroke(if finish.gnostic() {
+            egui::Stroke::new(2.0_f32, super::analog::GNOSTIC_GOLD.gamma_multiply(0.75))
+        } else {
+            egui::Stroke::new(2.0_f32, shade(face, 0.55))
+        });
         let (edits, _) =
             bezel.show(ui, |ui| super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) })).inner;
         ui.add_space(8.0);

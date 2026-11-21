@@ -17,8 +17,6 @@ pub enum Finish {
     Aluminium,
     /// Black anodised (dynamics): white ink, aluminium knobs.
     Black,
-    /// Blue-grey console enamel (channel strip, drum bus): chicken-head knobs.
-    Console,
     /// Cream valve enamel (saturation, shape-shifting): black ink, chicken-head knobs.
     Cream,
     /// Brushed gold (the soft clipper).
@@ -27,8 +25,16 @@ pub enum Finish {
     Oxblood,
     /// Verdigris hammertone (space: reverb, delay).
     Verdigris,
-    /// Dark copper (crushers, mastering, voice): gunmetal knobs.
+    /// Dark copper (crushers): gunmetal knobs.
     Copper,
+    /// Carved basalt with runes (Golem Strip): the gnostic units, gold-engraved, brass knobs.
+    Basalt,
+    /// Blackened forged iron with ember cracks (Dragonforge).
+    Forged,
+    /// Lapis lazuli with gold stars (Purify).
+    Lapis,
+    /// Black obsidian with a gold diagram (Philosopher's Stone).
+    Obsidian,
 }
 
 impl Finish {
@@ -37,12 +43,15 @@ impl Finish {
         match self {
             Finish::Aluminium => Color32::from_rgb(0xb4, 0xb6, 0xb8),
             Finish::Black => Color32::from_rgb(0x1c, 0x1d, 0x20),
-            Finish::Console => Color32::from_rgb(0x4a, 0x5a, 0x6c),
             Finish::Cream => Color32::from_rgb(0xd9, 0xcc, 0xae),
             Finish::Gold => Color32::from_rgb(0xa8, 0x86, 0x48),
             Finish::Oxblood => Color32::from_rgb(0x5a, 0x1c, 0x1e),
             Finish::Verdigris => Color32::from_rgb(0x2c, 0x4a, 0x44),
             Finish::Copper => Color32::from_rgb(0x4a, 0x2e, 0x24),
+            Finish::Basalt => Color32::from_rgb(0x2a, 0x28, 0x26),
+            Finish::Forged => Color32::from_rgb(0x34, 0x32, 0x33),
+            Finish::Lapis => Color32::from_rgb(0x1a, 0x1e, 0x6a),
+            Finish::Obsidian => Color32::from_rgb(0x0a, 0x0a, 0x0c),
         }
     }
 
@@ -59,7 +68,8 @@ impl Finish {
             Finish::Oxblood => Color32::from_rgb(0xf1, 0xe4, 0xc8),
             Finish::Verdigris => Color32::from_rgb(0xe6, 0xe0, 0xc8),
             Finish::Copper => Color32::from_rgb(0xf0, 0xc8, 0x98),
-            Finish::Black | Finish::Console => Color32::from_rgb(0xee, 0xee, 0xea),
+            Finish::Black => Color32::from_rgb(0xee, 0xee, 0xea),
+            Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => GNOSTIC_GOLD,
         }
     }
 
@@ -77,6 +87,23 @@ impl Finish {
     pub fn accent(self) -> Option<Color32> {
         match self {
             Finish::Oxblood => Some(Color32::from_rgb(0xf2, 0xa6, 0x4a)),
+            f if f.gnostic() => Some(GNOSTIC_GOLD),
+            _ => None,
+        }
+    }
+
+    /// The heavy, esoteric units: stone, iron, lapis and obsidian, inlaid with gold.
+    pub fn gnostic(self) -> bool {
+        matches!(self, Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian)
+    }
+
+    /// The alchemical motto engraved on a gnostic unit.
+    pub fn motto(self) -> Option<&'static str> {
+        match self {
+            Finish::Basalt => Some("EMETH  ·  TRUTH GIVES THE CLAY ITS LIFE"),
+            Finish::Forged => Some("IGNE NATURA RENOVATUR INTEGRA"),
+            Finish::Lapis => Some("LUX IN TENEBRIS LUCET"),
+            Finish::Obsidian => Some("SOLVE ET COAGULA  ·  V.I.T.R.I.O.L."),
             _ => None,
         }
     }
@@ -85,8 +112,9 @@ impl Finish {
         match self {
             Finish::Aluminium | Finish::Gold | Finish::Copper => KnobStyle::Ring,
             Finish::Black | Finish::Verdigris => KnobStyle::Metal,
-            Finish::Console | Finish::Cream => KnobStyle::Chicken,
+            Finish::Cream => KnobStyle::Chicken,
             Finish::Oxblood => KnobStyle::Cream,
+            Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => KnobStyle::Brass,
         }
     }
 
@@ -96,12 +124,18 @@ impl Finish {
     }
 }
 
+/// The gold of the gnostic units' engraving.
+pub const GNOSTIC_GOLD: Color32 = Color32::from_rgb(0xe2, 0xc0, 0x76);
+
 /// The finish of a stock effect.
 pub fn finish_of(id: &str) -> Finish {
     match id {
         "eq" | "filter" | "utility" | "imager" | "tune" => Finish::Aluminium,
         "compressor" | "limiter" | "gate" | "deesser" | "transient" | "multiband" => Finish::Black,
-        "class_a_strip" | "drum_bus" => Finish::Console,
+        "class_a_strip" => Finish::Basalt,
+        "drum_bus" => Finish::Forged,
+        "clean_voice" => Finish::Lapis,
+        "dragon_particle" => Finish::Obsidian,
         "saturator" | "multisat" | "alter" => Finish::Cream,
         "clipper" => Finish::Gold,
         "chorus" | "flanger" | "phaser" | "tremolo" | "orbit" => Finish::Oxblood,
@@ -135,12 +169,15 @@ mod plates {
         Some(match f {
             Finish::Aluminium => ("fx-plate-aluminium", include_bytes!("../../assets/fx/plate_aluminium.jpg")),
             Finish::Black => ("fx-plate-black", include_bytes!("../../assets/fx/plate_black.jpg")),
-            Finish::Console => ("fx-plate-console", include_bytes!("../../assets/fx/plate_console.jpg")),
             Finish::Cream => ("fx-plate-cream", include_bytes!("../../assets/fx/plate_cream.jpg")),
             Finish::Gold => ("fx-plate-gold", include_bytes!("../../assets/fx/plate_gold.jpg")),
             Finish::Oxblood => ("fx-plate-oxblood", include_bytes!("../../assets/fx/plate_oxblood.jpg")),
             Finish::Verdigris => ("fx-plate-verdigris", include_bytes!("../../assets/fx/plate_verdigris.jpg")),
             Finish::Copper => ("fx-plate-copper", include_bytes!("../../assets/fx/plate_copper.jpg")),
+            Finish::Basalt => ("fx-plate-basalt", include_bytes!("../../assets/fx/plate_basalt.jpg")),
+            Finish::Forged => ("fx-plate-forged", include_bytes!("../../assets/fx/plate_forged.jpg")),
+            Finish::Lapis => ("fx-plate-lapis", include_bytes!("../../assets/fx/plate_lapis.jpg")),
+            Finish::Obsidian => ("fx-plate-obsidian", include_bytes!("../../assets/fx/plate_obsidian.jpg")),
         })
     }
 }
@@ -152,6 +189,7 @@ const KNOB_GUNMETAL: &[u8] = include_bytes!("../../assets/fx/knob_gunmetal.png")
 const SCREW: &[u8] = include_bytes!("../../assets/fx/screw.png");
 const LAMP: &[u8] = include_bytes!("../../assets/fx/lamp.png");
 const TUBE: &[u8] = include_bytes!("../../assets/fx/tube.png");
+const CORNER: &[u8] = include_bytes!("../../assets/fx/corner.png");
 const VU_FACE: &[u8] = include_bytes!("../../assets/fx/vu_face.jpg");
 
 /// A colour that adds light (premultiplied with zero alpha: additive blending).
@@ -167,7 +205,7 @@ fn tex(ctx: &egui::Context, name: &'static str, bytes: &[u8]) -> Option<TextureH
 /// The photographed cap of a knob style (pointer straight up).
 pub fn knob_cap(ctx: &egui::Context, style: KnobStyle) -> Option<TextureHandle> {
     match style {
-        KnobStyle::Metal => tex(ctx, "fx-knob-metal", KNOB_METAL),
+        KnobStyle::Metal | KnobStyle::Brass => tex(ctx, "fx-knob-metal", KNOB_METAL),
         KnobStyle::Chicken => tex(ctx, "fx-knob-chicken", KNOB_CHICKEN),
         KnobStyle::Cream => tex(ctx, "fx-knob-cream", KNOB_CREAM),
         KnobStyle::Ring => tex(ctx, "fx-knob-gunmetal", KNOB_GUNMETAL),
@@ -256,6 +294,23 @@ pub fn faceplate(ctx: &egui::Context, r: Rect, f: Finish) -> Vec<Shape> {
             y += 2.0;
         }
     }
+    // The gnostic units: a heavy vignette, a double gold inlay and filigree in the corners.
+    if f.gnostic() {
+        for k in 0..10 {
+            out.push(Shape::rect_stroke(body.shrink(k as f32 * 3.0), egui::CornerRadius::same(2), Stroke::new(3.0_f32, Color32::from_black_alpha(70 - k * 7)), egui::StrokeKind::Inside));
+        }
+        let gold = |a: u8| Color32::from_rgba_unmultiplied(GNOSTIC_GOLD.r(), GNOSTIC_GOLD.g(), GNOSTIC_GOLD.b(), a);
+        out.push(Shape::rect_stroke(body.shrink(7.0), egui::CornerRadius::same(3), Stroke::new(1.5_f32, gold(150)), egui::StrokeKind::Inside));
+        out.push(Shape::rect_stroke(body.shrink(11.0), egui::CornerRadius::same(3), Stroke::new(0.8_f32, gold(90)), egui::StrokeKind::Inside));
+        if let Some(t) = tex(ctx, "fx-corner", CORNER) {
+            let s = 58.0_f32.min(body.height() * 0.2);
+            let at = |x: f32, y: f32| Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s));
+            let (l, rr, tp, b) = (body.left() + 3.0, body.right() - 3.0 - s, body.top() + 3.0, body.bottom() - 3.0 - s);
+            for (rect, u0, v0, u1, v1) in [(at(l, tp), 0.0, 0.0, 1.0, 1.0), (at(rr, tp), 1.0, 0.0, 0.0, 1.0), (at(l, b), 0.0, 1.0, 1.0, 0.0), (at(rr, b), 1.0, 1.0, 0.0, 0.0)] {
+                out.push(Shape::image(t.id(), rect, Rect::from_min_max(Pos2::new(u0, v0), Pos2::new(u1, v1)), Color32::WHITE));
+            }
+        }
+    }
     // Bevel: lit top edge, shadowed bottom edge.
     out.push(Shape::line_segment([body.left_top() + Vec2::new(1.0, 0.5), body.right_top() + Vec2::new(-1.0, 0.5)], Stroke::new(1.5_f32, Color32::from_white_alpha(if f.light() { 120 } else { 45 }))));
     out.push(Shape::line_segment([body.left_bottom() + Vec2::new(1.0, -0.5), body.right_bottom() + Vec2::new(-1.0, -0.5)], Stroke::new(2.0_f32, Color32::from_black_alpha(140))));
@@ -321,15 +376,19 @@ pub fn spring(ctx: &egui::Context, id: egui::Id, target: f32, hz: f32, damping: 
 
 /// A moving-coil VU meter in `r`: backlit face, scale −20 … +3, red zone, the needle at `pos` (0 = rest
 /// at −20, 1 = +3) and the meter's caption. `glow` lights the face (0 = off).
-pub fn vu(p: &egui::Painter, r: Rect, pos: f32, caption: &str, reduction: bool, glow: f32) {
+pub fn vu(p: &egui::Painter, r: Rect, pos: f32, caption: &str, reduction: bool, glow: f32, night: bool) {
     // Bezel and glass.
     p.rect_filled(r.expand(3.0), egui::CornerRadius::same(5), Color32::from_rgb(0x0b, 0x0b, 0x0c));
     p.rect_stroke(r.expand(3.0), egui::CornerRadius::same(5), Stroke::new(1.0_f32, Color32::from_white_alpha(40)), egui::StrokeKind::Outside);
     let lit = 0.55 + 0.45 * glow.clamp(0.0, 1.0);
     let face = Color32::from_rgb((0xf2 as f32 * lit) as u8, (0xd9 as f32 * lit) as u8, (0x9c as f32 * lit) as u8);
     p.rect_filled(r, egui::CornerRadius::same(3), face);
-    // The backlit paper of the dial (photographed), dimmer while the unit is off.
-    if let Some(t) = tex(p.ctx(), "fx-vu-face", VU_FACE) {
+    // The backlit paper of the dial (photographed), dimmer while the unit is off; the gnostic units'
+    // meters are black glass lit gold from behind.
+    if night {
+        p.rect_filled(r, egui::CornerRadius::same(3), Color32::from_rgb(0x0e, 0x0b, 0x07));
+        super::fx_mod::halo(&p.with_clip_rect(r), Pos2::new(r.center().x, r.bottom()), r.width() * 0.7, GNOSTIC_GOLD, 0.18 * lit);
+    } else if let Some(t) = tex(p.ctx(), "fx-vu-face", VU_FACE) {
         let g = (lit * 255.0) as u8;
         p.add(Shape::image(t.id(), r, Rect::from_min_max(Pos2::new(0.04, 0.06), Pos2::new(0.96, 0.94)), Color32::from_rgb(g, g, g)));
     }
@@ -338,8 +397,8 @@ pub fn vu(p: &egui::Painter, r: Rect, pos: f32, caption: &str, reduction: bool, 
         let rr = r.shrink(k as f32 * 2.0);
         p.rect_stroke(rr, egui::CornerRadius::same(3), Stroke::new(2.0_f32, Color32::from_black_alpha(26 - k * 4)), egui::StrokeKind::Inside);
     }
-    let ink = Color32::from_rgb(0x22, 0x1a, 0x12);
-    let red = Color32::from_rgb(0xb8, 0x22, 0x1c);
+    let ink = if night { GNOSTIC_GOLD } else { Color32::from_rgb(0x22, 0x1a, 0x12) };
+    let red = if night { Color32::from_rgb(0xff, 0x6a, 0x3a) } else { Color32::from_rgb(0xb8, 0x22, 0x1c) };
     let pivot = Pos2::new(r.center().x, r.bottom() + r.height() * 0.3);
     let rad = r.height() * 1.22;
     let (a0, a1) = (-PI / 2.0 - 0.75, -PI / 2.0 + 0.75);
@@ -378,7 +437,7 @@ pub fn vu(p: &egui::Painter, r: Rect, pos: f32, caption: &str, reduction: bool, 
     let base = at(pos.clamp(-0.03, 1.04), rad * 0.18);
     let clip = p.with_clip_rect(r);
     clip.line_segment([base + Vec2::new(1.5, 2.0), tip + Vec2::new(1.5, 2.0)], Stroke::new(1.4_f32, Color32::from_black_alpha(50)));
-    clip.line_segment([base, tip], Stroke::new(1.3_f32, Color32::from_rgb(0x14, 0x10, 0x0c)));
+    clip.line_segment([base, tip], Stroke::new(1.3_f32, if night { Color32::from_rgb(0xff, 0xe4, 0xa8) } else { Color32::from_rgb(0x14, 0x10, 0x0c) }));
     // The movement's cover at the bottom.
     let cover = Rect::from_min_max(Pos2::new(r.left(), r.bottom() - r.height() * 0.16), r.right_bottom());
     clip.rect_filled(cover, egui::CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 }, Color32::from_rgb(0x1a, 0x17, 0x14));
@@ -515,10 +574,24 @@ pub fn nameplate(ui: &mut egui::Ui, pl: &Plate) {
         None => (pl.name, ""),
     };
     let x = r.left() + 34.0;
-    engraved(&p, Pos2::new(x, r.top() + 10.0), egui::Align2::LEFT_TOP, &name.to_uppercase(), egui::FontId::proportional(22.0), f);
+    if f.gnostic() {
+        // Gold that glows a little, breathing slowly, behind the name.
+        let breath = 0.5 + 0.5 * (t * 0.8).sin();
+        let nw = p.layout_no_wrap(name.to_uppercase(), egui::FontId::proportional(26.0), f.ink()).size().x;
+        super::fx_mod::halo(&p, Pos2::new(x + nw / 2.0, r.top() + 22.0), nw * 0.6 + 20.0, GNOSTIC_GOLD, 0.05 + 0.05 * breath * glow);
+    }
+    let name_size = if f.gnostic() { 26.0 } else { 22.0 };
+    engraved(&p, Pos2::new(x, r.top() + if f.gnostic() { 6.0 } else { 10.0 }), egui::Align2::LEFT_TOP, &name.to_uppercase(), egui::FontId::proportional(name_size), f);
     let sub = if desc.is_empty() { pl.category.to_uppercase() } else { format!("{}  ·  {}", desc.to_uppercase(), pl.category.to_uppercase()) };
     p.text(Pos2::new(x + 1.0, r.top() + 40.0), egui::Align2::LEFT_TOP, sub, egui::FontId::proportional(9.5), f.ink_dim());
-    p.text(Pos2::new(x + 1.0, r.top() + 55.0), egui::Align2::LEFT_TOP, "DRAGON DAW  ·  ALCHEMY SERIES", egui::FontId::proportional(7.5), f.ink_dim().gamma_multiply(0.75));
+    match f.motto() {
+        Some(m) => {
+            p.text(Pos2::new(x + 1.0, r.top() + 54.0), egui::Align2::LEFT_TOP, m, egui::FontId::proportional(8.5), GNOSTIC_GOLD.gamma_multiply(0.8));
+        }
+        None => {
+            p.text(Pos2::new(x + 1.0, r.top() + 55.0), egui::Align2::LEFT_TOP, "DRAGON DAW  ·  ALCHEMY SERIES", egui::FontId::proportional(7.5), f.ink_dim().gamma_multiply(0.75));
+        }
+    }
     let mut moving = m0;
     // Meters on the right.
     let mw = 116.0;
@@ -544,7 +617,7 @@ pub fn nameplate(ui: &mut egui::Ui, pl: &Plate) {
         // A VU movement: about 300 ms to settle, with a little overshoot.
         let (pos, mv) = spring(&ctx, pl.key.with(("vu", k)), target, 1.7, 0.72, motion);
         moving |= mv;
-        vu(&p, mr, pos, caption, is_gr, glow);
+        vu(&p, mr, pos, caption, is_gr, glow, f.gnostic());
         right -= mw + gap;
     }
     // The unit's emblem, alive with what it does.

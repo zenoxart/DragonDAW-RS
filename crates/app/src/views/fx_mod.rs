@@ -11,6 +11,7 @@ use super::fx_ui::Hero;
 use egui::{Color32, Mesh, Pos2, Rect, Shape, Stroke, TextureHandle, Vec2};
 use std::f32::consts::{PI, TAU};
 
+const SIGIL: &[u8] = include_bytes!("../../assets/fx/sigil.jpg");
 const CRT: &[u8] = include_bytes!("../../assets/fx/crt.jpg");
 const MOON: &[u8] = include_bytes!("../../assets/fx/moon.png");
 const WING: &[u8] = include_bytes!("../../assets/fx/wing.png");
@@ -81,11 +82,13 @@ thread_local! {
 }
 
 /// The phosphor colour of a finish's screens: green on the metal units, amber on the valve, console,
-/// gold and copper units, ice blue on the space units.
+/// gold and copper units, ice blue on the space units, pale gold (lapis: starlight) on the gnostic ones.
 pub fn phosphor(f: super::analog::Finish) -> Color32 {
     use super::analog::Finish::*;
     match f {
-        Cream | Console | Gold | Copper => Color32::from_rgb(0xff, 0xb8, 0x4a),
+        Cream | Gold | Copper => Color32::from_rgb(0xff, 0xb8, 0x4a),
+        Basalt | Forged | Obsidian => Color32::from_rgb(0xff, 0xd2, 0x7a),
+        Lapis => Color32::from_rgb(0xb4, 0xc4, 0xff),
         Verdigris => Color32::from_rgb(0x84, 0xe4, 0xff),
         _ => PHOSPHOR,
     }
@@ -112,6 +115,17 @@ pub fn screen(p: &egui::Painter, r: Rect, round: f32) {
     for k in 0..6 {
         p.rect_stroke(r.shrink(k as f32 * 2.0), round, Stroke::new(2.0_f32, Color32::from_black_alpha(60 - k * 10)), egui::StrokeKind::Inside);
     }
+}
+
+/// The gnostic units' sigil, turning slowly in `r` as light of colour `c` (additive: only its gold
+/// lines show).
+pub fn sigil(p: &egui::Painter, r: Rect, t: f32, c: Color32) {
+    let Some(tex) = art(p.ctx(), "fx-sigil", SIGIL) else { return };
+    let k = 0.16 + 0.05 * (t * 0.6).sin();
+    let tint = Color32::from_rgb((c.r() as f32 * 0.55 + 115.0).min(255.0) as u8, (c.g() as f32 * 0.55 + 115.0).min(255.0) as u8, (c.b() as f32 * 0.55 + 115.0).min(255.0) as u8);
+    let rad = r.height() * 0.62;
+    let pc = p.with_clip_rect(r);
+    super::analog::rotated(&pc, &tex, r.center(), rad, t * 0.035, glow(tint, k));
 }
 
 /// A recessed panel on a screen (a graph inside a display).
