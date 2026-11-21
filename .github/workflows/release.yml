@@ -15,9 +15,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Nightly runs queue instead of cancelling each other: a run cancelled between deleting the old
+# nightly and publishing the new one would leave no download at all. GitHub keeps only the newest
+# waiting run, so a burst of pushes still builds just the latest commit after the current one.
 concurrency:
   group: release-${{ github.event_name == 'workflow_run' && 'nightly' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -163,7 +166,29 @@ jobs:
         run: cd dist && sha256sum * > SHA256SUMS.txt
       - name: Replace the nightly release
         run: |
-          gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-          gh release create nightly dist/* --repo "$GITHUB_REPOSITORY" --target "$SHA" --prerelease --latest=false \
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+
+          # Remove every existing `nightly` release, including drafts left behind by an earlier
+          # run (`gh release delete` only finds one), then point the tag at the new commit.
+          gh api "repos/$REPO/releases?per_page=100" --jq '.[] | select(.tag_name == "nightly") | .id' |
+            while read -r id; do echo "Deleting old nightly release $id"; gh api -X DELETE "repos/$REPO/releases/$id"; done
+          gh api -X DELETE "repos/$REPO/git/refs/tags/nightly" >/dev/null 2>&1 || true
+          gh api -X POST "repos/$REPO/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" >/dev/null
+
+          gh release create nightly dist/* --repo "$REPO" --verify-tag --prerelease --latest=false \
             --title "Nightly (main @ ${SHA::7})" \
             --notes "Automatic build of \`main\` at ${SHA} after a green CI run. For testing; use a versioned release for production."
+
+          # `gh release create` uploads into a draft and publishes at the end. That last step has
+          # silently failed before (the nightly stayed a draft = "Not Found" for every visitor),
+          # so check it, publish it ourselves if needed, and fail loudly if it still isn't public.
+          for attempt in 1 2 3 4 5 6; do
+            draft=$(gh release view nightly --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+            if [ "$draft" = false ]; then echo "Nightly ${SHA::7} is published."; exit 0; fi
+            echo "Nightly is not public yet (isDraft=$draft, attempt $attempt); publishing it."
+            gh release edit nightly --repo "$REPO" --draft=false --prerelease --latest=false || true
+            sleep 5
+          done
+          echo "::error::The nightly release is still not public after publishing it 6 times."
+          exit 1
