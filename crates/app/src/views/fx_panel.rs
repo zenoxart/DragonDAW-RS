@@ -319,9 +319,9 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
             skin: STUDIO,
             bands: None,
             sections: vec![
-                sec("Drive", vec![big("amount", "Amount"), k("input", "Input"), p("character", "Character"), k("punch", "Punch"), k("clip", "Clip")]),
+                sec("Drive", vec![p("character", "Character"), big("amount", "Amount"), k("input", "Input"), k("punch", "Punch"), k("clip", "Clip")]),
                 sec("Tone", vec![k("low", "Low"), k("mid", "Mid"), k("high", "High")]),
-                sec("Output", vec![k("width", "Width"), k("ceiling", "Ceiling"), p("auto_gain", "Auto gain")]),
+                sec("Output", vec![p("auto_gain", "Auto gain"), k("width", "Width"), k("ceiling", "Ceiling")]),
             ],
         },
         "tune" => Panel {
@@ -339,34 +339,33 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
             bands: None,
             sections: vec![
                 sec("Leveling", vec![p("tube", "Tube"), big("comp", "Comp"), k("varimu", "Vari-mu")]),
-                sec("De-esser", vec![p("ds_detect", "Detection"), p("ds_band", "Band"), k("ds_thresh", "Threshold"), k("ds_range", "Range")]),
-                sec("Multiband 1", vec![k("mb1_low", "Low mids"), k("mb1_high", "High mids")]),
-                sec("Multiband 2", vec![k("mb2_low", "Low mids"), k("mb2_high", "High mids")]),
-                sec("Finish", vec![k("presence", "Presence"), k("saturation", "Saturation"), k("soothe", "Soothe")]),
+                sec("De-esser", vec![p("ds_detect", "Detection"), p("ds_band", "Band"), big("ds_thresh", "Threshold"), k("ds_range", "Range")]),
+                sec("Multiband I", vec![k("mb1_low", "Low mids"), k("mb1_high", "High mids")]),
+                sec("Multiband II", vec![k("mb2_low", "Low mids"), k("mb2_high", "High mids")]),
+                sec("Finish", vec![big("presence", "Presence"), k("saturation", "Saturation"), k("soothe", "Soothe")]),
             ],
         },
         "class_a_strip" => Panel {
             skin: CONSOLE,
             bands: None,
             sections: vec![
-                sec("NS", vec![fad("ns", "Suppress")]),
+                sec("Gate", vec![fad("ns", "Suppress")]),
                 sec("Preamp", vec![big("drive", "Drive")]),
-                sec("EQ", vec![p("eq_on", "In"), p("hpf", "High-pass"), p("low_freq", "Low freq"), k("low_gain", "Low"), p("mid_freq", "Mid freq"), k("mid_gain", "Mid"), k("high_gain", "High 12k")]),
-                sec("Opto compressor", vec![p("comp_on", "In"), k("threshold", "Threshold"), k("ratio", "Ratio"), p("comp_mode", "Timing"), k("attack", "Attack"), k("release", "Release"), k("comp_gain", "Gain")]),
-                sec("Output", vec![p("order", "Order"), k("output", "Output")]),
+                sec("EQ", vec![p("eq_on", "EQ in"), p("hpf", "High-pass"), k("low_gain", "Low"), k("mid_gain", "Mid"), k("high_gain", "High 12k"), p("low_freq", "Low freq"), p("mid_freq", "Mid freq")]),
+                sec("Opto comp", vec![p("comp_on", "Comp in"), p("comp_mode", "Timing"), k("threshold", "Threshold"), k("ratio", "Ratio"), k("attack", "Attack"), k("release", "Release"), k("comp_gain", "Gain")]),
+                sec("Output", vec![p("order", "Order"), big("output", "Output")]),
             ],
         },
         "drum_bus" => Panel {
             skin: CONSOLE,
             bands: None,
             sections: vec![
-                sec("Input", vec![k("input", "Input")]),
-                sec("Drive", vec![p("colour", "Colour"), big("drive", "Drive"), k("drive_hp", "High-pass")]),
-                sec("Harmonics", vec![k("harmonics", "Amount"), p("focus", "Focus")]),
-                sec("Compression", vec![p("comp_mode", "Mode"), k("comp_mix", "Mix"), k("lift", "Lift")]),
+                sec("Drive", vec![p("colour", "Colour"), big("drive", "Drive"), k("input", "Input"), k("drive_hp", "High-pass")]),
+                sec("Harmonics", vec![p("focus", "Focus"), big("harmonics", "Amount")]),
+                sec("Compression", vec![p("comp_mode", "Mode"), big("comp_mix", "Mix"), k("lift", "Lift")]),
                 sec("Harmonic EQ", vec![fad("heq1", "60"), fad("heq2", "180"), fad("heq3", "900"), fad("heq4", "3.5k"), fad("heq5", "10k")]),
                 sec("Parallels", vec![k("sub", "Sub"), k("low", "Low"), k("loud", "Loud"), k("grit", "Grit")]),
-                sec("Output", vec![k("output", "Output")]),
+                sec("Output", vec![big("output", "Output")]),
             ],
         },
         "alter" => Panel {
@@ -780,6 +779,11 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
     let Some(panel) = panel(def.id, *band) else { return false };
     let skin = panel.skin;
     INK.with(|c| c.set((skin.ink, skin.ink_dim)));
+    if flow(def.id) {
+        flow_layout(ui, &panel, def, params, accent, salt, touch, custom, &mut rects);
+        ui.data_mut(|d| d.insert_temp(salt.with("rects"), rects));
+        return true;
+    }
     // The editor draws the faceplate (skin.face) around the display and this panel: here only the groups,
     // engraved into it.
     egui::Frame::NONE.show(ui, |ui| {
@@ -938,6 +942,218 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
     // Where each control was drawn (for tests and tooling).
     ui.data_mut(|d| d.insert_temp(salt.with("rects"), rects));
     true
+}
+
+// ---------------------------------------------------------------------------------------- flow layout
+
+/// Units laid out as a signal chain: one row of numbered stages, left to right, with arrows between
+/// them. Each stage has the same anatomy: its switches and choices on top, its main control large in
+/// the middle, the other knobs on an even grid below, faders side by side. Stages share the width and
+/// the height of their row.
+fn flow(id: &str) -> bool {
+    matches!(id, "class_a_strip" | "drum_bus" | "clean_voice" | "dragon_particle")
+}
+
+/// The gap between two stages (with the arrow in it).
+const ARROW: f32 = 22.0;
+
+#[allow(clippy::too_many_arguments)]
+fn flow_ctl(
+    ui: &mut Ui,
+    c: &Ctl,
+    def: &EffectDef,
+    params: &BTreeMap<String, f32>,
+    skin: Skin,
+    accent: Color32,
+    salt: egui::Id,
+    touch: &mut dyn FnMut(&mut Ui, Touch),
+    custom: &mut dyn FnMut(&mut Ui, &str),
+    rects: &mut Vec<(String, Rect)>,
+    title: &str,
+) {
+    let (id, label) = match c {
+        Ctl::Custom(name) => {
+            custom(ui, name);
+            return;
+        }
+        Ctl::Bands => return,
+        Ctl::Knob(id, l) | Ctl::Big(id, l) | Ctl::Fader(id, l) | Ctl::Param(id, l) => (id.as_str(), *l),
+    };
+    let label = if label.eq_ignore_ascii_case(title) { "" } else { label };
+    let Some(prm) = def.params.iter().find(|x| x.id == id) else { return };
+    let v = effects::value(def, params, id);
+    let (resp, value) = match (c, prm.kind) {
+        (_, ParamKind::Toggle) => switch_cell(ui, v, label, accent),
+        (_, ParamKind::Choice(names)) => choice_cell(ui, prm, names, v, label, accent, salt),
+        (Ctl::Fader(..), _) => fader_cell(ui, prm, v, label, accent),
+        (c, _) => knob_cell(ui, prm, v, label, skin, accent, matches!(c, Ctl::Big(..))),
+    };
+    rects.push((prm.id.to_string(), resp.rect));
+    touch(ui, Touch { prm, resp, value });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flow_layout(
+    ui: &mut Ui,
+    panel: &Panel,
+    def: &EffectDef,
+    params: &BTreeMap<String, f32>,
+    accent: Color32,
+    salt: egui::Id,
+    touch: &mut dyn FnMut(&mut Ui, Touch),
+    custom: &mut dyn FnMut(&mut Ui, &str),
+    rects: &mut Vec<(String, Rect)>,
+) {
+    let skin = panel.skin;
+    let avail = ui.available_width().max(200.0);
+    let is_set = |c: &Ctl| match c {
+        Ctl::Param(id, _) => def.params.iter().find(|p| p.id == id.as_str()).is_some_and(|p| matches!(p.kind, ParamKind::Toggle | ParamKind::Choice(_))),
+        _ => false,
+    };
+    // Each stage's natural inner width.
+    let natural: Vec<f32> = panel
+        .sections
+        .iter()
+        .map(|s| {
+            let set = s.ctls.iter().filter(|c| is_set(c)).map(|c| cell_width(ui, def, c)).fold(0.0f32, f32::max);
+            let knobs = s.ctls.iter().filter(|c| matches!(c, Ctl::Knob(..))).count();
+            let faders = s.ctls.iter().filter(|c| matches!(c, Ctl::Fader(..))).count();
+            let big = if s.ctls.iter().any(|c| matches!(c, Ctl::Big(..))) { 104.0 } else { 0.0 };
+            let cols = knobs.min(if knobs >= 4 {
+                4
+            } else if knobs == 3 && big == 0.0 {
+                3
+            } else {
+                2
+            }) as f32;
+            let grid = if knobs > 0 { cols * CELL_W + (cols - 1.0) * GAP } else { 0.0 };
+            let fad = if faders > 0 { faders as f32 * 48.0 + (faders as f32 - 1.0) * GAP } else { 0.0 };
+            let title = ui.painter().layout_no_wrap(s.title.to_uppercase(), egui::FontId::proportional(10.5), theme::TEXT).size().x + 26.0;
+            set.max(big).max(grid).max(fad).max(title).max(CELL_W)
+        })
+        .collect();
+    // Rows of stages that fit (normally one).
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut used = 0.0;
+    for (k, w) in natural.iter().enumerate() {
+        let need = w + SECTION_PAD + if rows.last().is_some_and(|r| r.is_empty()) { 0.0 } else { ARROW };
+        if used + need > avail && !rows.last().is_some_and(|r| r.is_empty()) {
+            rows.push(vec![k]);
+            used = w + SECTION_PAD;
+        } else {
+            rows.last_mut().unwrap().push(k);
+            used += need;
+        }
+    }
+    let widest = natural.iter().fold(0.0f32, |a, b| a.max(*b));
+    ui.ctx().data_mut(|d| d.insert_temp(NEED_KEY.into(), widest + SECTION_PAD + 16.0));
+    let ink = skin.ink;
+    let edge = if skin.knob == KnobStyle::Brass { Color32::from_rgba_unmultiplied(0xe2, 0xc0, 0x76, 70) } else { Color32::from_black_alpha(90) };
+    ui.spacing_mut().item_spacing.y = 10.0;
+    for (ri, row) in rows.iter().enumerate() {
+        // Share the spare width out in proportion, so the row fills the unit.
+        let base: f32 = row.iter().map(|k| natural[*k] + SECTION_PAD).sum::<f32>() + ARROW * (row.len() - 1) as f32;
+        let spare = (avail - base - 2.0).max(0.0).floor();
+        let total: f32 = row.iter().map(|k| natural[*k]).sum();
+        let hkey = salt.with(("flow.h", ri));
+        let prev_h: f32 = ui.ctx().data(|d| d.get_temp(hkey)).unwrap_or(0.0);
+        let mut max_h = 0.0f32;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for (j, k) in row.iter().enumerate() {
+                let s = &panel.sections[*k];
+                let inner = natural[*k] + spare * natural[*k] / total.max(1.0);
+                if j > 0 {
+                    // The arrow from the previous stage, level with the titles.
+                    let (ar, _) = ui.allocate_exact_size(Vec2::new(ARROW, prev_h.max(30.0)), Sense::hover());
+                    let y = ar.top() + 17.0;
+                    let x = ar.center().x;
+                    ui.painter().line_segment([Pos2::new(x - 7.0, y), Pos2::new(x + 3.0, y)], Stroke::new(1.5_f32, accent.gamma_multiply(0.8)));
+                    ui.painter().add(Shape::convex_polygon(vec![Pos2::new(x + 7.0, y), Pos2::new(x + 1.0, y - 4.5), Pos2::new(x + 1.0, y + 4.5)], accent.gamma_multiply(0.8), Stroke::NONE));
+                }
+                let frame = egui::Frame::NONE.fill(skin.section).corner_radius(7.0).inner_margin(egui::Margin::symmetric(8, 7)).stroke(Stroke::new(1.0_f32, edge)).show(ui, |ui| {
+                    ui.set_width(inner);
+                    ui.set_max_width(inner);
+                    ui.set_min_height((prev_h - 16.0).max(0.0));
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(GAP, 8.0);
+                        // Title bar: the stage's number in a ring, its name, a rule.
+                        let (tr, _) = ui.allocate_exact_size(Vec2::new(inner, 20.0), Sense::hover());
+                        let p = ui.painter();
+                        let num = Pos2::new(tr.left() + 8.0, tr.center().y);
+                        p.circle_stroke(num, 8.0, Stroke::new(1.2_f32, accent));
+                        p.text(num, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(10.0), accent);
+                        p.text(Pos2::new(tr.left() + 22.0, tr.center().y), egui::Align2::LEFT_CENTER, s.title.to_uppercase(), egui::FontId::proportional(10.5), ink);
+                        p.line_segment([Pos2::new(tr.left(), tr.bottom() + 2.0), Pos2::new(tr.right(), tr.bottom() + 2.0)], Stroke::new(1.0_f32, ink.gamma_multiply(0.25)));
+                        // Switches and choices, side by side where they fit.
+                        let mut set_rows: Vec<Vec<&Ctl>> = Vec::new();
+                        let mut used = f32::MAX;
+                        for c in s.ctls.iter().filter(|c| is_set(c)) {
+                            let w = cell_width(ui, def, c);
+                            if used + 10.0 + w > inner {
+                                set_rows.push(vec![c]);
+                                used = w;
+                            } else {
+                                set_rows.last_mut().unwrap().push(c);
+                                used += 10.0 + w;
+                            }
+                        }
+                        for row in set_rows {
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                for c in row {
+                                    flow_ctl(ui, c, def, params, skin, accent, salt, touch, custom, rects, &s.title);
+                                }
+                            });
+                        }
+                        // The main control, centred.
+                        for c in s.ctls.iter().filter(|c| matches!(c, Ctl::Big(..))) {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.add_space(((inner - 104.0) / 2.0).max(0.0));
+                                flow_ctl(ui, c, def, params, skin, accent, salt, touch, custom, rects, &s.title);
+                            });
+                        }
+                        // The other knobs on an even grid, centred.
+                        let knobs: Vec<&Ctl> = s.ctls.iter().filter(|c| matches!(c, Ctl::Knob(..) | Ctl::Custom(_))).collect();
+                        if !knobs.is_empty() {
+                            let cols = (((inner + GAP) / (CELL_W + GAP)).floor() as usize).clamp(1, knobs.len());
+                            // Balanced rows: 4 knobs in 2 + 2 rather than 3 + 1.
+                            let rows_n = knobs.len().div_ceil(cols);
+                            let cols = knobs.len().div_ceil(rows_n);
+                            for chunk in knobs.chunks(cols) {
+                                let w = chunk.len() as f32 * CELL_W + (chunk.len() as f32 - 1.0) * GAP;
+                                ui.horizontal_top(|ui| {
+                                    ui.spacing_mut().item_spacing.x = GAP;
+                                    ui.add_space(((inner - w) / 2.0 - GAP).max(0.0));
+                                    for c in chunk {
+                                        flow_ctl(ui, c, def, params, skin, accent, salt, touch, custom, rects, &s.title);
+                                    }
+                                });
+                            }
+                        }
+                        // Faders side by side, centred.
+                        let faders: Vec<&Ctl> = s.ctls.iter().filter(|c| matches!(c, Ctl::Fader(..))).collect();
+                        if !faders.is_empty() {
+                            let w = faders.len() as f32 * 48.0 + (faders.len() as f32 - 1.0) * GAP;
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = GAP;
+                                ui.add_space(((inner - w) / 2.0 - GAP).max(0.0));
+                                for c in faders {
+                                    flow_ctl(ui, c, def, params, skin, accent, salt, touch, custom, rects, &s.title);
+                                }
+                            });
+                        }
+                    });
+                });
+                max_h = max_h.max(frame.response.rect.height());
+            }
+        });
+        if (max_h - prev_h).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(hkey, max_h));
+            ui.ctx().request_repaint();
+        }
+    }
 }
 
 #[cfg(test)]

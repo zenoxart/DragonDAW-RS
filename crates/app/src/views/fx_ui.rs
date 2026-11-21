@@ -111,11 +111,12 @@ fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
 pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
     let base = match h.def.id {
-        "tune" | "clean_voice" | "class_a_strip" => 230.0,
+        "tune" => 230.0,
+        "clean_voice" | "class_a_strip" => 200.0,
         "alter" => 200.0,
         "orbit" => 220.0,
-        "drum_bus" => 230.0,
-        "dragon_particle" => 240.0,
+        "drum_bus" => 200.0,
+        "dragon_particle" => 200.0,
         _ => 170.0,
     };
     let height = hero_height(h.def.id, base, w, ui.available_height(), ui.ctx().screen_rect().height());
@@ -177,7 +178,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         p.text(r.center(), egui::Align2::CENTER_CENTER, "BYPASSED", egui::FontId::proportional(18.0), theme::TEXT_DIM);
     }
     // The gnostic units: a sacred-geometry sigil turning slowly behind everything, in gold light.
-    if finish.gnostic() {
+    if finish.gnostic() && h.def.id != "dragon_particle" {
         super::fx_mod::sigil(&p, r, h.t(), phosphor);
     }
     if themed {
@@ -453,11 +454,14 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             let rad = (r.height() * 0.5 - 22.0).max(30.0);
             let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
             if resp.dragged() && origin.distance(c) < rad + 10.0 {
-                let d = -resp.drag_delta().y / 220.0;
+                // Turn the stone: sideways (a full turn across its circumference), or up / down.
+                let dd = resp.drag_delta();
+                let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+                let d = (dd.x / (TAU * rad * 0.86) - dd.y / 220.0) * fine;
                 out.push(("amount".into(), (h.v("amount") + d).clamp(0.0, 1.0)));
             }
             if pos.distance(c) < rad + 10.0 {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 let s = ui.input(|i| i.smooth_scroll_delta.y);
                 if s != 0.0 {
                     out.push(("amount".into(), (h.v("amount") + s / 800.0).clamp(0.0, 1.0)));
@@ -607,7 +611,7 @@ pub fn hit_regions(id: &str, r: Rect) -> Vec<(Rect, &'static str)> {
                 (Rect::from_min_max(Pos2::new(r.right() - 36.0, r.top() + 14.0), Pos2::new(r.right() - 8.0, r.bottom() - 14.0)), "output"),
             ];
             let body = Rect::from_min_max(Pos2::new(r.left() + 46.0, r.top() + 8.0), Pos2::new(r.right() - 46.0, r.bottom() - 8.0));
-            let top = Rect::from_min_max(body.min, Pos2::new(body.right(), body.top() + body.height() * 0.45));
+            let top = Rect::from_min_max(body.min, Pos2::new(body.right(), body.top() + body.height() * 0.55));
             let tw = top.width() / 4.0;
             for (k, id) in ["drive", "harmonics", "comp_mix", "lift"].into_iter().enumerate() {
                 v.push((Rect::from_min_size(Pos2::new(top.left() + k as f32 * tw + 3.0, top.top()), Vec2::new(tw - 6.0, top.height())), id));
@@ -1378,6 +1382,11 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 // ----------------------------------------------------------------------------------- modulation
 
+const POWER_TUBE: &[u8] = include_bytes!("../../assets/fx/power_tube.png");
+const GAUGE: &[u8] = include_bytes!("../../assets/fx/gauge.png");
+const BRASS_PLATE: &[u8] = include_bytes!("../../assets/fx/brass_plate.png");
+const GLASS_TUBE: &[u8] = include_bytes!("../../assets/fx/glass_tube.png");
+
 // --------------------------------------------------------------------------------------- utility
 
 fn stereo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -1829,13 +1838,10 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.line_segment([Pos2::new(cap.left() + 3.0, cap.center().y), Pos2::new(cap.right() - 3.0, cap.center().y)], Stroke::new(1.5_f32, Color32::from_gray(40)));
     p.text(Pos2::new(nsr.center().x, nsr.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("{ns:.0} %"), egui::FontId::monospace(10.0), theme::TEXT);
     let r = Rect::from_min_max(Pos2::new(nsr.right(), r.top()), r.max);
-    let t = h.t();
+    // Live values only: at rest (no audio) the meters rest too.
     let (pin, gr, pout) = match h.tele {
         [a, b, c, ..] => (*a, *b, *c),
-        _ => {
-            let w = (t * 1.6).sin().abs();
-            (0.4 + 0.3 * w, 2.0 + 6.0 * w, 0.5)
-        }
+        _ => (0.0, 0.0, 0.0),
     };
     let w3 = (r.width() - 40.0) / 3.0;
     let sec = |k: usize| Rect::from_min_size(Pos2::new(r.left() + 10.0 + k as f32 * (w3 + 10.0), r.top() + 10.0), Vec2::new(w3, r.height() - 20.0));
@@ -1897,19 +1903,9 @@ fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.circle_filled(lamp, 4.0 + k as f32 * 3.0, Color32::from_rgb(0xff, 0xe0, 0x90).gamma_multiply(0.08 * gl));
     }
     p.circle_filled(lamp, 4.5, Color32::from_rgb(0xff, 0xe0, 0x90).gamma_multiply(0.25 + 0.75 * gl));
-    let vu = Rect::from_min_max(Pos2::new(cr.left() + 10.0, cr.top() + 30.0), Pos2::new(cr.right() - 10.0, cr.bottom() - 26.0));
-    p.rect_filled(vu, 5.0, Color32::from_rgb(0x16, 0x11, 0x0b));
-    let pivot = Pos2::new(vu.center().x, vu.bottom() - 6.0);
-    let rr = (vu.height() - 12.0).min(vu.width() * 0.55);
-    for db in [0.0f32, 2.0, 4.0, 6.0, 10.0, 15.0, 20.0] {
-        let a = -std::f32::consts::FRAC_PI_2 + 0.75 - 1.5 * (db / 20.0);
-        p.line_segment(
-            [Pos2::new(pivot.x + (rr - 6.0) * a.cos(), pivot.y + (rr - 6.0) * a.sin()), Pos2::new(pivot.x + rr * a.cos(), pivot.y + rr * a.sin())],
-            Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xb0, 0x30, 0x30) } else { Color32::from_rgb(0xe2, 0xc0, 0x76) }),
-        );
-    }
-    let a = -std::f32::consts::FRAC_PI_2 + 0.75 - 1.5 * (gr.clamp(0.0, 20.0) / 20.0);
-    p.line_segment([pivot, Pos2::new(pivot.x + (rr - 3.0) * a.cos(), pivot.y + (rr - 3.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_rgb(0xff, 0xe0, 0xa0)));
+    let vu = Rect::from_min_max(Pos2::new(cr.left() + 10.0, cr.top() + 24.0), Pos2::new(cr.right() - 10.0, cr.bottom() - 22.0));
+    let (u, _) = super::analog::spring(p.ctx(), h.key.with("golem.gr"), 1.0 - (gr / 20.0).clamp(0.0, 1.0), 1.8, 0.75, h.time.is_some());
+    super::fx_mod::gauge(p, vu, super::fx_mod::GaugeArt::Basalt, u, None, &[(0.0, "20"), (0.5, "10"), (0.7, "6"), (0.85, "3"), (1.0, "0")], 2.0, "dB GR", &format!("{gr:.1}"));
     p.text(Pos2::new(cr.center().x, cr.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("GR {gr:.1} dB · {:.1}:1 · out {:.0} dB", h.v("ratio"), gain_to_db_ui(pout)), egui::FontId::proportional(10.0), theme::TEXT);
 }
 
@@ -1922,32 +1918,50 @@ fn gain_to_db_ui(x: f32) -> f32 {
 fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::effects::strips::{DRUM_COLOURS, HEQ_FREQS};
     super::fx_mod::screen(p, r, 8.0);
-    let t = h.t();
+    // Live values only: at rest (no audio) the meters rest too.
     let (pin, pout, gr, rin, rout) = match h.tele {
         [a, b, c, d, e, ..] => (*a, *b, *c, *d, *e),
-        _ => {
-            let ph = (t * 2.0).fract();
-            ((-ph * 6.0).exp() * 0.7, (-ph * 4.0).exp() * 0.85, 4.0 * (-ph * 3.0).exp(), 0.18, 0.3)
-        }
+        _ => (0.0, 0.0, 0.0, 0.0, 0.0),
     };
     // Orion-style meters: peak bar, RMS line and a target zone (−12 … −8 dB RMS) for gain staging.
+    // In and out as phials of molten metal: the peak is the liquid, the RMS a gold line, the target
+    // zone (−12 … −8 dB RMS) marked on the glass.
+    let glass = super::fx_mod::art(p.ctx(), "fx-glass-tube", GLASS_TUBE);
     let meter = |x: f32, peak: f32, rms: f32, label: &str| {
-        let mr = Rect::from_min_max(Pos2::new(x - 9.0, r.top() + 22.0), Pos2::new(x + 9.0, r.bottom() - 22.0));
-        super::fx_mod::inset(p, mr, 4.0);
-        let y = |db: f32| mr.bottom() - ((db + 36.0) / 36.0).clamp(0.0, 1.0) * mr.height();
-        p.rect_filled(Rect::from_min_max(Pos2::new(mr.left(), y(-12.0)), Pos2::new(mr.right(), y(-8.0))), 0.0, theme::OK.gamma_multiply(0.25));
+        let mr = Rect::from_min_max(Pos2::new(x - 11.0, r.top() + 18.0), Pos2::new(x + 11.0, r.bottom() - 20.0));
+        let bore = Rect::from_min_max(Pos2::new(mr.left() + 5.0, mr.top() + mr.height() * 0.09), Pos2::new(mr.right() - 5.0, mr.bottom() - mr.height() * 0.08));
+        let y = |db: f32| bore.bottom() - ((db + 36.0) / 36.0).clamp(0.0, 1.0) * bore.height();
         let pk = gain_to_db_ui(peak);
-        p.rect_filled(Rect::from_min_max(Pos2::new(mr.left() + 3.0, y(pk)), Pos2::new(mr.right() - 3.0, mr.bottom())), 3.0, if pk > -0.5 { theme::REC } else { col });
+        let (lvl, _) = super::analog::spring(p.ctx(), h.key.with(("forge.m", label)), pk.max(-36.0), 3.0, 0.9, h.time.is_some());
+        if lvl > -35.9 {
+            let top = y(lvl);
+            let hot = if pk > -0.5 { Color32::from_rgb(0xff, 0x5a, 0x3a) } else { Color32::from_rgb(0xff, 0x8a, 0x2c) };
+            p.rect_filled(Rect::from_min_max(Pos2::new(bore.left(), top), bore.max), 2.0, hot);
+            p.rect_filled(Rect::from_min_max(Pos2::new(bore.left(), top), Pos2::new(bore.center().x - 1.0, bore.bottom())), 2.0, Color32::from_rgba_unmultiplied(0xff, 0xd8, 0x90, 70));
+            super::fx_mod::halo(p, Pos2::new(x, top), 16.0, hot, 0.45);
+        }
+        p.rect_filled(Rect::from_min_max(Pos2::new(bore.right() + 1.0, y(-8.0)), Pos2::new(bore.right() + 4.0, y(-12.0))), 0.0, theme::OK.gamma_multiply(0.7));
+        if let Some(t) = &glass {
+            p.image(t.id(), mr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
         let rm = gain_to_db_ui(rms);
-        p.line_segment([Pos2::new(mr.left() - 2.0, y(rm)), Pos2::new(mr.right() + 2.0, y(rm))], Stroke::new(2.0_f32, Color32::WHITE));
-        p.text(Pos2::new(x, mr.top() - 4.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), theme::TEXT_DIM);
-        p.text(Pos2::new(x, mr.bottom() + 3.0), egui::Align2::CENTER_TOP, format!("{rm:.0}"), egui::FontId::monospace(8.5), if (-12.0..=-8.0).contains(&rm) { theme::OK } else { theme::TEXT_DIM });
+        if rm > -36.0 {
+            p.line_segment([Pos2::new(bore.left() - 3.0, y(rm)), Pos2::new(bore.right() + 3.0, y(rm))], Stroke::new(2.0_f32, Color32::from_rgb(0xe2, 0xc0, 0x76)));
+        }
+        p.text(Pos2::new(x, mr.top() - 3.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), Color32::from_rgb(0xe2, 0xc0, 0x76));
+        p.text(
+            Pos2::new(x, mr.bottom() + 3.0),
+            egui::Align2::CENTER_TOP,
+            if rm <= -90.0 { "-".to_string() } else { format!("{rm:.0}") },
+            egui::FontId::monospace(8.5),
+            if (-12.0..=-8.0).contains(&rm) { theme::OK } else { theme::TEXT_DIM },
+        );
     };
     meter(r.left() + 22.0, pin, rin, "IN");
     meter(r.right() - 22.0, pout, rout, "OUT");
     // Modules as tiles: Drive, Harmonics, Compression, Lift; then Harmonic EQ and Parallels as bars.
     let body = Rect::from_min_max(Pos2::new(r.left() + 46.0, r.top() + 8.0), Pos2::new(r.right() - 46.0, r.bottom() - 8.0));
-    let top = Rect::from_min_max(body.min, Pos2::new(body.right(), body.top() + body.height() * 0.45));
+    let top = Rect::from_min_max(body.min, Pos2::new(body.right(), body.top() + body.height() * 0.55));
     let tiles = [
         ("DRIVE", h.v("drive"), DRUM_COLOURS.get(h.v("colour").round() as usize).copied().unwrap_or("A").split(' ').next().unwrap_or("A").to_string()),
         ("HARMONICS", h.v("harmonics"), if h.v("focus") > 0.5 { "80 Hz".into() } else { "50 Hz".into() }),
@@ -1958,17 +1972,11 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     for (k, (name, v, sub)) in tiles.iter().enumerate() {
         let tr = Rect::from_min_size(Pos2::new(top.left() + k as f32 * tw + 3.0, top.top()), Vec2::new(tw - 6.0, top.height()));
         super::fx_mod::inset(p, tr, 6.0);
-        let c = Pos2::new(tr.center().x, tr.center().y + 4.0);
-        let rad = (tr.height() * 0.32).min(tr.width() * 0.3);
-        let a0 = std::f32::consts::PI * 0.75;
-        let sweep = std::f32::consts::PI * 1.5;
-        let arc = |to: f32| -> Vec<Pos2> { (0..=32).map(|i| a0 + sweep * to * i as f32 / 32.0).map(|a| Pos2::new(c.x + rad * a.cos(), c.y + rad * a.sin())).collect() };
-        p.add(Shape::line(arc(1.0), Stroke::new(3.0_f32, Color32::from_white_alpha(14))));
-        if *v > 0.0 {
-            p.add(Shape::line(arc(v / 100.0), Stroke::new(3.0_f32, col)));
-        }
-        p.text(Pos2::new(tr.center().x, tr.top() + 3.0), egui::Align2::CENTER_TOP, *name, egui::FontId::proportional(9.0), theme::TEXT);
-        p.text(c, egui::Align2::CENTER_CENTER, format!("{v:.0}"), egui::FontId::monospace(11.0), Color32::WHITE);
+        let g = Rect::from_min_max(Pos2::new(tr.left() + 4.0, tr.top() + 14.0), Pos2::new(tr.right() - 4.0, tr.bottom() - 12.0));
+        // The value's needle; on COMP a red needle shows the real gain reduction (0 … 20 dB).
+        let second = if *name == "COMP" { Some(super::analog::spring(p.ctx(), h.key.with("forge.gr"), (gr / 20.0).clamp(0.0, 1.0), 1.8, 0.75, h.time.is_some()).0) } else { None };
+        super::fx_mod::gauge(p, g, super::fx_mod::GaugeArt::Forged, v / 100.0, second, &[(0.0, "0"), (0.5, "50"), (1.0, "100")], 0.9, "", &format!("{v:.0}"));
+        p.text(Pos2::new(tr.center().x, tr.top() + 3.0), egui::Align2::CENTER_TOP, *name, egui::FontId::proportional(9.0), Color32::from_rgb(0xe2, 0xc0, 0x76));
         if !sub.is_empty() {
             p.text(Pos2::new(tr.center().x, tr.bottom() - 2.0), egui::Align2::CENTER_BOTTOM, sub, egui::FontId::proportional(8.5), theme::TEXT_DIM);
         }
@@ -2058,6 +2066,17 @@ pub(crate) fn hero_height(id: &str, base: f32, w: f32, avail_h: f32, screen_h: f
     let mut height = (base * (w / 520.0).clamp(1.0, 2.2)).min(avail_h.max(base));
     if id == "multiband" {
         height = height.min(250.0);
+    }
+    // The signal-chain units: the display is an overview; the stages below are where you work.
+    if id == "dragon_particle" {
+        // The stone is the instrument: give it room.
+        height = height.clamp(250.0, 280.0);
+    }
+    if matches!(id, "class_a_strip" | "drum_bus") {
+        height = height.clamp(220.0, 240.0);
+    }
+    if id == "clean_voice" {
+        height = height.clamp(200.0, 220.0);
     }
     height.min((screen_h * 0.27).max(base))
 }
@@ -2404,86 +2423,135 @@ fn clipper(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
 /// Clean Voice: a valve that glows while the tube stage is in, two moving-coil meters for the leveller and
 /// the vari-mu gain reduction, and gain-reduction bars for the de-esser, the four multiband faders and the
 /// resonance suppressor.
-fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
+    use super::analog::{spring, GNOSTIC_GOLD};
+    use super::fx_mod::{art, glow, halo};
     super::fx_mod::screen(p, r, 8.0);
+    let ctx = p.ctx().clone();
+    let motion = h.time.is_some();
     let t = h.t();
-    let tele: Vec<f32> = if h.tele.len() >= 9 {
-        h.tele.to_vec()
-    } else {
-        let w = (t * 2.0).sin().abs();
-        vec![3.0 + 3.0 * w, 1.5 + 2.0 * w, 2.0 * w, 1.0, 1.5 * w, 0.8, 1.2, 2.5 * w, if h.v("tube") > 0.5 { 1.0 } else { 0.0 }]
-    };
+    // Live values only: with no audio running everything rests (no reduction, silence).
+    let tele: Vec<f32> = if h.tele.len() >= 11 { h.tele.to_vec() } else { vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, if h.v("tube") > 0.5 { 1.0 } else { 0.0 }, -120.0, -120.0] };
     let tube_on = tele[8] > 0.5;
-    // ---- the valve
-    let vx = r.left() + 54.0;
-    let glass = Rect::from_center_size(Pos2::new(vx, r.center().y - 6.0), Vec2::new(54.0, r.height() - 60.0));
-    let glow_id = h.key.with("cv.glow");
-    let mut glow: f32 = p.ctx().data(|d| d.get_temp(glow_id)).unwrap_or(if tube_on { 1.0 } else { 0.0 });
-    let target = if tube_on { 1.0 } else { 0.0 };
-    glow += (target - glow) * if target > glow { 0.05 } else { 0.02 };
-    p.ctx().data_mut(|d| d.insert_temp(glow_id, glow));
-    let heat = Color32::from_rgb(0xff, 0x8a, 0x3c);
-    for k in (1..=5).rev() {
-        p.circle_filled(Pos2::new(vx, glass.center().y + 10.0), 14.0 + k as f32 * 6.0, heat.gamma_multiply(0.04 * glow));
-    }
-    p.rect_filled(glass, egui::CornerRadius { nw: 26, ne: 26, sw: 6, se: 6 }, Color32::from_rgba_unmultiplied(0x90, 0xa0, 0xb0, 22));
-    p.rect_stroke(glass, egui::CornerRadius { nw: 26, ne: 26, sw: 6, se: 6 }, Stroke::new(1.0_f32, Color32::from_white_alpha(60)), egui::StrokeKind::Inside);
-    // Plates and the heater filament.
-    let plate = Rect::from_center_size(Pos2::new(vx, glass.center().y + 4.0), Vec2::new(30.0, glass.height() * 0.45));
-    p.rect_filled(plate, 3.0, Color32::from_gray(48));
-    p.rect_stroke(plate, 3.0, Stroke::new(1.0_f32, Color32::from_gray(90)), egui::StrokeKind::Inside);
-    for k in 0..3 {
-        let x = plate.left() + 8.0 + k as f32 * 7.0;
-        p.line_segment([Pos2::new(x, plate.top() + 4.0), Pos2::new(x, plate.bottom() - 4.0)], Stroke::new(2.0_f32, heat.gamma_multiply(0.15 + 0.85 * glow * (0.85 + 0.15 * (t * 7.0 + k as f32).sin()))));
-    }
-    let base = Rect::from_min_max(Pos2::new(glass.left() - 4.0, glass.bottom()), Pos2::new(glass.right() + 4.0, glass.bottom() + 12.0));
-    p.rect_filled(base, 3.0, Color32::from_gray(30));
-    p.text(Pos2::new(vx, r.bottom() - 8.0), egui::Align2::CENTER_BOTTOM, if tube_on { "TUBE IN" } else { "TUBE OUT" }, egui::FontId::proportional(9.5), if tube_on { heat } else { theme::TEXT_DIM });
-    // ---- two VU meters
-    let vu = |rect: Rect, gr: f32, label: &str| {
-        p.rect_filled(rect, 6.0, Color32::from_rgb(0x0c, 0x0e, 0x2a));
-        p.rect_stroke(rect, 6.0, Stroke::new(2.0_f32, Color32::from_rgb(0x8c, 0x6c, 0x30)), egui::StrokeKind::Inside);
-        let pivot = Pos2::new(rect.center().x, rect.bottom() - 8.0);
-        let rad = rect.height() - 22.0;
-        let ang = |db: f32| -std::f32::consts::FRAC_PI_2 - 0.9 * (db.clamp(0.0, 20.0) / 20.0) + 0.0;
-        // Scale: 0 at the right, −20 at the left; red zone at the heavy end.
-        for db in [0.0f32, 3.0, 6.0, 10.0, 15.0, 20.0] {
-            let a = ang(db) + 0.45;
-            let o = Pos2::new(pivot.x + rad * a.cos(), pivot.y + rad * a.sin());
-            let i = Pos2::new(pivot.x + (rad - 7.0) * a.cos(), pivot.y + (rad - 7.0) * a.sin());
-            p.line_segment([i, o], Stroke::new(1.5_f32, if db >= 10.0 { Color32::from_rgb(0xc0, 0x30, 0x30) } else { Color32::from_rgb(0xb4, 0xc4, 0xff) }));
-            p.text(
-                Pos2::new(pivot.x + (rad + 7.0) * a.cos(), pivot.y + (rad + 7.0) * a.sin()),
-                egui::Align2::CENTER_CENTER,
-                format!("{}", -(db as i32)),
-                egui::FontId::proportional(8.0),
-                Color32::from_rgb(0xb4, 0xc4, 0xff),
-            );
+    let (input, output) = (tele[9], tele[10]);
+    let starlight = Color32::from_rgb(0xb4, 0xc4, 0xff);
+    let amber = Color32::from_rgb(0xff, 0x8a, 0x3c);
+    let label_plate = |rect: Rect, text: &str| {
+        if let Some(tx) = art(&ctx, "fx-brass-plate", BRASS_PLATE) {
+            p.image(tx.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
         }
-        let a = ang(gr) + 0.45;
-        p.line_segment([pivot, Pos2::new(pivot.x + (rad - 2.0) * a.cos(), pivot.y + (rad - 2.0) * a.sin())], Stroke::new(1.5_f32, Color32::from_rgb(0xe2, 0xc0, 0x76)));
-        p.circle_filled(pivot, 4.0, Color32::from_rgb(0xe2, 0xc0, 0x76));
-        p.text(Pos2::new(rect.center().x, rect.bottom() - 18.0), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0), Color32::from_rgb(0xb4, 0xc4, 0xff));
+        p.text(rect.center() + Vec2::new(0.0, 1.0), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional((rect.height() * 0.42).clamp(7.0, 10.0)), Color32::from_rgb(0x2a, 0x1c, 0x08));
     };
-    let mw = ((r.width() - 120.0) * 0.28).clamp(90.0, 170.0);
-    let m1 = Rect::from_min_size(Pos2::new(vx + 46.0, r.top() + 12.0), Vec2::new(mw, (r.height() - 24.0) * 0.62));
-    let m2 = Rect::from_min_size(Pos2::new(m1.right() + 10.0, m1.top()), m1.size());
-    vu(m1, tele[0], "COMP");
-    vu(m2, tele[1], "VARI MU");
-    // ---- GR bars
-    let bars = [("DE-ESS", tele[2]), ("MB1 LOW", tele[3]), ("MB1 HIGH", tele[4]), ("MB2 LOW", tele[5]), ("MB2 HIGH", tele[6]), ("SOOTHE", tele[7])];
-    let bx0 = m2.right() + 16.0;
-    let bw = ((r.right() - 12.0 - bx0) / bars.len() as f32).max(18.0);
-    for (k, (name, gr)) in bars.iter().enumerate() {
-        let br = Rect::from_min_size(Pos2::new(bx0 + k as f32 * bw + 3.0, r.top() + 22.0), Vec2::new(bw - 10.0, r.height() - 66.0));
-        super::fx_mod::inset(p, br, 3.0);
-        let f = (gr / 12.0).clamp(0.0, 1.0);
-        p.rect_filled(Rect::from_min_max(br.min, Pos2::new(br.right(), br.top() + br.height() * f)), 3.0, col);
-        p.text(Pos2::new(br.center().x, br.bottom() + 4.0), egui::Align2::CENTER_TOP, name.replace(' ', "\n"), egui::FontId::proportional(8.0), theme::TEXT_DIM);
-        p.text(Pos2::new(br.center().x, br.top() - 3.0), egui::Align2::CENTER_BOTTOM, format!("{gr:.1}"), egui::FontId::monospace(8.5), theme::TEXT);
+    let inner = r.shrink2(Vec2::new(12.0, 10.0));
+    let plate_h = 18.0;
+    let body_h = inner.height() - plate_h - 6.0;
+    // ---- the valve: its heaters glow with the signal driving it (the real input level).
+    let tube_rect = {
+        let h_t = body_h;
+        let w_t = h_t * 98.0 / 300.0;
+        Rect::from_min_size(Pos2::new(inner.left() + 6.0, inner.top()), Vec2::new(w_t, h_t))
+    };
+    let drive = if tube_on { (0.35 + 0.65 * ((input + 40.0) / 40.0).clamp(0.0, 1.0)).clamp(0.0, 1.0) } else { 0.0 };
+    let (heat, mv0) = spring(&ctx, h.key.with("cv.heat"), drive, 0.7, 1.0, motion);
+    let flick = 1.0 + 0.05 * (t * 17.0).sin() * (t * 5.3).sin();
+    halo(p, Pos2::new(tube_rect.center().x, tube_rect.top() + tube_rect.height() * 0.38), tube_rect.width() * 1.4, amber, 0.35 * heat * flick);
+    if let Some(tx) = art(&ctx, "fx-power-tube", POWER_TUBE) {
+        p.image(tx.id(), tube_rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        // The heaters between the plates, then their light through the glass.
+        for dx in [-0.11, 0.11] {
+            let c = Pos2::new(tube_rect.center().x + tube_rect.width() * dx, tube_rect.top() + tube_rect.height() * 0.40);
+            p.rect_filled(Rect::from_center_size(c, Vec2::new(tube_rect.width() * 0.05, tube_rect.height() * 0.26)), 1.0, glow(amber, 0.9 * heat * flick));
+            halo(p, c, tube_rect.width() * 0.3, amber, 0.4 * heat * flick);
+        }
     }
-    // Small readouts under the meters.
-    p.text(Pos2::new(m1.left(), r.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, format!("comp {:.0}% · vari mu {:.0}%", h.v("comp"), h.v("varimu")), egui::FontId::proportional(10.0), theme::TEXT);
+    label_plate(Rect::from_center_size(Pos2::new(tube_rect.center().x, inner.bottom() - plate_h / 2.0), Vec2::new(tube_rect.width().max(64.0), plate_h)), if tube_on { "VALVE IN" } else { "VALVE OUT" });
+    // ---- the two gauges: leveller and vari-mu gain reduction, 0 … 20 dB.
+    let gs = body_h;
+    let mut x = tube_rect.right() + 16.0;
+    let mut moving = mv0;
+    for (k, (name, gr)) in [("LEVELER", tele[0]), ("VARI-MU", tele[1])].into_iter().enumerate() {
+        let gr_rect = Rect::from_min_size(Pos2::new(x, inner.top()), Vec2::splat(gs));
+        let c = gr_rect.center();
+        if let Some(tx) = art(&ctx, "fx-gauge", GAUGE) {
+            p.image(tx.id(), gr_rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
+        let dial = gs * 0.5 * 0.76;
+        halo(&p.with_clip_rect(gr_rect), c + Vec2::new(0.0, dial * 0.5), dial * 1.2, starlight, 0.10 + 0.12 * (gr / 20.0).clamp(0.0, 1.0));
+        // Scale: 0 at the right, 20 dB at the left, over a 100° arc above the pivot.
+        let pivot = c + Vec2::new(0.0, dial * 0.42);
+        let rr = dial * 0.95;
+        let ang = |db: f32| -PI / 2.0 + 0.95 - 1.9 * (db.clamp(0.0, 20.0) / 20.0);
+        for db in [0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0, 20.0] {
+            let a = ang(db);
+            let major = matches!(db as i32, 0 | 3 | 6 | 10 | 20);
+            let col = if db >= 10.0 { Color32::from_rgb(0xff, 0x6a, 0x4a) } else { GNOSTIC_GOLD };
+            let o = Pos2::new(pivot.x + rr * a.cos(), pivot.y + rr * a.sin());
+            let i = Pos2::new(pivot.x + (rr - if major { 8.0 } else { 4.0 }) * a.cos(), pivot.y + (rr - if major { 8.0 } else { 4.0 }) * a.sin());
+            p.line_segment([i, o], Stroke::new(if major { 1.6_f32 } else { 1.0_f32 }, col));
+            if major {
+                p.text(Pos2::new(pivot.x + (rr - 16.0) * a.cos(), pivot.y + (rr - 16.0) * a.sin()), egui::Align2::CENTER_CENTER, format!("{}", db as i32), egui::FontId::proportional(8.5), col);
+            }
+        }
+        p.text(Pos2::new(c.x, c.y - dial * 0.05), egui::Align2::CENTER_CENTER, "dB GR", egui::FontId::proportional(8.0), starlight.gamma_multiply(0.7));
+        // The needle: a real meter movement (VU-like ballistics).
+        let (pos, mv) = spring(&ctx, h.key.with(("cv.needle", k)), gr.clamp(0.0, 22.0), 1.8, 0.75, motion);
+        moving |= mv;
+        let a = ang(pos);
+        let tip = Pos2::new(pivot.x + (rr - 2.0) * a.cos(), pivot.y + (rr - 2.0) * a.sin());
+        p.line_segment([pivot + Vec2::new(1.0, 2.0), tip + Vec2::new(1.0, 2.0)], Stroke::new(1.8_f32, Color32::from_black_alpha(120)));
+        p.line_segment([pivot, tip], Stroke::new(1.6_f32, Color32::from_rgb(0xff, 0xe4, 0xa8)));
+        p.circle_filled(pivot, 4.5, GNOSTIC_GOLD);
+        p.circle_filled(pivot, 2.0, Color32::from_rgb(0x5a, 0x40, 0x18));
+        // The reading.
+        p.text(Pos2::new(c.x, pivot.y + dial * 0.28), egui::Align2::CENTER_CENTER, format!("{gr:.1}"), egui::FontId::monospace(10.0), starlight);
+        label_plate(Rect::from_center_size(Pos2::new(c.x, inner.bottom() - plate_h / 2.0), Vec2::new(gs * 0.62, plate_h)), name);
+        x = gr_rect.right() + 14.0;
+    }
+    // ---- the reduction of the other stages: phials filled by how much each takes (0 … 12 dB).
+    let io_w = 120.0;
+    let vials = [("DE-ESS", tele[2]), ("MB1 LOW", tele[3]), ("MB1 HIGH", tele[4]), ("MB2 LOW", tele[5]), ("MB2 HIGH", tele[6]), ("SOOTHE", tele[7])];
+    let area = Rect::from_min_max(Pos2::new(x + 4.0, inner.top()), Pos2::new(inner.right() - io_w - 12.0, inner.bottom()));
+    let slot = area.width() / vials.len() as f32;
+    let vh = body_h - 14.0;
+    let glass = art(&ctx, "fx-glass-tube", GLASS_TUBE);
+    for (k, (name, gr)) in vials.iter().enumerate() {
+        let cx = area.left() + slot * (k as f32 + 0.5);
+        let vw = (vh * 90.0 / 443.0).max(16.0);
+        let vr = Rect::from_center_size(Pos2::new(cx, inner.top() + 14.0 + vh / 2.0), Vec2::new(vw, vh));
+        let bore = Rect::from_min_max(Pos2::new(vr.left() + vw * 0.24, vr.top() + vh * 0.09), Pos2::new(vr.right() - vw * 0.24, vr.bottom() - vh * 0.08));
+        let (lvl, mv) = spring(&ctx, h.key.with(("cv.vial", k)), (gr / 12.0).clamp(0.0, 1.0), 1.4, 0.9, motion);
+        moving |= mv;
+        let top = bore.bottom() - bore.height() * lvl.clamp(0.0, 1.0);
+        if lvl > 0.003 {
+            let liquid = Rect::from_min_max(Pos2::new(bore.left(), top), bore.max);
+            p.rect_filled(liquid, 2.0, Color32::from_rgb(0x3a, 0x52, 0xd8));
+            p.rect_filled(Rect::from_min_max(liquid.min, Pos2::new(liquid.center().x, liquid.bottom())), 2.0, Color32::from_rgba_unmultiplied(0xb4, 0xc4, 0xff, 60));
+            halo(p, Pos2::new(cx, top), vw * 1.3, starlight, 0.25 + 0.4 * lvl);
+            p.line_segment([Pos2::new(bore.left(), top), Pos2::new(bore.right(), top)], Stroke::new(1.5_f32, Color32::from_rgb(0xe0, 0xe8, 0xff)));
+        }
+        if let Some(tx) = &glass {
+            p.image(tx.id(), vr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
+        p.text(Pos2::new(cx, inner.top() + 6.0), egui::Align2::CENTER_CENTER, format!("{gr:.1}"), egui::FontId::monospace(9.0), if *gr > 0.05 { starlight } else { starlight.gamma_multiply(0.5) });
+        label_plate(Rect::from_center_size(Pos2::new(cx, inner.bottom() - plate_h / 2.0), Vec2::new((slot - 8.0).min(76.0), plate_h)), name);
+    }
+    // ---- in and out: the real levels through the unit.
+    let io = Rect::from_min_max(Pos2::new(inner.right() - io_w, inner.top()), inner.max);
+    for (k, (name, db)) in [("INPUT", input), ("OUTPUT", output)].into_iter().enumerate() {
+        let row = Rect::from_min_size(Pos2::new(io.left(), io.top() + k as f32 * (body_h / 2.0)), Vec2::new(io_w, body_h / 2.0 - 6.0));
+        super::fx_mod::inset(p, row, 5.0);
+        p.text(row.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(8.5), GNOSTIC_GOLD.gamma_multiply(0.85));
+        let shown = if db <= -119.0 { "silent".to_string() } else { format!("{db:.1}") };
+        p.text(Pos2::new(row.right() - 8.0, row.center().y + 4.0), egui::Align2::RIGHT_CENTER, shown, egui::FontId::monospace(16.0), starlight);
+        p.text(Pos2::new(row.right() - 8.0, row.bottom() - 4.0), egui::Align2::RIGHT_BOTTOM, "dBFS", egui::FontId::proportional(7.5), starlight.gamma_multiply(0.6));
+        let fill = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+        let bar = Rect::from_min_size(Pos2::new(row.left() + 8.0, row.bottom() - 7.0), Vec2::new((row.width() - 60.0) * fill, 3.0));
+        p.rect_filled(bar, 1.0, if db > -1.0 { Color32::from_rgb(0xff, 0x6a, 0x4a) } else { starlight });
+    }
+    label_plate(Rect::from_center_size(Pos2::new(io.center().x, inner.bottom() - plate_h / 2.0), Vec2::new(io_w * 0.8, plate_h)), "LEVELS");
+    if moving {
+        ctx.request_repaint();
+    }
 }
 
 /// Philosopher's Stone: one big glowing dial (drag or scroll it) ringed by orbiting particles that grow in
@@ -2514,26 +2582,24 @@ fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         let cc = if i % 3 == 0 { gold } else { ember };
         p.circle_filled(pos, 0.8 + 1.6 * tw * (0.4 + a), cc.gamma_multiply(0.35 + 0.65 * tw * (0.3 + 0.7 * a)));
     }
-    // The dial: track, value arc, glossy cap.
+    // The sigil turns behind the stone.
+    super::fx_mod::sigil(p, r, t, Color32::from_rgb(0xff, 0xd2, 0x7a));
+    // The stone itself (3D): turn it to work it. One full turn is 100 %; it glows as it wakes.
+    super::fx_mod::stone(p, c, rad * 0.86, a, a, t);
     let a0 = std::f32::consts::PI * 0.75;
     let sweep = std::f32::consts::PI * 1.5;
-    let arc = |from: f32, to: f32, rr: f32| -> Vec<Pos2> { (0..=64).map(|k| from + (to - from) * k as f32 / 64.0).map(|x| Pos2::new(c.x + rr * x.cos(), c.y + rr * x.sin())).collect() };
-    p.add(Shape::line(arc(a0, a0 + sweep, rad), Stroke::new(8.0_f32, Color32::from_white_alpha(14))));
-    p.add(Shape::line(arc(a0, a0 + sweep * a, rad), Stroke::new(14.0_f32, ember.gamma_multiply(0.25))));
-    p.add(Shape::line(arc(a0, a0 + sweep * a, rad), Stroke::new(6.0_f32, ember)));
-    p.circle_filled(c, rad - 14.0, Color32::from_rgb(0x1a, 0x1c, 0x22));
-    p.circle_stroke(c, rad - 14.0, Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
-    let ang = a0 + sweep * a;
-    p.line_segment([Pos2::new(c.x + (rad - 30.0) * ang.cos(), c.y + (rad - 30.0) * ang.sin()), Pos2::new(c.x + (rad - 18.0) * ang.cos(), c.y + (rad - 18.0) * ang.sin())], Stroke::new(3.0_f32, Color32::WHITE));
-    p.text(c - Vec2::new(0.0, 10.0), egui::Align2::CENTER_CENTER, format!("{:.0}", a * 100.0), egui::FontId::proportional(30.0), Color32::WHITE);
-    p.text(c + Vec2::new(0.0, 16.0), egui::Align2::CENTER_CENTER, DragonParticle::mode_name(a).to_uppercase(), egui::FontId::proportional(10.0), ember);
+    let ring = rad + 4.0;
+    let arc = |from: f32, to: f32| -> Vec<Pos2> { (0..=64).map(|k| from + (to - from) * k as f32 / 64.0).map(|x| Pos2::new(c.x + ring * x.cos(), c.y + ring * x.sin())).collect() };
+    p.add(Shape::line(arc(a0, a0 + sweep), Stroke::new(2.0_f32, Color32::from_rgba_unmultiplied(0xe2, 0xc0, 0x76, 50))));
+    if a > 0.002 {
+        p.add(Shape::line(arc(a0, a0 + sweep * a), Stroke::new(2.5_f32, ember)));
+    }
+    p.text(Pos2::new(c.x, c.y + rad + 4.0), egui::Align2::CENTER_TOP, format!("{:.0}  ·  {}", a * 100.0, DragonParticle::mode_name(a).to_uppercase()), egui::FontId::proportional(11.0), gold);
     // Side meters: input (left) and output (right), RMS on a −48 … 0 dB scale.
+    // Live values only: at rest (no audio) the meters rest too.
     let (vin, vout, gr, ag) = match h.tele {
         [i, o, g, a2, ..] => (*i, *o, *g, *a2),
-        _ => {
-            let w = 0.25 + 0.05 * (t * 4.0).sin();
-            (w, w * (1.0 + a * 1.5), a * 4.0, 0.0)
-        }
+        _ => (0.0, 0.0, 0.0, 0.0),
     };
     let meter = |x: f32, v: f32, label: &str| {
         let mr = Rect::from_min_max(Pos2::new(x - 7.0, r.top() + 26.0), Pos2::new(x + 7.0, r.bottom() - 26.0));
@@ -2756,7 +2822,7 @@ mod tests {
         };
         frame(vec![], &mut area, &mut got);
         let w = area.width().max(260.0);
-        let height = hero_height("drum_bus", 230.0, w, area.height(), 400.0);
+        let height = hero_height("class_a_strip", 200.0, w, area.height(), 400.0);
         let (track, _) = ns_fader(Rect::from_min_size(area.min, egui::vec2(w, height)));
         let from = Pos2::new(track.center().x, track.bottom());
         let to = Pos2::new(track.center().x, track.bottom() - track.height() * 0.75);

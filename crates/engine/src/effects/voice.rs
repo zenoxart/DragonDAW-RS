@@ -700,7 +700,9 @@ pub struct CleanVoice {
     sat: Saturation,
     soothe: Suppressor,
     /// [comp GR, vari-mu GR, de-esser GR, mb1 low, mb1 high, mb2 low, mb2 high, soothe GR, tube on]
-    tele: [f32; 9],
+    /// Gain reductions (comp, vari-mu, de-ess, MB1 low/high, MB2 low/high, soothe, dB), the valve on/off,
+    /// and the input and output peaks of the block (dBFS).
+    tele: [f32; 11],
 }
 
 impl CleanVoice {
@@ -748,7 +750,7 @@ impl CleanVoice {
             mb2: Multiband::new(rate),
             sat: Saturation::new(rate),
             soothe: Suppressor::new(rate),
-            tele: [0.0; 9],
+            tele: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -120.0, -120.0],
         }
     }
 }
@@ -786,6 +788,8 @@ impl Effect for CleanVoice {
         self.deess.latency() + FFT
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let peak = |l: &[f32], r: &[f32]| 20.0 * l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs())).max(1e-6).log10();
+        let input = peak(l, r);
         if self.tube_on {
             self.tube.process(l, r);
         }
@@ -797,7 +801,7 @@ impl Effect for CleanVoice {
         self.mb2.process(l, r);
         self.sat.process(l, r);
         self.soothe.process(l, r);
-        self.tele = [self.comp.gr, self.varimu.gr, self.deess.gr, self.mb1.gr[1], self.mb1.gr[2], self.mb2.gr[1], self.mb2.gr[2], self.soothe.gr, if self.tube_on { 1.0 } else { 0.0 }];
+        self.tele = [self.comp.gr, self.varimu.gr, self.deess.gr, self.mb1.gr[1], self.mb1.gr[2], self.mb2.gr[1], self.mb2.gr[2], self.soothe.gr, if self.tube_on { 1.0 } else { 0.0 }, input, peak(l, r)];
     }
     fn gain_reduction(&self) -> f32 {
         self.comp.gr + self.varimu.gr
@@ -848,6 +852,11 @@ mod tests {
         assert!(l.iter().all(|v| v.is_finite() && v.abs() < 1.5));
         // The leveller and vari-mu are working on a vocal at this level.
         assert!(e.tele[0] > 0.5 || e.tele[1] > 0.5, "leveller / vari-mu GR {:?}", e.tele);
+        // The display's input and output readings are the real block peaks.
+        let peak = |v: &[f32]| 20.0 * v.iter().fold(0.0f32, |m, x| m.max(x.abs())).log10();
+        let n = l.len();
+        assert!((e.tele[10] - peak(&l[n - 256..]).max(peak(&r[n - 256..]))).abs() < 0.01, "output peak {:?}", e.tele);
+        assert!((e.tele[9] - peak(&x[n - 256..])).abs() < 0.01, "input peak {:?}", e.tele);
         assert_eq!(e.latency(), 240 + 1024);
         let rms = |v: &[f32]| (v.iter().map(|s| s * s).sum::<f32>() / v.len() as f32).sqrt();
         let ratio = rms(&l[48000..]) / rms(&x[48000..]);

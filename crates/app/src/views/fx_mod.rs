@@ -699,3 +699,269 @@ pub fn emblem(p: &egui::Painter, r: Rect, id: &str, s: f32, t: f32) {
         }
     }
 }
+
+// -------------------------------------------------------------------------------------------- gauges
+
+/// The photographed housing of a round gauge.
+#[derive(Clone, Copy)]
+pub enum GaugeArt {
+    /// Carved basalt with runes and a gold ring (Golem Strip).
+    Basalt,
+    /// Blackened forged iron with rivets (Dragonforge).
+    Forged,
+}
+
+const GAUGE_BASALT: &[u8] = include_bytes!("../../assets/fx/gauge_basalt.png");
+const GAUGE_FORGED: &[u8] = include_bytes!("../../assets/fx/gauge_forged.png");
+
+/// A round gauge in the square centred in `rect`: the photographed housing, a gold scale drawn on its
+/// dial (`marks` at 0 … 1 along the arc, red from `red_from`), the needle at `pos` (0 … 1), an optional
+/// red second needle, the caption on the dial and the reading under the pivot.
+#[allow(clippy::too_many_arguments)]
+pub fn gauge(p: &egui::Painter, rect: Rect, art_kind: GaugeArt, pos: f32, second: Option<f32>, marks: &[(f32, &str)], red_from: f32, caption: &str, reading: &str) {
+    let gold = super::analog::GNOSTIC_GOLD;
+    let red = Color32::from_rgb(0xff, 0x6a, 0x4a);
+    let side = rect.width().min(rect.height());
+    let r = Rect::from_center_size(rect.center(), Vec2::splat(side));
+    let (name, bytes, frac) = match art_kind {
+        GaugeArt::Basalt => ("fx-gauge-basalt", GAUGE_BASALT, 0.70),
+        GaugeArt::Forged => ("fx-gauge-forged", GAUGE_FORGED, 0.74),
+    };
+    let dial = side * 0.5 * frac;
+    let c = r.center();
+    if let Some(t) = art(p.ctx(), name, bytes) {
+        p.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+    }
+    let dp = p.with_clip_rect(Rect::from_center_size(c, Vec2::splat(dial * 2.0)));
+    halo(&dp, c + Vec2::new(0.0, dial * 0.55), dial * 1.3, gold, 0.10 + 0.18 * pos.clamp(0.0, 1.0));
+    let pivot = c + Vec2::new(0.0, dial * 0.40);
+    let rr = dial * 0.92;
+    let ang = |u: f32| -PI / 2.0 - 0.95 + 1.9 * u.clamp(-0.02, 1.02);
+    let at = |u: f32, rad: f32| {
+        let a = ang(u);
+        Pos2::new(pivot.x + rad * a.cos(), pivot.y + rad * a.sin())
+    };
+    let arc: Vec<Pos2> = (0..=40).map(|k| at(k as f32 / 40.0 * red_from.min(1.0), rr)).collect();
+    dp.add(Shape::line(arc, Stroke::new(1.0_f32, gold.gamma_multiply(0.7))));
+    if red_from < 1.0 {
+        let arc: Vec<Pos2> = (0..=20).map(|k| at(red_from + (1.0 - red_from) * k as f32 / 20.0, rr)).collect();
+        dp.add(Shape::line(arc, Stroke::new(2.5_f32, red)));
+    }
+    for k in 0..=20 {
+        let u = k as f32 / 20.0;
+        dp.line_segment([at(u, rr), at(u, rr - 3.0)], Stroke::new(1.0_f32, if u >= red_from { red } else { gold.gamma_multiply(0.6) }));
+    }
+    let font = egui::FontId::proportional((dial * 0.16).clamp(7.0, 10.0));
+    for (u, label) in marks {
+        let col = if *u >= red_from { red } else { gold };
+        dp.line_segment([at(*u, rr), at(*u, rr - 7.0)], Stroke::new(1.5_f32, col));
+        dp.text(at(*u, rr - 14.0), egui::Align2::CENTER_CENTER, *label, font.clone(), col);
+    }
+    dp.text(Pos2::new(c.x, c.y - dial * 0.02), egui::Align2::CENTER_CENTER, caption, egui::FontId::proportional((dial * 0.15).clamp(7.0, 9.5)), gold.gamma_multiply(0.75));
+    let needle = |u: f32, col: Color32, w: f32| {
+        let tip = at(u, rr - 2.0);
+        dp.line_segment([pivot + Vec2::new(1.0, 2.0), tip + Vec2::new(1.0, 2.0)], Stroke::new(w + 0.4, Color32::from_black_alpha(130)));
+        dp.line_segment([pivot, tip], Stroke::new(w, col));
+    };
+    if let Some(s) = second {
+        needle(s, red, 1.4);
+    }
+    needle(pos, Color32::from_rgb(0xff, 0xe4, 0xa8), 1.7);
+    dp.circle_filled(pivot, (dial * 0.07).max(3.0), gold);
+    dp.circle_filled(pivot, (dial * 0.03).max(1.5), Color32::from_rgb(0x4a, 0x34, 0x14));
+    dp.text(Pos2::new(c.x, pivot.y + dial * 0.30), egui::Align2::CENTER_CENTER, reading, egui::FontId::monospace((dial * 0.17).clamp(8.0, 11.0)), Color32::from_rgb(0xff, 0xe4, 0xa8));
+}
+
+// --------------------------------------------------------------------------------- the stone (3D)
+
+const STONE_SKIN: &[u8] = include_bytes!("../../assets/fx/stone_skin.jpg");
+
+/// The faceted stone: a convex rock cut by planes, as triangles (object space, unit size). Built once.
+fn stone_mesh() -> &'static Vec<[[f32; 3]; 3]> {
+    static MESH: std::sync::OnceLock<Vec<[[f32; 3]; 3]>> = std::sync::OnceLock::new();
+    MESH.get_or_init(|| {
+        // An icosphere, subdivided twice.
+        let t = (1.0 + 5f32.sqrt()) / 2.0;
+        let mut v: Vec<[f32; 3]> =
+            vec![[-1.0, t, 0.0], [1.0, t, 0.0], [-1.0, -t, 0.0], [1.0, -t, 0.0], [0.0, -1.0, t], [0.0, 1.0, t], [0.0, -1.0, -t], [0.0, 1.0, -t], [t, 0.0, -1.0], [t, 0.0, 1.0], [-t, 0.0, -1.0], [-t, 0.0, 1.0]];
+        let norm = |p: [f32; 3]| {
+            let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            [p[0] / l, p[1] / l, p[2] / l]
+        };
+        for p in v.iter_mut() {
+            *p = norm(*p);
+        }
+        let mut f: Vec<[usize; 3]> = vec![
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
+        ];
+        for _ in 0..3 {
+            let mut cache = std::collections::HashMap::new();
+            let mut mid = |a: usize, b: usize, v: &mut Vec<[f32; 3]>| -> usize {
+                let key = (a.min(b), a.max(b));
+                *cache.entry(key).or_insert_with(|| {
+                    let (pa, pb) = (v[a], v[b]);
+                    v.push(norm([(pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0, (pa[2] + pb[2]) / 2.0]));
+                    v.len() - 1
+                })
+            };
+            let mut nf = Vec::with_capacity(f.len() * 4);
+            for [a, b, c] in f {
+                let (ab, bc, ca) = (mid(a, b, &mut v), mid(b, c, &mut v), mid(c, a, &mut v));
+                nf.extend([[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]);
+            }
+            f = nf;
+        }
+        // Cut it with planes: each direction's radius is the nearest plane along it (a convex, faceted rock).
+        let mut seed = 0x2545_f491u32;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed % 10_000) as f32 / 10_000.0
+        };
+        let planes: Vec<([f32; 3], f32)> = (0..16)
+            .map(|_| {
+                let z = rnd() * 2.0 - 1.0;
+                let a = rnd() * TAU;
+                let s = (1.0 - z * z).sqrt();
+                ([s * a.cos(), z * 0.9, s * a.sin()], 0.62 + 0.3 * rnd())
+            })
+            .collect();
+        let r_of = |d: [f32; 3]| {
+            let mut r = 1.15f32;
+            for (n, dist) in &planes {
+                let c = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
+                if c > 0.05 {
+                    r = r.min(dist / c);
+                }
+            }
+            r
+        };
+        let pts: Vec<[f32; 3]> = v
+            .iter()
+            .map(|d| {
+                let r = r_of(*d);
+                [d[0] * r, d[1] * r * 0.95, d[2] * r]
+            })
+            .collect();
+        f.iter().map(|[a, b, c]| [pts[*a], pts[*b], pts[*c]]).collect()
+    })
+}
+
+/// Draws the philosopher's stone at `c` (radius `rad`), turned to `turn` (0 … 1 = one revolution) and
+/// glowing with `glow_k` (0 … 1): real 3D, lit and shaded each frame, its skin the photographed stone.
+pub fn stone(p: &egui::Painter, c: Pos2, rad: f32, turn: f32, glow_k: f32, t: f32) {
+    let ctx = p.ctx().clone();
+    let tex = art(&ctx, "fx-stone-skin", STONE_SKIN);
+    let red = Color32::from_rgb(0xff, 0x30, 0x20);
+    let gold = Color32::from_rgb(0xff, 0xc8, 0x60);
+    let g = glow_k.clamp(0.0, 1.0);
+    let pulse = 1.0 + 0.08 * (t * 2.1).sin() * g;
+    // The light it gives off, behind it.
+    halo(p, c, rad * (1.6 + 1.2 * g), red, (0.12 + 0.55 * g) * pulse);
+    halo(p, c, rad * (1.0 + 0.6 * g), gold, 0.25 * g * pulse);
+    let yaw = turn * TAU + 0.6;
+    let pitch = -0.38 + 0.03 * (t * 0.7).sin();
+    let (sy, cy) = yaw.sin_cos();
+    let (sp, cp) = pitch.sin_cos();
+    let rot = |v: [f32; 3]| {
+        let (x, z) = (v[0] * cy + v[2] * sy, -v[0] * sy + v[2] * cy);
+        let (y, z) = (v[1] * cp - z * sp, v[1] * sp + z * cp);
+        [x, y, z]
+    };
+    let light = {
+        let l = [-0.45f32, -0.65, 0.62];
+        let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+        [l[0] / n, l[1] / n, l[2] / n]
+    };
+    let mut lit = Mesh::default();
+    let mut shine = Mesh::default();
+    if let Some(t) = &tex {
+        lit.texture_id = t.id();
+    }
+    // (screen corners, skin coordinates, diffuse, highlight, depth)
+    type Face = ([Pos2; 3], [Pos2; 3], f32, f32, f32);
+    let mut faces: Vec<Face> = Vec::new();
+    for tri in stone_mesh() {
+        let w: Vec<[f32; 3]> = tri.iter().map(|v| rot(*v)).collect();
+        let e1 = [w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2]];
+        let e2 = [w[2][0] - w[0][0], w[2][1] - w[0][1], w[2][2] - w[0][2]];
+        let mut n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
+        n = [n[0] / l, n[1] / l, n[2] / l];
+        // Outward normals point away from the centre; flip if the winding disagrees.
+        let cen = [(w[0][0] + w[1][0] + w[2][0]) / 3.0, (w[0][1] + w[1][1] + w[2][1]) / 3.0, (w[0][2] + w[1][2] + w[2][2]) / 3.0];
+        if n[0] * cen[0] + n[1] * cen[1] + n[2] * cen[2] < 0.0 {
+            n = [-n[0], -n[1], -n[2]];
+        }
+        if n[2] <= 0.0 {
+            continue; // facing away (the viewer looks along −z)
+        }
+        let diffuse = (n[0] * light[0] + n[1] * light[1] + n[2] * light[2]).max(0.0);
+        // Blinn highlight with the viewer at +z.
+        let hv = [light[0], light[1], light[2] + 1.0];
+        let hl = (hv[0] * hv[0] + hv[1] * hv[1] + hv[2] * hv[2]).sqrt();
+        let spec = ((n[0] * hv[0] + n[1] * hv[1] + n[2] * hv[2]) / hl).max(0.0).powf(28.0);
+        let screen: Vec<Pos2> = w.iter().map(|v| Pos2::new(c.x + v[0] * rad, c.y + v[1] * rad)).collect();
+        // Skin: the photograph projected around the stone (it turns with it).
+        let uv: Vec<Pos2> = tri
+            .iter()
+            .map(|v| {
+                let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                Pos2::new(0.5 + v[2].atan2(v[0]) / TAU, 0.5 + (v[1] / l).asin() / PI)
+            })
+            .collect();
+        let mut uv = [uv[0], uv[1], uv[2]];
+        let (umin, umax) = (uv.iter().map(|q| q.x).fold(1.0f32, f32::min), uv.iter().map(|q| q.x).fold(0.0f32, f32::max));
+        if umax - umin > 0.5 {
+            for q in uv.iter_mut() {
+                if q.x < 0.5 {
+                    q.x += 1.0;
+                }
+            }
+        }
+        faces.push(([screen[0], screen[1], screen[2]], uv, diffuse, spec, cen[2]));
+    }
+    faces.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
+    for (s, uv, diffuse, spec, _) in faces {
+        let shade = (0.12 + 1.05 * diffuse + 0.15 * g).min(1.0);
+        let col = Color32::from_gray((255.0 * shade) as u8);
+        let base = lit.vertices.len() as u32;
+        for k in 0..3 {
+            lit.vertices.push(egui::epaint::Vertex { pos: s[k], uv: Pos2::new(uv[k].x * 0.66, uv[k].y), color: col });
+        }
+        lit.add_triangle(base, base + 1, base + 2);
+        // Light: the highlight, and the stone's own fire, stronger the further it is turned.
+        let fire = glow(Color32::from_rgb(0xff, 0x50, 0x28), (0.06 + 0.5 * g) * (0.4 + 0.6 * (1.0 - diffuse)) * pulse);
+        let hl = glow(Color32::WHITE, spec * 0.45);
+        let add = Color32::from_rgba_premultiplied(fire.r().saturating_add(hl.r()), fire.g().saturating_add(hl.g()), fire.b().saturating_add(hl.b()), 0);
+        let b2 = shine.vertices.len() as u32;
+        for v in s {
+            shine.colored_vertex(v, add);
+        }
+        shine.add_triangle(b2, b2 + 1, b2 + 2);
+    }
+    p.add(Shape::mesh(lit));
+    p.add(Shape::mesh(shine));
+    // The gold veins catch fire as it wakes.
+    halo(p, c - Vec2::new(rad * 0.15, rad * 0.2), rad * 0.9, gold, 0.18 * g * pulse);
+}
