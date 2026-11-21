@@ -195,6 +195,8 @@ pub struct UiState {
     pub tour: crate::tutorial::Tour,
     /// Dragon Wave's preset browser.
     pub wave: crate::views::wave_ui::Browser,
+    /// Dragon Strings' preset browser.
+    pub guitar: crate::views::guitar_ui::Browser,
     /// ffmpeg can be run (`None` = not checked yet).
     pub ffmpeg_ok: Option<bool>,
     /// Why ffmpeg can't be used (the places tried and what went wrong).
@@ -321,6 +323,7 @@ impl UiState {
             ffmpeg_ok: None,
             ffmpeg_why: None,
             wave: Default::default(),
+            guitar: Default::default(),
             ffmpeg_job: None,
             hint: None,
             preview_started: None,
@@ -1627,6 +1630,19 @@ pub fn set_target(p: &mut Project, t: &Target, v: f32) {
             Some(Instrument::Wavetable(w)) => w.filters[0].resonance = v,
             _ => {}
         },
+        Target::InstrumentParam { channel, param } if matches!(p.channel(*channel).map(|c| &c.instrument), Some(Instrument::Guitar(_))) => {
+            if let Some(Instrument::Guitar(g)) = p.channel_mut(*channel).map(|c| &mut c.instrument) {
+                match param.as_str() {
+                    "brightness" => g.brightness = v,
+                    "body" => g.body = v,
+                    "drive" => g.drive = v,
+                    "tone" => g.tone = v,
+                    "strum" => g.strum_time = v,
+                    "master" => g.master = v,
+                    _ => {}
+                }
+            }
+        }
         Target::InstrumentParam { channel, param } => {
             if let Some(Instrument::Wavetable(w)) = p.channel_mut(*channel).map(|c| &mut c.instrument) {
                 let n = |pre: &str| param.strip_prefix(pre).and_then(|d| d.parse::<usize>().ok()).filter(|d| *d >= 1).map(|d| d - 1);

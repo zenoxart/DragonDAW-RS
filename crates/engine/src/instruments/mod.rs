@@ -2,12 +2,14 @@
 //! instruments implement the same trait in [`crate::plugins`].
 
 mod drums;
+mod guitar;
 pub mod kit;
 mod sampler;
 mod synth;
 mod wavetable;
 
 pub use drums::{default_pads, DrumPads};
+pub use guitar::Guitar;
 pub use sampler::{detect_slices as sampler_slices, Sampler};
 pub use synth::Synth;
 pub use wavetable::Wavetable;
@@ -39,6 +41,10 @@ pub trait InstrumentVoice: Send {
     fn active_voices(&self) -> usize;
     /// Sets a modulated parameter (automation) by name.
     fn set_param(&mut self, _id: &str, _value: f32) {}
+    /// What a fretted instrument's strings are playing (fret per string, −1 = silent), for its editor.
+    fn display(&self) -> Option<[i8; 8]> {
+        None
+    }
     /// Parameters of a hosted plugin instrument.
     fn plugin_params(&self) -> Vec<crate::effects::PluginParam> {
         Vec::new()
@@ -77,6 +83,7 @@ pub fn create(model: &Model, rate: f32, cache: &SampleCache) -> Option<Box<dyn I
         Model::Synth(_) => Box::new(Synth::new(rate)),
         Model::DrumPads(_) => Box::new(DrumPads::new(rate)),
         Model::Wavetable(_) => Box::new(Wavetable::new(rate)),
+        Model::Guitar(_) => Box::new(Guitar::new(rate)),
         Model::Plugin(_) => return None,
     };
     i.update(model, cache);

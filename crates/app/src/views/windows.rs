@@ -62,7 +62,7 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     for c in inst {
         let mut open = true;
         let title = st.session.project.channel(c).map(|x| format!("{} – {}", x.name, x.instrument.kind_name())).unwrap_or_default();
-        let wide = matches!(st.session.project.channel(c).map(|x| &x.instrument), Some(Instrument::Wavetable(_)));
+        let wide = matches!(st.session.project.channel(c).map(|x| &x.instrument), Some(Instrument::Wavetable(_) | Instrument::Guitar(_)));
         egui::Window::new(title).id(egui::Id::new(("inst", c))).open(&mut open).resizable(true).default_width(if wide { 1300.0 } else { 460.0 }).show(ctx, |ui| instrument_editor(ui, st, c));
         if !open || st.session.project.channel(c).is_none() {
             st.ui.instrument_windows.retain(|w| *w != c);
@@ -1053,6 +1053,7 @@ fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
         Instrument::DrumPads(pads) => drum_editor(ui, st, cid, pads),
         Instrument::Plugin(pl) => plugin_params(ui, st, pl, PluginSlot::Channel(cid)),
         Instrument::Wavetable(w) => super::wave_ui::editor(ui, st, cid, *w),
+        Instrument::Guitar(g) => super::guitar_ui::editor(ui, st, cid, *g),
     }
 }
 

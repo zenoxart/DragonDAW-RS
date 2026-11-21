@@ -31,6 +31,8 @@ pub mod edit;
 pub mod effects;
 pub mod export;
 pub mod fault;
+pub mod gtr;
+pub mod gtr_library;
 pub mod hammerstein;
 pub mod history;
 pub mod instruments;

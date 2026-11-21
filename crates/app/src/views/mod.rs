@@ -9,6 +9,7 @@ pub mod export;
 pub mod fx_gallery;
 pub mod fx_panel;
 pub mod fx_ui;
+pub mod guitar_ui;
 pub mod hammerstein;
 pub mod keyboard;
 pub mod keys;

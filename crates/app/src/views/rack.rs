@@ -40,7 +40,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         widgets::apply(st, &r, "Swing", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.swing = swing));
         ui.separator();
         ui.menu_button("+ Channel", |ui| {
-            for (id, label) in [("add.sampler", "Sampler…"), ("add.synth", "Synth"), ("add.wavetable", "Dragon Wave (wavetable)"), ("add.drums", "Drum pads")] {
+            for (id, label) in [("add.sampler", "Sampler…"), ("add.synth", "Synth"), ("add.wavetable", "Dragon Wave (wavetable)"), ("add.guitar", "Dragon Strings (guitar)"), ("add.drums", "Drum pads")] {
                 if ui.button(label).clicked() {
                     st.ctx.run(&format!("dragon.{id}"), serde_json::Value::Null);
                     ui.close_menu();

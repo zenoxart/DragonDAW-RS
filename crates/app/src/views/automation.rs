@@ -66,6 +66,15 @@ fn current_value(p: &Project, t: &Target) -> Option<f32> {
                     w.filters.get(n("cutoff")?)?.cutoff
                 }
             }
+            Instrument::Guitar(g) => match param.as_str() {
+                "brightness" => g.brightness,
+                "body" => g.body,
+                "drive" => g.drive,
+                "tone" => g.tone,
+                "strum" => g.strum_time,
+                "master" => g.master,
+                _ => return None,
+            },
             _ => return None,
         },
         Target::InsertParam { channel, insert, param } => *p.mixer.get(*channel)?.inserts.iter().find(|i| i.id == *insert)?.params.get(param)?,
@@ -122,6 +131,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         if matches!(c.instrument, Instrument::Synth(_)) {
                             opts.push(("Cutoff", Target::SynthCutoff(c.id)));
                             opts.push(("Resonance", Target::SynthResonance(c.id)));
+                        }
+                        if matches!(c.instrument, Instrument::Guitar(_)) {
+                            for (n, prm) in [("Brightness", "brightness"), ("Body", "body"), ("Drive", "drive"), ("Tone", "tone"), ("Strum time", "strum"), ("Main level", "master")] {
+                                opts.push((n, Target::InstrumentParam { channel: c.id, param: prm.into() }));
+                            }
                         }
                         if matches!(c.instrument, Instrument::Wavetable(_)) {
                             for (n, prm) in [

@@ -993,6 +993,8 @@ pub struct MeterValues {
     /// Clip launcher: playing (lane, pattern) and queued (lane, pattern or stop).
     pub launched: Vec<(Id, Id)>,
     pub queued: Vec<(Id, Option<Id>)>,
+    /// Fretted instruments: the fret each string plays (−1 = silent), per channel.
+    pub frets: HashMap<Id, [i8; 8]>,
 }
 
 #[derive(Clone, Default)]
@@ -2117,6 +2119,11 @@ impl Renderer {
             cr.iter_mut().for_each(|x| *x = 0.0);
             {
                 let mut g = inst.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(d) = g.display() {
+                    if let Ok(mut m) = self.meters.inner.try_lock() {
+                        m.frets.insert(c.id, d);
+                    }
+                }
                 if g.active_voices() == 0 {
                     continue;
                 }

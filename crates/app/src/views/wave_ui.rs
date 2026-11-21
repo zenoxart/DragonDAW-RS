@@ -305,17 +305,6 @@ fn mod_target(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams, r: &egu
     }
 }
 
-/// A knob without modulation (the FX rack's controls).
-#[allow(clippy::too_many_arguments)]
-fn kn(ui: &mut Ui, st: &mut State, cid: Id, v: f32, min: f32, max: f32, default: f32, label: &str, fmt: impl Fn(f32) -> String, color: Color32, write: impl FnOnce(&mut WavetableParams, f32)) {
-    let mut x = v;
-    let r = knob_colored(ui, &mut x, min, max, default, label, fmt, color);
-    if r.hovered() || r.dragged() {
-        st.hint("Dragon Wave", label, format!("{x:.2}"));
-    }
-    widgets::apply(st, &r, &format!("Dragon Wave: {label}"), |pr| set(pr, cid, |w| write(w, x)));
-}
-
 /// The handle a modulation source is dragged from.
 fn mod_handle(ui: &mut Ui, src: ModSource) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(Vec2::new(16.0, 16.0), Sense::drag());
@@ -1527,7 +1516,18 @@ pub fn filter_db(kind: FilterKind, fc: f32, reso: f32, f: f32) -> f32 {
     20.0 * g.max(1e-5).log10()
 }
 
+/// How an FX rack reaches its slots in the project (each instrument keeps its own list).
+pub type FxEdit = fn(&mut Project, Id, &mut dyn FnMut(&mut Vec<FxSlot>));
+
 fn fx_tab(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams) {
+    fn edit(pr: &mut Project, cid: Id, f: &mut dyn FnMut(&mut Vec<FxSlot>)) {
+        set(pr, cid, |w| f(&mut w.fx));
+    }
+    fx_rack(ui, st, cid, &p.fx, W - 20.0, "wave", edit);
+}
+
+/// The FX rack: effects in order, each with its main controls and the rest folded away.
+pub fn fx_rack(ui: &mut Ui, st: &mut State, cid: Id, fxs: &[FxSlot], width: f32, salt: &'static str, edit: FxEdit) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("FX RACK").small().strong().color(theme::ACCENT_2));
         ui.label(RichText::new("runs after the voices, top to bottom").small().color(theme::TEXT_DIM));
@@ -1535,27 +1535,27 @@ fn fx_tab(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams) {
             for id in FX_CHOICES {
                 if let Some(def) = effects::find(id) {
                     if ui.button(def.name).on_hover_text(def.description).clicked() {
-                        st.session.edit("Add synth effect", |pr| set(pr, cid, |w| w.fx.push(FxSlot { id: id.into(), on: true, params: Default::default() })));
+                        st.session.edit("Add effect", |pr| edit(pr, cid, &mut |fx| fx.push(FxSlot { id: id.into(), on: true, params: Default::default() })));
                         ui.close_menu();
                     }
                 }
             }
         });
     });
-    if p.fx.is_empty() {
+    if fxs.is_empty() {
         ui.label(RichText::new("No effects yet – add distortion, chorus, delay, reverb …").small().color(theme::TEXT_DIM));
     }
-    let n = p.fx.len();
-    for (i, f) in p.fx.clone().into_iter().enumerate() {
+    let n = fxs.len();
+    for (i, f) in fxs.iter().cloned().enumerate() {
         let Some(def) = effects::find(&f.id) else { continue };
         let col = theme::ACCENT_2;
         egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
-            ui.set_width(W - 20.0);
+            ui.set_width(width);
             ui.horizontal(|ui| {
                 if widgets::toggle(ui, f.on, if f.on { "On" } else { "Off" }, col).clicked() {
                     st.session.edit("Effect on / off", |pr| {
-                        set(pr, cid, |w| {
-                            if let Some(x) = w.fx.get_mut(i) {
+                        edit(pr, cid, &mut |fx| {
+                            if let Some(x) = fx.get_mut(i) {
                                 x.on = !f.on
                             }
                         })
@@ -1564,34 +1564,35 @@ fn fx_tab(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams) {
                 ui.label(RichText::new(def.name).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("×").on_hover_text("Remove").clicked() {
-                        st.session.edit("Remove synth effect", |pr| {
-                            set(pr, cid, |w| {
-                                if i < w.fx.len() {
-                                    w.fx.remove(i);
+                        st.session.edit("Remove effect", |pr| {
+                            edit(pr, cid, &mut |fx| {
+                                if i < fx.len() {
+                                    fx.remove(i);
                                 }
                             })
                         });
                     }
                     if i + 1 < n && ui.small_button("down").clicked() {
-                        st.session.edit("Move effect", |pr| set(pr, cid, |w| w.fx.swap(i, i + 1)));
+                        st.session.edit("Move effect", |pr| edit(pr, cid, &mut |fx| fx.swap(i, i + 1)));
                     }
                     if i > 0 && ui.small_button("up").clicked() {
-                        st.session.edit("Move effect", |pr| set(pr, cid, |w| w.fx.swap(i, i - 1)));
+                        st.session.edit("Move effect", |pr| edit(pr, cid, &mut |fx| fx.swap(i, i - 1)));
                     }
                 });
             });
             // The main controls first; the rest folded away so long effects stay tidy.
             let (main, more) = def.params.split_at(def.params.len().min(8));
-            fx_params(ui, st, cid, i, &f, main, col);
+            fx_params(ui, st, cid, i, &f, main, col, salt, edit);
             if !more.is_empty() {
-                egui::CollapsingHeader::new(RichText::new(format!("More controls ({})", more.len())).small()).id_salt(("wave.fxmore", cid, i)).show(ui, |ui| fx_params(ui, st, cid, i, &f, more, col));
+                egui::CollapsingHeader::new(RichText::new(format!("More controls ({})", more.len())).small()).id_salt((salt, "fxmore", cid, i)).show(ui, |ui| fx_params(ui, st, cid, i, &f, more, col, salt, edit));
             }
         });
         ui.add_space(4.0);
     }
 }
 
-fn fx_params(ui: &mut Ui, st: &mut State, cid: Id, i: usize, f: &FxSlot, params: &[effects::ParamInfo], col: Color32) {
+#[allow(clippy::too_many_arguments)]
+fn fx_params(ui: &mut Ui, st: &mut State, cid: Id, i: usize, f: &FxSlot, params: &[effects::ParamInfo], col: Color32, salt: &'static str, edit: FxEdit) {
     ui.horizontal_wrapped(|ui| {
         for prm in params {
             let v = f.params.get(prm.id).copied().unwrap_or(prm.default);
@@ -1600,9 +1601,9 @@ fn fx_params(ui: &mut Ui, st: &mut State, cid: Id, i: usize, f: &FxSlot, params:
                 ParamKind::Toggle => {
                     if ui.checkbox(&mut (v > 0.5), prm.name).clicked() {
                         st.session.edit(prm.name, |pr| {
-                            set(pr, cid, |w| {
-                                if let Some(x) = w.fx.get_mut(i) {
-                                    x.params.insert(key, if v > 0.5 { 0.0 } else { 1.0 });
+                            edit(pr, cid, &mut |fx| {
+                                if let Some(x) = fx.get_mut(i) {
+                                    x.params.insert(key.clone(), if v > 0.5 { 0.0 } else { 1.0 });
                                 }
                             })
                         });
@@ -1610,14 +1611,14 @@ fn fx_params(ui: &mut Ui, st: &mut State, cid: Id, i: usize, f: &FxSlot, params:
                 }
                 ParamKind::Choice(names) => {
                     let cur = names.get(v.round() as usize).copied().unwrap_or("?");
-                    egui::ComboBox::from_id_salt(("wave.fxc", cid, i, prm.id)).selected_text(cur).width(90.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt((salt, "fxc", cid, i, prm.id)).selected_text(cur).width(90.0).show_ui(ui, |ui| {
                         for (j, nm) in names.iter().enumerate() {
                             if ui.selectable_label(j == v.round() as usize, *nm).clicked() {
                                 let key = key.clone();
                                 st.session.edit(prm.name, |pr| {
-                                    set(pr, cid, |w| {
-                                        if let Some(x) = w.fx.get_mut(i) {
-                                            x.params.insert(key, j as f32);
+                                    edit(pr, cid, &mut |fx| {
+                                        if let Some(x) = fx.get_mut(i) {
+                                            x.params.insert(key.clone(), j as f32);
                                         }
                                     })
                                 });
@@ -1630,23 +1631,18 @@ fn fx_params(ui: &mut Ui, st: &mut State, cid: Id, i: usize, f: &FxSlot, params:
                     // Long names get shortened so neighbouring labels don't run together.
                     let short = if prm.name.chars().count() > 9 { format!("{}.", prm.name.chars().take(8).collect::<String>().trim_end()) } else { prm.name.to_string() };
                     ui.add_space(2.0);
-                    kn(
-                        ui,
-                        st,
-                        cid,
-                        v,
-                        prm.min,
-                        prm.max,
-                        prm.default,
-                        &short,
-                        move |x| prm.format(x),
-                        col,
-                        move |w, x| {
-                            if let Some(s) = w.fx.get_mut(i) {
-                                s.params.insert(key, x);
+                    let mut x = v;
+                    let r = knob_colored(ui, &mut x, prm.min, prm.max, prm.default, &short, move |x| prm.format(x), col);
+                    if r.hovered() || r.dragged() {
+                        st.hint(prm.name, &short, prm.format(x));
+                    }
+                    widgets::apply(st, &r, prm.name, |pr| {
+                        edit(pr, cid, &mut |fx| {
+                            if let Some(s) = fx.get_mut(i) {
+                                s.params.insert(key.clone(), x);
                             }
-                        },
-                    );
+                        })
+                    });
                 }
             }
         }

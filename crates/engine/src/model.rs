@@ -508,6 +508,7 @@ pub enum Instrument {
     Plugin(PluginRef),
     /// Dragon Wave, the wavetable synth.
     Wavetable(Box<crate::wt::WavetableParams>),
+    Guitar(Box<crate::gtr::GuitarParams>),
 }
 
 impl Instrument {
@@ -519,6 +520,7 @@ impl Instrument {
             Instrument::DrumPads(_) => "Drum Pads",
             Instrument::Plugin(_) => "Plugin",
             Instrument::Wavetable(_) => "Dragon Wave",
+            Instrument::Guitar(_) => "Dragon Strings",
         }
     }
 }
