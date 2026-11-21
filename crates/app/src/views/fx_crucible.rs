@@ -292,10 +292,8 @@ pub fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(Strin
     let Some(pos) = resp.interact_pointer_pos().or_else(|| resp.hover_pos()) else { return out };
     let l = layout(r);
     let pick = |at: Pos2| -> usize {
-        for k in 0..3 {
-            if l.jars[k].expand2(Vec2::new(6.0, 30.0)).contains(at) {
-                return k + 1;
-            }
+        if let Some(k) = l.jars.iter().position(|j| j.expand2(Vec2::new(6.0, 30.0)).contains(at)) {
+            return k + 1;
         }
         if l.phial.expand(6.0).contains(at) {
             return 5;
