@@ -39,11 +39,11 @@ impl Hero<'_> {
 }
 
 /// Log-frequency x position (20 Hz … 20 kHz) inside `r`.
-fn fx(r: Rect, f: f32) -> f32 {
+pub(super) fn fx(r: Rect, f: f32) -> f32 {
     r.left() + r.width() * ((f.max(20.0) / 20.0).log10() / 3.0).clamp(0.0, 1.0)
 }
 
-fn freq_at(r: Rect, x: f32) -> f32 {
+pub(super) fn freq_at(r: Rect, x: f32) -> f32 {
     20.0 * 1000f32.powf(((x - r.left()) / r.width()).clamp(0.0, 1.0))
 }
 
@@ -149,11 +149,8 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "compressor" | "limiter" | "gate" | "deesser" => dynamics(&p, r, h, col),
         "multiband" => multiband(&p, r, h, col),
         "transient" => transient(&p, r, h, col),
-        "delay" => delay(&p, r, h, col),
-        "reverb" => {
-            reverb(&p, r, h, col);
-            decay_curve(&p, decay_rect(r), h, col);
-        }
+        "delay" => super::fx_cave::cavern(&p, r, h),
+        "reverb" => super::fx_cave::lair(&p, r, h),
         "saturator" | "bitcrusher" => shaper(&p, r, h, col),
         "clipper" => clipper(&p, r, h, col),
         "multisat" => multisat(&p, r, h, col),
@@ -349,6 +346,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 });
             }
         }
+        "delay" => out.extend(super::fx_cave::cavern_interact(ui, r, resp, h)),
         "reverb" => {
             let dr = decay_rect(r);
             let y_of = |m: f32| dr.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (dr.height() * 0.4);
@@ -360,15 +358,8 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
             let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
-            if resp.dragged() && held == 0 && !dr.contains(origin) {
-                // The decay plot: left / right is the decay time, up / down the size.
-                let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
-                let d = resp.drag_delta() * fine;
-                for (id, delta) in [("decay", d.x / r.width()), ("size", -d.y / r.height())] {
-                    if let (Some(prm), true) = (h.def.params.iter().find(|p| p.id == id), delta != 0.0) {
-                        out.push((id.to_string(), prm.denormalize((prm.normalize(h.v(id)) + delta).clamp(0.0, 1.0))));
-                    }
-                }
+            if !dr.contains(origin) {
+                super::fx_cave::lair_interact(ui, r, resp, h, &mut out);
             }
             if resp.dragged() && held > 0 {
                 let u = ((dr.center().y - pos.y) / (dr.height() * 0.4)).clamp(-1.0, 1.0);
@@ -585,7 +576,6 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
 pub fn xy_params(id: &str) -> Option<(Option<&'static str>, Option<&'static str>)> {
     Some(match id {
         "limiter" => (Some("ceiling"), Some("gain")),
-        "delay" => (Some("time"), Some("feedback")),
         "chorus" | "flanger" | "tremolo" => (Some("rate"), Some("depth")),
         "phaser" => (Some("center"), Some("depth")),
         "saturator" => (Some("tone"), Some("drive")),
@@ -1175,66 +1165,16 @@ fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 // ------------------------------------------------------------------------------------ time based
 
-fn delay(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    grid(p, r, false);
-    let pr = plot(r);
-    let fb = h.v("feedback");
-    let ping = h.v("mode").round() as i32 == 1;
-    let time = h.v("time").max(1.0);
-    // Show about eight repeats (at least half a second).
-    let span_ms: f32 = (time * 8.0).max(500.0);
-    let x_of = |ms: f32| pr.left() + 6.0 + ms / span_ms * (pr.width() - 12.0);
-    let y_of = |db: f32| pr.top() + (-db.clamp(-30.0, 0.0) / 30.0) * pr.height();
-    y_axis(p, pr, &[(0.0, "0 dB"), (-6.0, "-6"), (-12.0, "-12"), (-18.0, "-18"), (-24.0, "-24"), (-30.0, "-30")], y_of);
-    let marks: Vec<(f32, String)> = (0..=4).map(|k| span_ms * k as f32 / 4.0).map(|ms| (ms, if ms >= 1000.0 { format!("{:.1} s", ms / 1000.0) } else { format!("{ms:.0} ms") })).collect();
-    x_axis(p, pr, &marks, x_of);
-    // Lollipop taps (dry hit in orange, repeats in the effect colour), one lights as the echo passes.
-    let travel = (h.t() * 1000.0) % (span_ms + 300.0);
-    let mut level = 1.0f32;
-    let mut k = 0;
-    while k < 48 && level > 0.03 {
-        let t = time * k as f32;
-        if t > span_ms {
-            break;
-        }
-        let x = x_of(t);
-        let db = dragon_engine::dsp::gain_to_db(level.max(1e-4));
-        let y = y_of(db);
-        let lit = (travel - t).abs() < 50.0;
-        let c = if k == 0 { Color32::from_rgb(0xf0, 0x8a, 0x4b) } else { col.gamma_multiply(0.45 + 0.55 * level) };
-        let side = if ping && k % 2 == 1 { 1.5 } else { 0.0 };
-        p.line_segment([Pos2::new(x + side, pr.bottom()), Pos2::new(x + side, y)], Stroke::new(if lit { 4.0_f32 } else { 2.5 }, c.gamma_multiply(0.75)));
-        p.circle_filled(Pos2::new(x + side, y), if lit { 8.0 } else { 6.0 }, c.gamma_multiply(0.25));
-        p.circle_filled(Pos2::new(x + side, y), if lit { 4.5 } else { 3.5 }, if lit { Color32::WHITE } else { c });
-        level *= fb.max(0.0);
-        k += 1;
-        if fb <= 0.0 {
-            break;
-        }
-    }
-    p.text(
-        pr.right_top() + Vec2::new(-4.0, 2.0),
-        egui::Align2::RIGHT_TOP,
-        format!("{:.0} ms · {:.0}% feedback{}", time, fb * 100.0, if ping { " · ping-pong" } else { "" }),
-        egui::FontId::proportional(10.5),
-        theme::TEXT,
-    );
-}
-
-/// Where the reverb's decay-rate curve sits (top right of the display).
+/// Where the reverb's decay-rate curve sits: the right pane of Dragon's Lair.
 fn decay_rect(r: Rect) -> Rect {
-    let pr = plot(r);
-    // Below the caption line at the top right.
-    Rect::from_min_size(Pos2::new(pr.right() - pr.width() * 0.38, pr.top() + 18.0), Vec2::new(pr.width() * 0.38 - 4.0, pr.height() * 0.48))
+    super::fx_cave::lair_layout(r).2.shrink(4.0)
 }
 
 const DR_RANGE: f32 = 2.0; // log2: ×0.25 … ×4
 
 /// Pro-R style decay-rate EQ: six bands (bell, shelves, notch) with free frequency, ×0.25 … ×4 of the
 /// decay time and Q (wheel); right-click a band for its shape.
-fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(12, 14, 18, 220));
-    p.rect_stroke(r, 4.0, Stroke::new(1.0_f32, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
+pub(super) fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let y_of = |m: f32| r.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (r.height() * 0.4);
     p.line_segment([Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)], Stroke::new(1.0_f32, Color32::from_white_alpha(30)));
     // The curve the reverb uses (sum of the bands' shapes), and a dot per band at its value.
@@ -1249,71 +1189,6 @@ fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(r.left_top() + Vec2::new(4.0, 2.0), egui::Align2::LEFT_TOP, "DECAY RATE", egui::FontId::proportional(8.5), theme::TEXT_DIM);
     p.text(Pos2::new(r.right() - 4.0, y_of(4.0)), egui::Align2::RIGHT_CENTER, "×4", egui::FontId::proportional(8.0), theme::TEXT_DIM);
     p.text(Pos2::new(r.right() - 4.0, y_of(0.25)), egui::Align2::RIGHT_CENTER, "×¼", egui::FontId::proportional(8.0), theme::TEXT_DIM);
-}
-
-fn reverb(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    grid(p, r, false);
-    let pr = plot(r);
-    let decay = h.v("decay");
-    let pre = h.v("predelay");
-    let size = h.v("size");
-    let early = h.v("early");
-    let late = h.v("late");
-    let span = (decay * 1.1 + pre / 1000.0).clamp(0.5, 24.0);
-    let x_of = |s: f32| pr.left() + s / span * pr.width();
-    let y_of = |db: f32| pr.top() + (-db.clamp(-30.0, 0.0) / 30.0) * pr.height();
-    y_axis(p, pr, &[(0.0, "0 dB"), (-6.0, "-6"), (-12.0, "-12"), (-18.0, "-18"), (-24.0, "-24"), (-30.0, "-30")], y_of);
-    let marks: Vec<(f32, String)> = (0..=4).map(|k| span * k as f32 / 4.0).map(|s| (s, format!("{s:.1} s"))).collect();
-    x_axis(p, pr, &marks, x_of);
-    // The tail as a dense "impulse response": one thin bar per pixel column, its height a noisy sample
-    // under the exponential envelope (in dB), shimmering slowly.
-    let start = pre / 1000.0;
-    let level = |s: f32| -> f32 {
-        if s < start {
-            0.0
-        } else {
-            (-6.9 * (s - start) / decay.max(0.1)).exp() * late.max(0.15)
-        }
-    };
-    let mut env_pts = Vec::new();
-    let mut x = pr.left();
-    let mut seed = 0x9e37_79b9u32;
-    while x < pr.right() {
-        let s = (x - pr.left()) / pr.width() * span;
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        let noise = ((seed % 1000) as f32 / 1000.0) * (0.75 + 0.25 * (h.t() * 3.0 + x * 0.3).sin());
-        let a = level(s) * (0.35 + 0.65 * noise);
-        if a > 0.0 {
-            let y = y_of(dragon_engine::dsp::gain_to_db(a.max(1e-4)));
-            let ty = y.max(pr.top());
-            p.line_segment([Pos2::new(x, pr.bottom()), Pos2::new(x, ty)], Stroke::new(1.0_f32, col.gamma_multiply(0.7)));
-        }
-        if s >= start {
-            env_pts.push(Pos2::new(x, y_of(dragon_engine::dsp::gain_to_db(level(s).max(1e-4)))));
-        }
-        x += 1.5;
-    }
-    if env_pts.len() > 1 {
-        p.add(Shape::line(env_pts.clone(), Stroke::new(5.0_f32, col.gamma_multiply(0.15))));
-        p.add(Shape::line(env_pts, Stroke::new(1.5_f32, col)));
-    }
-    // Early reflections: bright spikes after the pre-delay.
-    for k in 0..8 {
-        let s = start + (k as f32 + 1.0) * 0.008 * h.v("er_size") * (1.0 + size);
-        let a = early * (1.0 - k as f32 / 9.0);
-        if a > 0.01 {
-            let y = y_of(dragon_engine::dsp::gain_to_db(a));
-            p.line_segment([Pos2::new(x_of(s), pr.bottom()), Pos2::new(x_of(s), y)], Stroke::new(2.0_f32, Color32::from_rgb(0xf0, 0x8a, 0x4b)));
-        }
-    }
-    let modes = match h.def.param("mode").map(|p| p.kind) {
-        Some(effects::ParamKind::Choice(n)) => n,
-        _ => &[],
-    };
-    let mode = modes.get(h.v("mode").round() as usize).copied().unwrap_or("");
-    p.text(pr.right_top() + Vec2::new(-4.0, 2.0), egui::Align2::RIGHT_TOP, format!("{mode} · {decay:.1} s decay · {pre:.0} ms pre-delay"), egui::FontId::proportional(10.5), theme::TEXT);
 }
 
 // ---------------------------------------------------------------------------------- distortion

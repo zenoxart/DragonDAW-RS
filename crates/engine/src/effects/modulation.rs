@@ -7,6 +7,8 @@ use crate::dsp::{Biquad, BiquadKind, DelayLine, Lfo, LfoShape, OnePole};
 // ------------------------------------------------------------------------------------------------ delay
 
 const SYNC: &[&str] = &["Free", "1/32", "1/16", "1/16 dotted", "1/8 triplet", "1/8", "1/8 dotted", "1/4 triplet", "1/4", "1/4 dotted", "1/2", "1 bar"];
+/// Beats per delay sync value (index 0 is free time).
+pub const DELAY_SYNC_BEATS: [f64; 12] = SYNC_BEATS;
 const SYNC_BEATS: [f64; 12] = [0.0, 0.125, 0.25, 0.375, 1.0 / 3.0, 0.5, 0.75, 2.0 / 3.0, 1.0, 1.5, 2.0, 4.0];
 
 const DELAY_PARAMS: &[ParamInfo] = &[
@@ -92,6 +94,8 @@ impl Diffuser {
 
 pub struct Delay {
     rate: f32,
+    /// The echo time in effect (ms, synced or free), and the input and output peaks of the last block.
+    tele: [f32; 3],
     bpm: f64,
     sync: usize,
     time_ms: f32,
@@ -193,6 +197,9 @@ impl Effect for Delay {
             _ => {}
         }
     }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
+    }
     fn set_tempo(&mut self, bpm: f64) {
         self.bpm = bpm;
     }
@@ -200,7 +207,11 @@ impl Effect for Delay {
         self.lines.iter_mut().for_each(DelayLine::clear);
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let peak = |l: &[f32], r: &[f32]| l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        let input = peak(l, r);
         let target = self.delay_samples().clamp(1.0, self.lines[0].len() as f32 - 4.0);
+        self.tele[0] = target / self.rate * 1000.0;
+        self.tele[1] = input;
         let tape = self.mode == 2;
         let drive = crate::dsp::db_to_gain(self.drive);
         let env_a = (-1.0 / (0.01 * self.rate)).exp();
@@ -310,6 +321,7 @@ impl Effect for Delay {
             l[i] = l[i] * (1.0 - mix) + wl * mix;
             r[i] = r[i] * (1.0 - mix) + wr * mix;
         }
+        self.tele[2] = peak(l, r);
     }
 }
 
@@ -325,6 +337,7 @@ pub fn delay_def() -> EffectDef {
         create: |rate| {
             Box::new(Delay {
                 rate,
+                tele: [375.0, 0.0, 0.0],
                 bpm: 120.0,
                 sync: 6,
                 time_ms: 375.0,

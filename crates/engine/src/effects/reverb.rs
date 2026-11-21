@@ -170,6 +170,8 @@ pub fn dr_bands(get: impl Fn(&str) -> f32) -> [DrBand; DR_BANDS] {
 }
 
 pub struct Reverb {
+    /// The input and output peaks of the last block.
+    tele: [f32; 2],
     rate: f32,
     pre: [DelayLine; 2],
     early: [DelayLine; 2],
@@ -205,6 +207,7 @@ impl Reverb {
     fn new(rate: f32) -> Self {
         let max = (rate * 0.2) as usize;
         Reverb {
+            tele: [0.0; 2],
             rate,
             pre: [DelayLine::new((rate * 0.25) as usize), DelayLine::new((rate * 0.25) as usize)],
             // Room for the largest early size (2×) with the size control at its maximum.
@@ -329,6 +332,8 @@ impl Effect for Reverb {
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let peak = |l: &[f32], r: &[f32]| l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        self.tele[0] = peak(l, r);
         let pre = self.predelay * 0.001 * self.rate;
         let mod_depth = self.modulation * 0.0015 * self.rate;
         for i in 0..l.len() {
@@ -392,6 +397,10 @@ impl Effect for Reverb {
             l[i] = dl * (1.0 - self.mix) + (mid + side) * self.mix;
             r[i] = dr * (1.0 - self.mix) + (mid - side) * self.mix;
         }
+        self.tele[1] = peak(l, r);
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 

@@ -9,6 +9,7 @@ pub mod clipper;
 pub mod dynamics;
 pub mod eq;
 mod modulation;
+pub use modulation::DELAY_SYNC_BEATS;
 pub mod multisat;
 pub mod panner;
 pub mod pitch;

@@ -89,7 +89,8 @@ pub fn phosphor(f: super::analog::Finish) -> Color32 {
         Cream | Gold | Copper => Color32::from_rgb(0xff, 0xb8, 0x4a),
         Basalt | Forged | Obsidian => Color32::from_rgb(0xff, 0xd2, 0x7a),
         Lapis => Color32::from_rgb(0xb4, 0xc4, 0xff),
-        Verdigris => Color32::from_rgb(0x84, 0xe4, 0xff),
+        Amethyst => Color32::from_rgb(0xb4, 0x7c, 0xff),
+        Slate => Color32::from_rgb(0x52, 0xf0, 0xd8),
         _ => PHOSPHOR,
     }
 }

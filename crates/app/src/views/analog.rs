@@ -23,8 +23,10 @@ pub enum Finish {
     Gold,
     /// Oxblood crackle (modulation): cream knobs.
     Oxblood,
-    /// Verdigris hammertone (space: reverb, delay).
-    Verdigris,
+    /// Black cave rock with amethyst veins (Dragon's Lair).
+    Amethyst,
+    /// Wet slate with teal mineral streaks (Echo Cavern).
+    Slate,
     /// Dark copper (crushers): gunmetal knobs.
     Copper,
     /// Carved basalt with runes (Golem Strip): the gnostic units, gold-engraved, brass knobs.
@@ -46,7 +48,8 @@ impl Finish {
             Finish::Cream => Color32::from_rgb(0xd9, 0xcc, 0xae),
             Finish::Gold => Color32::from_rgb(0xa8, 0x86, 0x48),
             Finish::Oxblood => Color32::from_rgb(0x5a, 0x1c, 0x1e),
-            Finish::Verdigris => Color32::from_rgb(0x2c, 0x4a, 0x44),
+            Finish::Amethyst => Color32::from_rgb(0x22, 0x1e, 0x26),
+            Finish::Slate => Color32::from_rgb(0x1c, 0x24, 0x26),
             Finish::Copper => Color32::from_rgb(0x4a, 0x2e, 0x24),
             Finish::Basalt => Color32::from_rgb(0x2a, 0x28, 0x26),
             Finish::Forged => Color32::from_rgb(0x34, 0x32, 0x33),
@@ -66,7 +69,8 @@ impl Finish {
             Finish::Cream => Color32::from_rgb(0x2a, 0x1e, 0x14),
             Finish::Gold => Color32::from_rgb(0x24, 0x18, 0x08),
             Finish::Oxblood => Color32::from_rgb(0xf1, 0xe4, 0xc8),
-            Finish::Verdigris => Color32::from_rgb(0xe6, 0xe0, 0xc8),
+            Finish::Amethyst => Color32::from_rgb(0xe6, 0xdc, 0xff),
+            Finish::Slate => Color32::from_rgb(0xd6, 0xf2, 0xec),
             Finish::Copper => Color32::from_rgb(0xf0, 0xc8, 0x98),
             Finish::Black => Color32::from_rgb(0xee, 0xee, 0xea),
             Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => GNOSTIC_GOLD,
@@ -87,6 +91,8 @@ impl Finish {
     pub fn accent(self) -> Option<Color32> {
         match self {
             Finish::Oxblood => Some(Color32::from_rgb(0xf2, 0xa6, 0x4a)),
+            Finish::Amethyst => Some(Color32::from_rgb(0xb4, 0x7c, 0xff)),
+            Finish::Slate => Some(Color32::from_rgb(0x52, 0xf0, 0xd8)),
             f if f.gnostic() => Some(GNOSTIC_GOLD),
             _ => None,
         }
@@ -111,7 +117,7 @@ impl Finish {
     pub fn knob(self) -> KnobStyle {
         match self {
             Finish::Aluminium | Finish::Gold | Finish::Copper => KnobStyle::Ring,
-            Finish::Black | Finish::Verdigris => KnobStyle::Metal,
+            Finish::Black | Finish::Amethyst | Finish::Slate => KnobStyle::Metal,
             Finish::Cream => KnobStyle::Chicken,
             Finish::Oxblood => KnobStyle::Cream,
             Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => KnobStyle::Brass,
@@ -139,7 +145,8 @@ pub fn finish_of(id: &str) -> Finish {
         "saturator" | "multisat" | "alter" => Finish::Cream,
         "clipper" => Finish::Gold,
         "chorus" | "flanger" | "phaser" | "tremolo" | "orbit" => Finish::Oxblood,
-        "reverb" | "delay" => Finish::Verdigris,
+        "reverb" => Finish::Amethyst,
+        "delay" => Finish::Slate,
         _ => Finish::Copper,
     }
 }
@@ -172,7 +179,8 @@ mod plates {
             Finish::Cream => ("fx-plate-cream", include_bytes!("../../assets/fx/plate_cream.jpg")),
             Finish::Gold => ("fx-plate-gold", include_bytes!("../../assets/fx/plate_gold.jpg")),
             Finish::Oxblood => ("fx-plate-oxblood", include_bytes!("../../assets/fx/plate_oxblood.jpg")),
-            Finish::Verdigris => ("fx-plate-verdigris", include_bytes!("../../assets/fx/plate_verdigris.jpg")),
+            Finish::Amethyst => ("fx-plate-amethyst", include_bytes!("../../assets/fx/plate_amethyst.jpg")),
+            Finish::Slate => ("fx-plate-slate", include_bytes!("../../assets/fx/plate_slate.jpg")),
             Finish::Copper => ("fx-plate-copper", include_bytes!("../../assets/fx/plate_copper.jpg")),
             Finish::Basalt => ("fx-plate-basalt", include_bytes!("../../assets/fx/plate_basalt.jpg")),
             Finish::Forged => ("fx-plate-forged", include_bytes!("../../assets/fx/plate_forged.jpg")),

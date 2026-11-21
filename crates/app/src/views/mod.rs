@@ -7,6 +7,7 @@ pub mod browser;
 pub mod clip_view;
 pub mod envelope;
 pub mod export;
+pub mod fx_cave;
 pub mod fx_gallery;
 pub mod fx_mod;
 pub mod fx_panel;
