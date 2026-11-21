@@ -1,4 +1,4 @@
-//! Dragon Strings: a modelled plucked-string instrument.
+//! Drakestring: a modelled plucked-string instrument.
 //!
 //! Every sounding string is a feedback loop the length of one period (an extended Karplus–Strong
 //! string): a delay line read with 4-point Lagrange interpolation (exact tuning), a one-pole loss

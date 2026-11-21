@@ -1,4 +1,4 @@
-//! The Dragon Strings preset library: playing styles and instruments built from recipes (a
+//! The Drakestring preset library: playing styles and instruments built from recipes (a
 //! fingerpicked steel-string, a strummed 12-string, a crunchy electric, a slap-free finger bass …),
 //! each varied in musical ranges with a fixed seed. Levels come from [`LEVELS`] (measured).
 

@@ -177,11 +177,12 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("transport.typing_keyboard", "Typing keyboard to piano", "Transport", 4, "Ctrl+T"),
     ("add.track", "Audio track", "Add", 0, ""),
     ("add.pattern", "Next empty pattern", "Add", 0, "F4"),
-    ("add.sampler", "Sampler channel", "Add/Instrument", 1, ""),
-    ("add.synth", "Synth channel", "Add/Instrument", 1, ""),
-    ("add.wavetable", "Dragon Wave (wavetable synth)", "Add/Instrument", 1, ""),
-    ("add.guitar", "Dragon Strings (guitar, bass, banjo …)", "Add/Instrument", 1, ""),
-    ("add.drums", "Drum pads channel", "Add/Instrument", 1, ""),
+    ("add.sampler", "Grimoire (sampler)", "Add/Instrument", 1, ""),
+    ("add.synth", "Cinnabar (synth)", "Add/Instrument", 1, ""),
+    ("add.wavetable", "Transmuter (wavetable synth)", "Add/Instrument", 1, ""),
+    ("add.guitar", "Drakestring (guitar, bass, banjo …)", "Add/Instrument", 1, ""),
+    ("add.piano", "Emberkeys (piano, electric piano …)", "Add/Instrument", 1, ""),
+    ("add.drums", "Wyrmdrum (drum pads)", "Add/Instrument", 1, ""),
     ("add.mixer", "Mixer bus", "Add", 2, ""),
     ("add.recording", "Recording channel", "Add", 2, ""),
     ("add.vca", "VCA fader", "Add", 2, ""),
@@ -1052,9 +1053,9 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 st.add_sampler(&f);
             }
         }
-        "add.synth" => st.ui.channel = Some(st.session.edit("Add synth", |p| p.add_channel("Synth", Instrument::Synth(SynthParams::default())))),
+        "add.synth" => st.ui.channel = Some(st.session.edit("Add synth", |p| p.add_channel("Cinnabar", Instrument::Synth(SynthParams::default())))),
         "add.wavetable" => {
-            let cid = st.session.edit("Add Dragon Wave", |p| p.add_channel("Dragon Wave", Instrument::Wavetable(Default::default())));
+            let cid = st.session.edit("Add Transmuter", |p| p.add_channel("Transmuter", Instrument::Wavetable(Default::default())));
             st.ui.channel = Some(cid);
             if !st.ui.instrument_windows.contains(&cid) {
                 st.ui.instrument_windows.push(cid);
@@ -1063,7 +1064,15 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "add.guitar" => {
             // Starts on the first steel-string preset rather than a bare init patch.
             let first = dragon_engine::gtr_library::library().first().map(|p| p.params.clone()).unwrap_or_default();
-            let cid = st.session.edit("Add Dragon Strings", |p| p.add_channel("Dragon Strings", Instrument::Guitar(Box::new(first))));
+            let cid = st.session.edit("Add Drakestring", |p| p.add_channel("Drakestring", Instrument::Guitar(Box::new(first))));
+            st.ui.channel = Some(cid);
+            if !st.ui.instrument_windows.contains(&cid) {
+                st.ui.instrument_windows.push(cid);
+            }
+        }
+        "add.piano" => {
+            let first = dragon_engine::pno_library::library().first().map(|p| p.params.clone()).unwrap_or_default();
+            let cid = st.session.edit("Add Emberkeys", |p| p.add_channel("Emberkeys", Instrument::Piano(Box::new(first))));
             st.ui.channel = Some(cid);
             if !st.ui.instrument_windows.contains(&cid) {
                 st.ui.instrument_windows.push(cid);

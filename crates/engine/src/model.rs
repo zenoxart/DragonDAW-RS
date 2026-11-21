@@ -506,21 +506,23 @@ pub enum Instrument {
     Synth(SynthParams),
     DrumPads(Vec<Pad>),
     Plugin(PluginRef),
-    /// Dragon Wave, the wavetable synth.
+    /// Transmuter, the wavetable synth.
     Wavetable(Box<crate::wt::WavetableParams>),
     Guitar(Box<crate::gtr::GuitarParams>),
+    Piano(Box<crate::pno::PianoParams>),
 }
 
 impl Instrument {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            Instrument::Sampler(s) if !s.slices.is_empty() => "Slicer",
-            Instrument::Sampler(_) => "Sampler",
-            Instrument::Synth(_) => "Synth",
-            Instrument::DrumPads(_) => "Drum Pads",
+            Instrument::Sampler(s) if !s.slices.is_empty() => "Shardcutter",
+            Instrument::Sampler(_) => "Grimoire",
+            Instrument::Synth(_) => "Cinnabar",
+            Instrument::DrumPads(_) => "Wyrmdrum",
             Instrument::Plugin(_) => "Plugin",
-            Instrument::Wavetable(_) => "Dragon Wave",
-            Instrument::Guitar(_) => "Dragon Strings",
+            Instrument::Wavetable(_) => "Transmuter",
+            Instrument::Guitar(_) => "Drakestring",
+            Instrument::Piano(_) => "Emberkeys",
         }
     }
 }
@@ -903,7 +905,7 @@ pub enum Target {
         param: u32,
     },
     Tempo,
-    /// A named parameter of a stock instrument (Dragon Wave: `macro1`–`macro4`, `pos1`–`pos3`, `cutoff1`,
+    /// A named parameter of a stock instrument (Transmuter: `macro1`–`macro4`, `pos1`–`pos3`, `cutoff1`,
     /// `cutoff2`, `master`).
     InstrumentParam {
         channel: Id,

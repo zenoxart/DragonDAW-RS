@@ -1,4 +1,4 @@
-//! The Dragon Wave editor. One window, laid out like a hardware synth's front panel:
+//! The Transmuter editor. One window, laid out like a hardware synth's front panel:
 //! a top bar (pages, the preset with browse / step / save, master), the sound sources as columns
 //! (sub, three wavetable oscillators drawn in 3D, noise, the filters), the modulation deck
 //! (macros, envelopes, LFOs, velocity / note, voicing) and a playable keyboard.
@@ -72,7 +72,7 @@ pub struct Browser {
 }
 
 fn user_dir(st: &State) -> PathBuf {
-    st.ctx.paths.config.join("Dragon Wave Presets")
+    st.ctx.paths.config.join("Transmuter Presets")
 }
 
 fn favs(st: &mut State) -> &mut BTreeSet<String> {
@@ -236,9 +236,9 @@ fn km(
     let mut x = v;
     let r = knob_colored(ui, &mut x, min, max, default, label, fmt, color);
     if r.hovered() || r.dragged() {
-        st.hint("Dragon Wave", label, format!("{x:.2}"));
+        st.hint("Transmuter", label, format!("{x:.2}"));
     }
-    widgets::apply(st, &r, &format!("Dragon Wave: {label}"), |pr| set(pr, cid, |w| write(w, x)));
+    widgets::apply(st, &r, &format!("Transmuter: {label}"), |pr| set(pr, cid, |w| write(w, x)));
     if let Some(dest) = dest {
         mod_target(ui, st, cid, p, &r, dest, Pos2::new(r.rect.center().x, r.rect.top() + 19.0), 18.5, ((v - min) / (max - min)).clamp(0.0, 1.0));
     }
@@ -362,7 +362,7 @@ fn stepper(ui: &mut Ui, st: &mut State, cid: Id, label: &str, v: i32, min: i32, 
     ui.label(RichText::new(label).small().strong().color(theme::TEXT_DIM));
     let mut x = v;
     let r = ui.add(egui::DragValue::new(&mut x).range(min..=max).speed(0.08).custom_formatter(|v, _| format!("{:+}", v as i32)));
-    widgets::apply(st, &r, &format!("Dragon Wave: {label}"), |pr| set(pr, cid, |w| write(w, x)));
+    widgets::apply(st, &r, &format!("Transmuter: {label}"), |pr| set(pr, cid, |w| write(w, x)));
 }
 
 fn arrow_button(ui: &mut Ui, left: bool) -> egui::Response {
@@ -430,7 +430,7 @@ fn top_bar(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams, page: &mut
         ui.set_width(W - 16.0);
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new("DRAGON WAVE").size(17.0).strong().color(theme::ACCENT));
+                ui.label(RichText::new("TRANSMUTER").size(17.0).strong().color(theme::ACCENT));
                 ui.label(RichText::new("wavetable synth").size(9.0).color(theme::TEXT_DIM));
             });
             ui.add_space(8.0);
@@ -723,7 +723,7 @@ fn osc_module(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams, o: usiz
                 ui.label(RichText::new("FIN").small().strong().color(theme::TEXT_DIM));
                 let mut f = osc.fine;
                 let r = ui.add(egui::DragValue::new(&mut f).range(-100.0..=100.0).speed(0.5).suffix(" ct").max_decimals(0));
-                widgets::apply(st, &r, "Dragon Wave: fine", |pr| set(pr, cid, |w| w.osc[o].fine = f));
+                widgets::apply(st, &r, "Transmuter: fine", |pr| set(pr, cid, |w| w.osc[o].fine = f));
             });
             // The table: drag up / down to scan, drop audio to import, drop a mod source to modulate position.
             let r = table_view(ui, &osc.table, osc.pos, dim, w - 14.0, 96.0);

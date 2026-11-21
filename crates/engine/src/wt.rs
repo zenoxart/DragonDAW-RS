@@ -1,4 +1,4 @@
-//! Dragon Wave: the wavetable synth's model (oscillators, filters, envelopes, LFOs, modulation matrix, FX)
+//! Transmuter: the wavetable synth's model (oscillators, filters, envelopes, LFOs, modulation matrix, FX)
 //! and its wavetables – factory tables made procedurally and tables imported from audio files – with
 //! band-limited copies per octave so high notes don't alias.
 

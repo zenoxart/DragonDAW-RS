@@ -316,7 +316,7 @@ impl Effect for Delay {
 pub fn delay_def() -> EffectDef {
     EffectDef {
         id: "delay",
-        name: "Delay",
+        name: "Echo Cavern (delay)",
         category: "Delay",
         description:
             "Delay after Timeless: tempo-synced or free, stereo / ping-pong / tape, cross feedback, resonant filters, drive and diffusion in the loop, pitch-shifted repeats, ducking, freeze, width, and a modulation matrix (two LFOs and an envelope follower routed through four slots to time, feedback, filters, drive, pitch, width or mix).",
@@ -454,7 +454,7 @@ impl Effect for Flanger {
 pub fn chorus_def() -> EffectDef {
     EffectDef {
         id: "chorus",
-        name: "Chorus",
+        name: "Coven (chorus)",
         category: "Modulation",
         description: "Stereo chorus with quadrature LFOs.",
         params: CHORUS_PARAMS,
@@ -466,7 +466,7 @@ pub fn chorus_def() -> EffectDef {
 pub fn flanger_def() -> EffectDef {
     EffectDef {
         id: "flanger",
-        name: "Flanger",
+        name: "Quicksilver (flanger)",
         category: "Modulation",
         description: "Through-zero style flanger with positive or negative feedback.",
         params: FLANGER_PARAMS,
@@ -540,7 +540,7 @@ impl Effect for Phaser {
 pub fn phaser_def() -> EffectDef {
     EffectDef {
         id: "phaser",
-        name: "Phaser",
+        name: "Moonphase (phaser)",
         category: "Modulation",
         description: "2–12 stage all-pass phaser with feedback.",
         params: PHASER_PARAMS,
@@ -619,7 +619,7 @@ impl Effect for Tremolo {
 pub fn tremolo_def() -> EffectDef {
     EffectDef {
         id: "tremolo",
-        name: "Tremolo / Auto-pan",
+        name: "Wingbeat (tremolo / auto-pan)",
         category: "Modulation",
         description: "Tempo-synced volume or pan modulation.",
         params: TREM_PARAMS,

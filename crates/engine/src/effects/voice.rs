@@ -810,7 +810,7 @@ impl Effect for CleanVoice {
 pub fn clean_voice_def() -> EffectDef {
     EffectDef {
         id: "clean_voice",
-        name: "Clean Voice",
+        name: "Purify (voice cleanup)",
         category: "Vocal",
         description: "Post-production vocal chain in one plugin (after zenoxart/CleanVoice): valve vari-mu, leveller, vari-mu, de-esser, two 4-band multibands, parallel presence, oversampled saturation and a resonance suppressor.",
         params: CV_PARAMS,

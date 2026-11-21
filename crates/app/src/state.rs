@@ -193,10 +193,12 @@ pub struct UiState {
     pub update: crate::update::UpdateUi,
     /// The click-through tour.
     pub tour: crate::tutorial::Tour,
-    /// Dragon Wave's preset browser.
+    /// Transmuter's preset browser.
     pub wave: crate::views::wave_ui::Browser,
-    /// Dragon Strings' preset browser.
+    /// Drakestring' preset browser.
     pub guitar: crate::views::guitar_ui::Browser,
+    /// Emberkeys' preset browser.
+    pub piano: crate::views::piano_ui::Browser,
     /// ffmpeg can be run (`None` = not checked yet).
     pub ffmpeg_ok: Option<bool>,
     /// Why ffmpeg can't be used (the places tried and what went wrong).
@@ -324,6 +326,7 @@ impl UiState {
             ffmpeg_why: None,
             wave: Default::default(),
             guitar: Default::default(),
+            piano: Default::default(),
             ffmpeg_job: None,
             hint: None,
             preview_started: None,
@@ -1355,6 +1358,17 @@ impl State {
             match t.message {
                 M::NoteOn { note, velocity, .. } if velocity > 0 => self.live_note(true, note, velocity as f32 / 127.0),
                 M::NoteOn { note, .. } | M::NoteOff { note, .. } => self.live_note(false, note, 0.0),
+                // Pedals go straight to the instrument being played (unless MIDI learn or a mapping takes them).
+                M::Control { controller: c @ (64 | 66 | 67), value, channel } if self.ui.midi_learn.is_none() && !self.session.project.midi_mappings.iter().any(|x| x.channel == channel && x.controller == c) => {
+                    if let Some(ch) = self.ui.channel.or(self.ui.piano_channel) {
+                        let param = match c {
+                            64 => "__sustain",
+                            66 => "__sostenuto",
+                            _ => "__soft",
+                        };
+                        self.audio.send(Command::Live(LiveEvent::Param { channel: ch, param, value: value as f32 / 127.0 }));
+                    }
+                }
                 M::Control { channel, controller, value } => {
                     if let Some(target) = self.ui.midi_learn.take() {
                         let (min, max) = dragon_engine::midi::target_range(&target);
@@ -1630,6 +1644,18 @@ pub fn set_target(p: &mut Project, t: &Target, v: f32) {
             Some(Instrument::Wavetable(w)) => w.filters[0].resonance = v,
             _ => {}
         },
+        Target::InstrumentParam { channel, param } if matches!(p.channel(*channel).map(|c| &c.instrument), Some(Instrument::Piano(_))) => {
+            if let Some(Instrument::Piano(g)) = p.channel_mut(*channel).map(|c| &mut c.instrument) {
+                match param.as_str() {
+                    "tone" => g.tone = v,
+                    "body" => g.body = v,
+                    "high_damp" => g.high_damp = v,
+                    "resonance" => g.resonance = v,
+                    "master" => g.master = v,
+                    _ => {}
+                }
+            }
+        }
         Target::InstrumentParam { channel, param } if matches!(p.channel(*channel).map(|c| &c.instrument), Some(Instrument::Guitar(_))) => {
             if let Some(Instrument::Guitar(g)) = p.channel_mut(*channel).map(|c| &mut c.instrument) {
                 match param.as_str() {

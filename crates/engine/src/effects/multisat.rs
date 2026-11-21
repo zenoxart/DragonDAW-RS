@@ -1,4 +1,4 @@
-//! "Dragon Multiband Saturator" (the FabFilter Saturn school): up to four bands split by Linkwitz–Riley
+//! "Athanor" (multiband saturator) (the FabFilter Saturn school): up to four bands split by Linkwitz–Riley
 //! crossovers, each with its own saturation style, drive, dynamics (drive follows the band's level), tone,
 //! level and mix; global mix and output. Per-band modulation comes from the effect modulation section.
 
@@ -238,7 +238,7 @@ impl Effect for MultibandSaturator {
 pub fn multiband_saturator_def() -> EffectDef {
     EffectDef {
         id: "multisat",
-        name: "Multiband Saturator",
+        name: "Athanor (multiband saturator)",
         category: "Distortion",
         description: "Saturn-style multiband saturation: up to four bands (Linkwitz–Riley crossovers), each with a style (clean / warm tube, tape, transformer, soft / hard clip, foldback, rectify), drive, dynamics, tone, level, mix and a resonant feedback loop.",
         params: all_params(),

@@ -1,4 +1,4 @@
-//! The Dragon Wave preset library: the hand-made signature presets plus a large bank built from
+//! The Transmuter preset library: the hand-made signature presets plus a large bank built from
 //! sound-design recipes. Every recipe describes one kind of sound (a reese bass, a pluck, a riser …)
 //! and varies it inside ranges that keep it musical; a fixed seed per preset makes the bank identical
 //! on every machine and every run. Levels are evened out by [`LEVELS`] (measured, see the tests).

@@ -1,5 +1,5 @@
 //! Colour and utility: saturator, bit crusher, filter, utility (gain/pan/phase/width/mono), stereo imager
-//! and the Dragon Particle one-knob mastering chain.
+//! and the Philosopher's Stone one-knob mastering chain.
 
 use super::dynamics;
 use super::{Effect, EffectDef, ParamInfo};
@@ -96,7 +96,7 @@ impl Effect for Saturator {
 pub fn saturator_def() -> EffectDef {
     EffectDef {
         id: "saturator",
-        name: "Saturator",
+        name: "Crucible (saturator)",
         category: "Distortion",
         description: "Tube (12AX7, 12AT7, 12AU7, 6SN7, EF86, EL34, 6L6, KT88, 300B models with bias, blocking and sag), tape, soft/hard clip, foldback and asymmetric waveshaping with tone and parallel mix.",
         params: SAT_PARAMS,
@@ -147,7 +147,7 @@ impl Effect for BitCrusher {
 pub fn bitcrusher_def() -> EffectDef {
     EffectDef {
         id: "bitcrusher",
-        name: "Bit Crusher",
+        name: "Corroder (bit crusher)",
         category: "Distortion",
         description: "Bit depth and sample-rate reduction.",
         params: CRUSH_PARAMS,
@@ -323,7 +323,7 @@ impl Effect for Filter {
 pub fn filter_def() -> EffectDef {
     EffectDef {
         id: "filter",
-        name: "Filter",
+        name: "Alembic (filter)",
         category: "Filter",
         description: "Filter after Volcano: two filters (serial or parallel), low / high / band pass, notch, peak and shelves, 12 / 24 / 48 dB slopes, styles (clean, smooth, ram, hack), drive, stereo spread, LFO and envelope follower.",
         params: FILTER_PARAMS,
@@ -424,7 +424,7 @@ impl Effect for Utility {
 pub fn utility_def() -> EffectDef {
     EffectDef {
         id: "utility",
-        name: "Utility",
+        name: "Phial (utility)",
         category: "Utility",
         description: "Gain, balance, stereo width, polarity per side, swap, mono and DC filter.",
         params: UTIL_PARAMS,
@@ -536,7 +536,7 @@ impl Effect for Imager {
 pub fn imager_def() -> EffectDef {
     EffectDef {
         id: "imager",
-        name: "Stereo Imager",
+        name: "Wingspan (stereo imager)",
         category: "Utility",
         description: "Widens the stereo image and keeps the bass mono; a goniometer and correlation meter show the phase relation of the result.",
         params: IMAGER_PARAMS,
@@ -545,7 +545,7 @@ pub fn imager_def() -> EffectDef {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ Dragon Particle
+// ------------------------------------------------------------------------------------------------ Philosopher's Stone
 
 const DP_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("amount", "Amount", 0.0, 1.0, 0.4, ""),
@@ -724,7 +724,7 @@ impl Effect for DragonParticle {
 pub fn dragon_particle_def() -> EffectDef {
     EffectDef {
         id: "dragon_particle",
-        name: "Dragon Particle",
+        name: "Philosopher's Stone (one-knob mastering)",
         category: "Mastering",
         description: "One-knob mastering: tone EQ with character, transient punch, glue compression, tube colour, widening, a soft clipper and a true-peak limiter, with auto gain for honest A/B.",
         params: DP_PARAMS,

@@ -398,7 +398,7 @@ impl Effect for Reverb {
 pub fn reverb_def() -> EffectDef {
     EffectDef {
         id: "reverb",
-        name: "Reverb",
+        name: "Dragon's Lair (reverb)",
         category: "Space",
         description: "Room/hall/plate reverb (8-line FDN) with pre-delay, damping and width; early reflections and late reverb each have their own level and EQ.",
         params: PARAMS,

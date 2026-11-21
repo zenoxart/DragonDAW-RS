@@ -1,4 +1,4 @@
-//! The Dragon Strings editor: a guitar laid across the top (headstock, a painted neck with the
+//! The Drakestring editor: a guitar laid across the top (headstock, a painted neck with the
 //! notes lighting up where they are played, the body), a leather control strip of knobs, and a
 //! keyboard showing the key switches and the instrument's range. Pages: Main, Strummer, FX, Settings;
 //! a preset browser for the 2,000-preset library.
@@ -18,10 +18,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 const W: f32 = 1180.0;
-const GOLD: Color32 = Color32::from_rgb(0xd9, 0xb7, 0x6e);
-const GOLD_DIM: Color32 = Color32::from_rgb(0x8c, 0x76, 0x4a);
-const LIT: Color32 = Color32::from_rgb(0xff, 0x9a, 0x3c);
-const PANEL_BG: Color32 = Color32::from_rgb(0x10, 0x10, 0x12);
+pub(super) const GOLD: Color32 = Color32::from_rgb(0xd9, 0xb7, 0x6e);
+pub(super) const GOLD_DIM: Color32 = Color32::from_rgb(0x8c, 0x76, 0x4a);
+pub(super) const LIT: Color32 = Color32::from_rgb(0xff, 0x9a, 0x3c);
+pub(super) const PANEL_BG: Color32 = Color32::from_rgb(0x10, 0x10, 0x12);
 
 const BODY_PNG: &[u8] = include_bytes!("../../assets/guitar/body.png");
 const EBODY_PNG: &[u8] = include_bytes!("../../assets/guitar/ebody.png");
@@ -51,7 +51,7 @@ fn set(p: &mut Project, cid: Id, f: impl FnOnce(&mut GuitarParams)) {
     }
 }
 
-fn texture(ctx: &egui::Context, name: &'static str, bytes: &[u8]) -> Option<TextureHandle> {
+pub(super) fn texture(ctx: &egui::Context, name: &'static str, bytes: &[u8]) -> Option<TextureHandle> {
     let id = egui::Id::new(("guitar-art", name));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return Some(t);
@@ -96,10 +96,10 @@ pub struct Browser {
     user: Option<Vec<(String, GuitarParams)>>,
 }
 
-const FAV_FILE: &str = "dragon-strings-favourites.json";
+const FAV_FILE: &str = "drakestring-favourites.json";
 
 fn user_dir(st: &State) -> PathBuf {
-    st.ctx.paths.config.join("Dragon Strings Presets")
+    st.ctx.paths.config.join("Drakestring Presets")
 }
 
 fn favs(st: &mut State) -> &mut BTreeSet<String> {
@@ -234,17 +234,17 @@ fn kn(ui: &mut Ui, st: &mut State, cid: Id, v: f32, min: f32, max: f32, default:
     let mut x = v;
     let r = knob_colored(ui, &mut x, min, max, default, label, fmt, GOLD);
     if r.hovered() || r.dragged() {
-        st.hint("Dragon Strings", label, format!("{x:.2}"));
+        st.hint("Drakestring", label, format!("{x:.2}"));
     }
-    widgets::apply(st, &r, &format!("Dragon Strings: {label}"), |pr| set(pr, cid, |g| write(g, x)));
+    widgets::apply(st, &r, &format!("Drakestring: {label}"), |pr| set(pr, cid, |g| write(g, x)));
 }
 
-fn group_label(ui: &mut Ui, text: &str) {
+pub(super) fn group_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(10.5).strong().color(GOLD_DIM));
 }
 
 /// A small pill that is lit when `on`.
-fn pill(ui: &mut Ui, on: bool, text: &str) -> egui::Response {
+pub(super) fn pill(ui: &mut Ui, on: bool, text: &str) -> egui::Response {
     let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(11.0), Color32::WHITE);
     let size = Vec2::new(galley.size().x + 14.0, 18.0);
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
@@ -265,7 +265,7 @@ fn pill(ui: &mut Ui, on: bool, text: &str) -> egui::Response {
     r
 }
 
-fn arrow_button(ui: &mut Ui, left: bool) -> egui::Response {
+pub(super) fn arrow_button(ui: &mut Ui, left: bool) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::click());
     let col = if r.hovered() { Color32::WHITE } else { GOLD_DIM };
     let c = rect.center();
@@ -274,7 +274,7 @@ fn arrow_button(ui: &mut Ui, left: bool) -> egui::Response {
     r
 }
 
-fn star(ui: &mut Ui, on: bool) -> egui::Response {
+pub(super) fn star(ui: &mut Ui, on: bool) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(Vec2::new(16.0, 16.0), Sense::click());
     let c = rect.center();
     let pts: Vec<Pos2> = (0..10)
@@ -395,7 +395,7 @@ fn top_bar(ui: &mut Ui, st: &mut State, cid: Id, p: &GuitarParams, page: &mut Pa
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new("DRAGON STRINGS").size(13.0).strong().color(GOLD));
+                ui.label(RichText::new("DRAKESTRING").size(13.0).strong().color(GOLD));
             });
         });
     });
@@ -439,7 +439,7 @@ fn instrument_view(ui: &mut Ui, st: &mut State, cid: Id, p: &GuitarParams) {
     let nut_x = rect.left() + head_size.x - 4.0;
     let head_rect = Rect::from_min_size(Pos2::new(nut_x - HEAD_NUT.0 * hs, cy - (HEAD_NUT.1 + HEAD_NUT.2) / 2.0 * hs), head_size);
     // Title.
-    pa.text(Pos2::new(rect.left() + 360.0, rect.top() + 34.0), egui::Align2::LEFT_CENTER, "Dragon Strings", egui::FontId::proportional(34.0), Color32::from_rgba_unmultiplied(0xd9, 0xb7, 0x6e, 150));
+    pa.text(Pos2::new(rect.left() + 360.0, rect.top() + 34.0), egui::Align2::LEFT_CENTER, "Drakestring", egui::FontId::proportional(34.0), Color32::from_rgba_unmultiplied(0xd9, 0xb7, 0x6e, 150));
     pa.text(Pos2::new(rect.left() + 612.0, rect.top() + 38.0), egui::Align2::LEFT_CENTER, p.model.name().to_uppercase(), egui::FontId::proportional(15.0), Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 120));
     // The neck: a trapezoid from the nut to the body, wood texture, frets, inlays.
     let scale = (joint_x - nut_x) / (1.0 - 2f32.powf(-15.0 / 12.0));

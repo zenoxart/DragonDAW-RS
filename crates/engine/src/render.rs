@@ -1038,6 +1038,12 @@ pub enum LiveEvent {
         note: u8,
     },
     AllNotesOff,
+    /// A live control for one channel's instrument (sustain pedal "__sustain", soft pedal "__soft" …).
+    Param {
+        channel: Id,
+        param: &'static str,
+        value: f32,
+    },
     /// Plays a one-shot of an audio file (browser preview) through the master.
     Preview(Arc<AudioData>),
     /// Preview from a frame on.
@@ -1402,6 +1408,13 @@ impl Renderer {
                     }
                 }
                 LiveEvent::AllNotesOff => self.all_notes_off(0.01),
+                LiveEvent::Param { channel, param, value } => {
+                    if let Some(&ci) = song.channel_index.get(&channel) {
+                        if let Some(i) = &song.channels[ci].instrument {
+                            i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_param(param, value);
+                        }
+                    }
+                }
                 LiveEvent::Preview(d) => self.preview = Some(Preview { data: d, pos: 0 }),
                 LiveEvent::PreviewAt(d, at) => {
                     let pos = at.min(d.frames());

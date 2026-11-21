@@ -1,4 +1,4 @@
-//! Dragon Wave: a wavetable synth. Three wavetable oscillators (position, warp, up to 16 unison voices),
+//! Transmuter: a wavetable synth. Three wavetable oscillators (position, warp, up to 16 unison voices),
 //! a sub and a noise oscillator, two filters (low / high / band pass, notch, comb, formant) in series or
 //! parallel, four envelopes and four LFOs feeding a modulation matrix, macros, mono / legato / glide and an
 //! FX rack of stock effects.

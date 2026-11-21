@@ -1,5 +1,5 @@
 //! Pitch: YIN pitch detection (shared with audio-to-MIDI), a low-latency granular pitch shifter and the
-//! "Dragon Tune" pitch-correction effect (Auto-Tune / Newtone style: snap a monophonic voice to a key).
+//! "Aurum Tune" pitch-correction effect (Auto-Tune / Newtone style: snap a monophonic voice to a key).
 
 use super::{Effect, EffectDef, ParamInfo};
 
@@ -410,7 +410,7 @@ impl Effect for PitchCorrect {
 pub fn pitch_correct_def() -> EffectDef {
     EffectDef {
         id: "tune",
-        name: "Dragon Tune (pitch correction)",
+        name: "Aurum Tune (pitch correction)",
         category: "Pitch",
         description: "Real-time, zero-latency pitch correction for tracking: snaps a monophonic voice to a key (retune speed, humanize, flex-tune, natural vibrato). Put it on the track's insert and arm the track to sing through it.",
         params: TUNE_PARAMS,
@@ -453,7 +453,7 @@ mod tests {
         assert!((f - 450.0).abs() < 6.0, "{f}");
     }
 
-    /// Dragon Tune reports no latency and its shifter delay stays short (a few ms) on a voice, so it can be
+    /// Aurum Tune reports no latency and its shifter delay stays short (a few ms) on a voice, so it can be
     /// monitored while recording.
     #[test]
     fn tune_is_low_latency() {

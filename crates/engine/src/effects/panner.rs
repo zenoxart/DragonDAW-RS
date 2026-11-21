@@ -1,4 +1,4 @@
-//! **Dragon Orbit** – an auto-panner after Soundtoys PanMan and Panomatic: the sound moves across the
+//! **Ouroboros** – an auto-panner after Soundtoys PanMan and Panomatic: the sound moves across the
 //! stereo field following a shape, locked to the song's bars (Sync), at a free rate (Free), or one step per
 //! hit (Trigger: every transient over the threshold sends it to its next position, gliding there – PanMan's
 //! signature). Width, centre and phase place the motion; Smooth rounds its corners; the pan law keeps a
@@ -299,7 +299,7 @@ impl Effect for Orbit {
 pub fn orbit_def() -> EffectDef {
     EffectDef {
         id: "orbit",
-        name: "Dragon Orbit",
+        name: "Ouroboros (auto-panner)",
         category: "Modulation",
         description: "Auto-panner after PanMan / Panomatic: moves the sound across the stereo field locked to the bars, at a free rate, or one step per hit (Trigger, with glide). Seven shapes incl. random, width / centre / phase, smoothing, constant-power or balance pan law, binaural mode for headphones.",
         params: PARAMS,

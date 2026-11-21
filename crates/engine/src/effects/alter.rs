@@ -1,4 +1,4 @@
-//! "Dragon Alter": real-time pitch and formant shifter for voices (the Little AlterBoy school). Pitch-
+//! "Shapeshifter": real-time pitch and formant shifter for voices (the Little AlterBoy school). Pitch-
 //! synchronous overlap-add (TD-PSOLA): two-period Hann grains are taken at the voice's pitch marks and laid
 //! down at the new period (pitch), each grain resampled on the way (formant) – so pitch and formant move
 //! independently. Controls follow Little AlterBoy's manual: Pitch ±12 semitones, Formant, Link (pitch and
@@ -245,7 +245,7 @@ impl Effect for Alter {
 pub fn alter_def() -> EffectDef {
     EffectDef {
         id: "alter",
-        name: "Alter (pitch & formant)",
+        name: "Shapeshifter (pitch & formant)",
         category: "Pitch",
         description: "Real-time voice pitch and formant shifter after Little AlterBoy: pitch ±12 semitones, formant, link, Transpose / Quantize / Robot modes, tube drive, mix and output.",
         params: ALTER_PARAMS,

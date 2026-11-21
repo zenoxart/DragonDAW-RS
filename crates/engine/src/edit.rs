@@ -738,7 +738,8 @@ pub fn replace_channel_sample(p: &mut Project, channel: Id, path: &std::path::Pa
     let stem = |q: &std::path::Path| q.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let auto_named = match &ch.instrument {
         Instrument::Sampler(s) => ch.name == stem(&s.path) || ch.name.is_empty() || ch.name == "Sampler",
-        other => ch.name == other.kind_name() || ch.name.is_empty(),
+        // The type's name, or what the stock instruments were called before they had their own names.
+        other => ch.name == other.kind_name() || ch.name.is_empty() || matches!(ch.name.as_str(), "Synth" | "Drum Pads" | "Drums" | "Dragon Wave" | "Dragon Strings"),
     };
     match &mut ch.instrument {
         Instrument::Sampler(s) => {

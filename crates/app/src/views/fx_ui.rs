@@ -25,7 +25,7 @@ pub struct Hero<'a> {
     pub time: Option<f32>,
     /// Live values the effect reports (see `Effect::telemetry`); empty when there are none.
     pub tele: &'a [f32],
-    /// Identifies the insert (keeps per-insert display history such as Dragon Tune's pitch trace).
+    /// Identifies the insert (keeps per-insert display history such as Aurum Tune's pitch trace).
     pub key: egui::Id,
 }
 
@@ -1564,7 +1564,7 @@ fn phase_meter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     );
 }
 
-/// Dragon Tune, laid out like a modern vocal tuner: the detected note large with its cents offset, a
+/// Aurum Tune, laid out like a modern vocal tuner: the detected note large with its cents offset, a
 /// needle meter (input deviation in white, the applied correction as a coloured arc), a scrolling pitch
 /// trace over the note lanes (input white, corrected output coloured) and the key's notes underneath.
 fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -1720,7 +1720,7 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 // ---------------------------------------------------------------------------------------------- orbit
 
-/// Dragon Orbit's display: (stereo field, the seven shape buttons, the three mode buttons).
+/// Ouroboros's display: (stereo field, the seven shape buttons, the three mode buttons).
 fn orbit_layout(r: Rect) -> (Rect, Vec<Rect>, Vec<Rect>) {
     let bar = 30.0;
     let field = Rect::from_min_max(r.min + Vec2::new(10.0, 8.0), Pos2::new(r.right() - 10.0, r.bottom() - bar - 10.0));
@@ -2492,7 +2492,7 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(m1.left(), r.bottom() - 10.0), egui::Align2::LEFT_BOTTOM, format!("comp {:.0}% · vari mu {:.0}%", h.v("comp"), h.v("varimu")), egui::FontId::proportional(10.0), theme::TEXT);
 }
 
-/// Dragon Particle: one big glowing dial (drag or scroll it) ringed by orbiting particles that grow in
+/// Philosopher's Stone: one big glowing dial (drag or scroll it) ringed by orbiting particles that grow in
 /// number and energy with the amount, the stage name inside, input / output meters at the sides and the
 /// gain reduction and auto-gain readouts.
 fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -2698,7 +2698,7 @@ mod tests {
         assert!(dead.is_empty(), "displays that ignore the mouse: {dead:?}");
     }
 
-    /// Dragon Orbit: a click on a shape or mode button selects it; dragging the field right moves the centre.
+    /// Ouroboros: a click on a shape or mode button selects it; dragging the field right moves the centre.
     #[test]
     fn orbit_display_is_a_control() {
         let def = effects::find("orbit").unwrap();

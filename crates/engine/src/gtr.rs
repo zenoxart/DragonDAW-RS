@@ -1,4 +1,4 @@
-//! Dragon Strings: the model of the plucked-string instrument (acoustic, nylon, 12-string, electric,
+//! Drakestring: the model of the plucked-string instrument (acoustic, nylon, 12-string, electric,
 //! bass, banjo, mandolin, ukulele, sitar, harp). The sound is modelled, not sampled: each string is a
 //! tuned feedback loop excited by a pluck (see `instruments::guitar`). This module holds the
 //! parameters, tunings, the chord voicer (works for any tuning) and the strum patterns.

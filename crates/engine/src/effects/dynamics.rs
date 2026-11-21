@@ -237,7 +237,7 @@ impl Effect for Compressor {
 pub fn compressor_def() -> EffectDef {
     EffectDef {
         id: "compressor",
-        name: "Compressor",
+        name: "Dragontamer (compressor)",
         category: "Dynamics",
         description: "Compressor with eight styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain filters and external sidechain, auto makeup and parallel mix.",
         params: COMP_PARAMS,
@@ -628,7 +628,7 @@ impl Effect for Multiband {
 pub fn multiband_def() -> EffectDef {
     EffectDef {
         id: "multiband",
-        name: "Multiband Dynamics",
+        name: "Quintessence (multiband dynamics)",
         category: "Dynamics",
         description:
             "Multiband dynamics after Pro-MB: up to four bands, each compressing or expanding (downward or upward) with threshold, range, ratio, knee, attack, release, gain, solo, bypass and per-band external sidechain.",
@@ -828,7 +828,7 @@ impl Effect for Gate {
 pub fn gate_def() -> EffectDef {
     EffectDef {
         id: "gate",
-        name: "Gate",
+        name: "Portcullis (gate)",
         category: "Dynamics",
         description: "Gate / expander after Pro-G: threshold with hysteresis, range, ratio, knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix.",
         params: GATE_PARAMS,
@@ -1078,7 +1078,7 @@ impl Effect for OversampledLimiter {
 pub fn limiter_def() -> EffectDef {
     EffectDef {
         id: "limiter",
-        name: "Limiter",
+        name: "Lodestone (limiter)",
         category: "Dynamics",
         description: "Look-ahead brickwall limiter with true-peak detection, eight styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe) and 2× / 4× oversampling for mastering.",
         params: LIMITER_PARAMS,
@@ -1253,7 +1253,7 @@ impl Effect for DeEsser {
 pub fn deesser_def() -> EffectDef {
     EffectDef {
         id: "deesser",
-        name: "De-esser",
+        name: "Serpent's Hush (de-esser)",
         category: "Dynamics",
         description: "De-esser after Pro-DS: single-vocal (relative) or allround detection, split- or wide-band processing, detection band, threshold, range, look-ahead, stereo link and listen.",
         params: DEESS_PARAMS,
@@ -1484,7 +1484,7 @@ impl Effect for TransientShaper {
 pub fn transient_def() -> EffectDef {
     EffectDef {
         id: "transient",
-        name: "Transient Shaper",
+        name: "Talon (transient shaper)",
         category: "Dynamics",
         description: "Transient designer after Waves Smack Attack: attack (Needle / Nail / Blunt) and sustain (Linear / Non-linear / Soft linear) sections with level, sensitivity, duration and shape, mix, output, and a guard (Off / Clip / Limit / Soft clip) after the output.",
         params: TS_PARAMS,

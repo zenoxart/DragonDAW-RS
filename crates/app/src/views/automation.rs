@@ -66,6 +66,14 @@ fn current_value(p: &Project, t: &Target) -> Option<f32> {
                     w.filters.get(n("cutoff")?)?.cutoff
                 }
             }
+            Instrument::Piano(g) => match param.as_str() {
+                "tone" => g.tone,
+                "body" => g.body,
+                "high_damp" => g.high_damp,
+                "resonance" => g.resonance,
+                "master" => g.master,
+                _ => return None,
+            },
             Instrument::Guitar(g) => match param.as_str() {
                 "brightness" => g.brightness,
                 "body" => g.body,
@@ -131,6 +139,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         if matches!(c.instrument, Instrument::Synth(_)) {
                             opts.push(("Cutoff", Target::SynthCutoff(c.id)));
                             opts.push(("Resonance", Target::SynthResonance(c.id)));
+                        }
+                        if matches!(c.instrument, Instrument::Piano(_)) {
+                            for (n, prm) in [("Tone", "tone"), ("Body", "body"), ("High damp", "high_damp"), ("Resonance", "resonance"), ("Main level", "master")] {
+                                opts.push((n, Target::InstrumentParam { channel: c.id, param: prm.into() }));
+                            }
                         }
                         if matches!(c.instrument, Instrument::Guitar(_)) {
                             for (n, prm) in [("Brightness", "brightness"), ("Body", "body"), ("Drive", "drive"), ("Tone", "tone"), ("Strum time", "strum"), ("Main level", "master")] {

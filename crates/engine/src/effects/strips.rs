@@ -501,7 +501,7 @@ impl Effect for ClassAStrip {
 pub fn class_a_strip_def() -> EffectDef {
     EffectDef {
         id: "class_a_strip",
-        name: "Class-A Strip",
+        name: "Golem Strip (class-A channel strip)",
         category: "Channel strip",
         description: "Recording channel: a one-fader noise suppressor (NS1 style), British class-A transformer mic preamp with stepped inductor-style EQ into a tube opto compressor (program-dependent opto attack, two-stage release with memory, fixed or manual timing). Zero latency – track through it.",
         params: STRIP_PARAMS,
@@ -820,7 +820,7 @@ impl Effect for DrumBus {
 pub fn drum_bus_def() -> EffectDef {
     EffectDef {
         id: "drum_bus",
-        name: "Drum Bus",
+        name: "Dragonforge (drum bus)",
         category: "Drums",
         description: "Drum bus processor after Cradle Orion: input with target meter, drive (three colours, high-pass), harmonics (50 / 80 Hz focus), compression (glue / punch, mix), lift, five-band harmonic EQ in 1 dB steps, parallel Sub / Low / Loud / Grit, output.",
         params: DRUM_PARAMS,

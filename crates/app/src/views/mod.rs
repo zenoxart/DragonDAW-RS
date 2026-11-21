@@ -21,6 +21,7 @@ pub mod note_tools;
 pub mod options;
 pub mod overlays;
 pub mod piano_roll;
+pub mod piano_ui;
 pub mod picker;
 pub mod playlist;
 pub mod plugins;

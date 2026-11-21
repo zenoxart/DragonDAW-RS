@@ -655,7 +655,7 @@ impl Effect for ParametricEq {
 pub fn def() -> EffectDef {
     EffectDef {
         id: "eq",
-        name: "Parametric EQ",
+        name: "Prism (parametric EQ)",
         category: "EQ",
         description: "7-band parametric EQ with shelves, cuts and notch per band.",
         params: &PARAMS,
