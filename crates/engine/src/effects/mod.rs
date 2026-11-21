@@ -3,7 +3,7 @@
 //! `id → value` parameter maps.
 
 mod color;
-pub use color::{shape as saturation_curve, DragonParticle};
+pub use color::{shape as saturation_curve, DragonParticle, INGREDIENTS as CRUCIBLE_INGREDIENTS};
 pub mod alter;
 pub mod clipper;
 pub mod dynamics;

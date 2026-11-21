@@ -15,7 +15,14 @@ const SAT_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
     ParamInfo::choice("tube", "Tube", crate::dsp::tube::TUBE_NAMES, 0.0),
     ParamInfo::lin("bias", "Bias", -1.0, 1.0, 0.0, ""),
+    ParamInfo::lin("ing_warm", "Warm tube", 0.0, 1.0, 0.0, ""),
+    ParamInfo::lin("ing_hot", "Hot triode", 0.0, 1.0, 0.0, ""),
+    ParamInfo::lin("ing_crisp", "Crisp pentode", 0.0, 1.0, 0.0, ""),
 ];
+
+/// The Crucible's ingredients: parallel tube stages blended into the brew — (name, tube model index,
+/// extra drive in dB). Warm 6SN7 (soft, even), hot 12AX7 driven hard, crisp EF86 pentode (bright, odd).
+pub const INGREDIENTS: [(&str, usize, f32); 3] = [("Warm tube", 3, 0.0), ("Hot triode", 0, 9.0), ("Crisp pentode", 4, 4.0)];
 
 pub struct Saturator {
     rate: f32,
@@ -26,6 +33,11 @@ pub struct Saturator {
     tone: [OnePole; 2],
     dc: [OnePole; 2],
     tubes: [crate::dsp::tube::TubeStage; 2],
+    /// The ingredients' amounts (0 … 1) and their tube stages per channel.
+    ing: [f32; 3],
+    ing_tubes: [[crate::dsp::tube::TubeStage; 2]; 3],
+    /// Input and output peaks of the last block (the cauldron's heat).
+    tele: [f32; 2],
 }
 
 #[inline]
@@ -73,23 +85,50 @@ impl Effect for Saturator {
                 let m = crate::dsp::tube::TUBES[(v.round() as usize).min(crate::dsp::tube::TUBES.len() - 1)];
                 self.tubes.iter_mut().for_each(|t| t.set_model(m));
             }
-            "bias" => self.tubes.iter_mut().for_each(|t| t.bias = v.clamp(-1.0, 1.0)),
+            "bias" => self.tubes.iter_mut().chain(self.ing_tubes.iter_mut().flatten()).for_each(|t| t.bias = v.clamp(-1.0, 1.0)),
+            "ing_warm" => self.ing[0] = v.clamp(0.0, 1.0),
+            "ing_hot" => self.ing[1] = v.clamp(0.0, 1.0),
+            "ing_crisp" => self.ing[2] = v.clamp(0.0, 1.0),
             _ => {}
         }
     }
     fn reset(&mut self) {
         self.tone.iter_mut().chain(self.dc.iter_mut()).for_each(OnePole::reset);
-        self.tubes.iter_mut().for_each(|t| t.reset());
+        self.tubes.iter_mut().chain(self.ing_tubes.iter_mut().flatten()).for_each(|t| t.reset());
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
+        let peak = |l: &[f32], r: &[f32]| l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        self.tele[0] = peak(l, r);
+        // The brew: the character path, with the ingredients poured in alongside it. Their amounts
+        // replace the character path's share as they add up (all at 0 = the plain character path).
+        let total: f32 = self.ing.iter().sum();
+        let base_w = (1.0 - total).max(0.0);
+        let norm = 1.0 / (base_w + total).max(1e-6);
+        let gains: [f32; 3] = std::array::from_fn(|k| db_to_gain(INGREDIENTS[k].2));
         for i in 0..l.len() {
             for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
+                let d = *x * self.drive;
                 // Tube mode runs the selected tube model (with bias shift, Miller roll-off and sag).
-                let y = if self.mode == 0 { self.tubes[ch].process(*x * self.drive) } else { shape(self.mode, *x * self.drive) };
+                let mut y = if base_w > 0.0 {
+                    let b = if self.mode == 0 { self.tubes[ch].process(d) } else { shape(self.mode, d) };
+                    b * base_w
+                } else {
+                    0.0
+                };
+                for k in 0..3 {
+                    if self.ing[k] > 0.0 {
+                        y += self.ing_tubes[k][ch].process(d * gains[k]) / gains[k].sqrt() * self.ing[k];
+                    }
+                }
+                let y = y * norm;
                 let y = self.dc[ch].highpass(self.tone[ch].process(y)) * self.out;
                 *x = *x * (1.0 - self.mix) + y * self.mix;
             }
         }
+        self.tele[1] = peak(l, r);
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
     }
 }
 
@@ -98,13 +137,72 @@ pub fn saturator_def() -> EffectDef {
         id: "saturator",
         name: "Crucible (saturator)",
         category: "Distortion",
-        description: "Tube (12AX7, 12AT7, 12AU7, 6SN7, EF86, EL34, 6L6, KT88, 300B models with bias, blocking and sag), tape, soft/hard clip, foldback and asymmetric waveshaping with tone and parallel mix.",
+        description: "Tube (12AX7, 12AT7, 12AU7, 6SN7, EF86, EL34, 6L6, KT88, 300B models with bias, blocking and sag), tape, soft/hard clip, foldback and asymmetric waveshaping with tone and parallel mix, plus three parallel tube ingredients to blend into the brew: a warm 6SN7, a hot 12AX7 and a crisp EF86 pentode.",
         params: SAT_PARAMS,
         uses_sidechain: false,
         create: |rate| {
             let t = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], rate);
-            Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(5.0, rate); 2], tubes: [t; 2] })
+            let ing = |k: usize| [crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[INGREDIENTS[k].1], rate); 2];
+            Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(5.0, rate); 2], tubes: [t; 2], ing: [0.0; 3], ing_tubes: [ing(0), ing(1), ing(2)], tele: [0.0; 2] })
         },
+    }
+}
+
+#[cfg(test)]
+mod crucible_tests {
+    use super::*;
+
+    fn run(params: &[(&str, f32)]) -> Vec<f32> {
+        let def = saturator_def();
+        let mut fx = (def.create)(48_000.0);
+        for p in def.params {
+            fx.set_param(p.id, p.default);
+        }
+        for (id, v) in params {
+            fx.set_param(id, *v);
+        }
+        let n = 4800;
+        let mut l: Vec<f32> = (0..n).map(|i| 0.5 * (i as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin()).collect();
+        let mut r = l.clone();
+        fx.process(&mut l, &mut r, None);
+        l
+    }
+
+    #[test]
+    fn no_ingredients_is_the_plain_character_path() {
+        // With the three amounts at 0 the brew is exactly the saturator as it was.
+        let def = saturator_def();
+        let mut a = (def.create)(48_000.0);
+        for p in def.params {
+            a.set_param(p.id, p.default);
+        }
+        let n = 4800;
+        let src: Vec<f32> = (0..n).map(|i| 0.5 * (i as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin()).collect();
+        let (mut l, mut r) = (src.clone(), src.clone());
+        a.process(&mut l, &mut r, None);
+        // Reference: the same chain by hand.
+        let mut tube = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], 48_000.0);
+        let mut tone = OnePole::new(12000.0, 48_000.0);
+        let mut dc = OnePole::new(5.0, 48_000.0);
+        let (drive, out) = (db_to_gain(6.0), db_to_gain(-3.0));
+        for (i, x) in src.iter().enumerate() {
+            let y = dc.highpass(tone.process(tube.process(x * drive))) * out;
+            assert!((y - l[i]).abs() < 1e-6, "sample {i}: {y} vs {}", l[i]);
+        }
+    }
+
+    #[test]
+    fn each_ingredient_changes_the_sound_and_stays_sane() {
+        let plain = run(&[]);
+        for id in ["ing_warm", "ing_hot", "ing_crisp"] {
+            let y = run(&[(id, 1.0)]);
+            assert!(y.iter().all(|v| v.is_finite() && v.abs() < 4.0), "{id} misbehaves");
+            let diff: f32 = y.iter().zip(&plain).map(|(a, b)| (a - b).abs()).sum::<f32>() / y.len() as f32;
+            assert!(diff > 1e-3, "{id} does nothing ({diff})");
+        }
+        // Different ingredients, different results.
+        let (w, h) = (run(&[("ing_warm", 1.0)]), run(&[("ing_hot", 1.0)]));
+        assert!(w.iter().zip(&h).map(|(a, b)| (a - b).abs()).sum::<f32>() > 1.0);
     }
 }
 

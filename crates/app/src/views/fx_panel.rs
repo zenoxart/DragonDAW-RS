@@ -279,9 +279,10 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
             skin: VALVE,
             bands: None,
             sections: vec![
+                sec("Ingredients", vec![k("ing_warm", "Warm tube"), k("ing_hot", "Hot triode"), k("ing_crisp", "Crisp pentode")]),
                 sec("Character", vec![p("mode", "Mode"), p("tube", "Tube")]),
                 sec("Drive", vec![big("drive", "Drive"), k("bias", "Bias"), k("tone", "Tone")]),
-                sec("Output", vec![k("output", "Output"), fad("mix", "Mix")]),
+                sec("Output", vec![k("output", "Output"), big("mix", "Mix (phial)")]),
             ],
         },
         "multisat" => Panel {

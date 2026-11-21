@@ -112,6 +112,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     let w = ui.available_width().max(260.0);
     let base = match h.def.id {
         "tune" => 230.0,
+        "saturator" => 260.0,
         "clean_voice" | "class_a_strip" => 200.0,
         "alter" => 200.0,
         "orbit" => 220.0,
@@ -151,7 +152,8 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "transient" => transient(&p, r, h, col),
         "delay" => super::fx_cave::cavern(&p, r, h),
         "reverb" => super::fx_cave::lair(&p, r, h),
-        "saturator" | "bitcrusher" => shaper(&p, r, h, col),
+        "saturator" => super::fx_crucible::draw(&p, r, h),
+        "bitcrusher" => shaper(&p, r, h, col),
         "clipper" => clipper(&p, r, h, col),
         "multisat" => multisat(&p, r, h, col),
         "chorus" | "flanger" | "phaser" | "tremolo" => super::fx_mod::draw(&p, r, h),
@@ -346,6 +348,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 });
             }
         }
+        "saturator" => out.extend(super::fx_crucible::interact(ui, r, resp, h)),
         "delay" => out.extend(super::fx_cave::cavern_interact(ui, r, resp, h)),
         "reverb" => {
             let dr = decay_rect(r);
@@ -578,7 +581,6 @@ pub fn xy_params(id: &str) -> Option<(Option<&'static str>, Option<&'static str>
         "limiter" => (Some("ceiling"), Some("gain")),
         "chorus" | "flanger" | "tremolo" => (Some("rate"), Some("depth")),
         "phaser" => (Some("center"), Some("depth")),
-        "saturator" => (Some("tone"), Some("drive")),
         "bitcrusher" => (Some("downsample"), Some("bits")),
         "utility" => (Some("pan"), Some("gain")),
         "imager" => (Some("width"), Some("mono_below")),
