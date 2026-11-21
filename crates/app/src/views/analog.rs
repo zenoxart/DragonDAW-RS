@@ -72,6 +72,15 @@ impl Finish {
         }
     }
 
+    /// The colour of the unit's lit parts (value arcs, LEDs, selected buttons), where the finish has its
+    /// own; otherwise the category colour.
+    pub fn accent(self) -> Option<Color32> {
+        match self {
+            Finish::Oxblood => Some(Color32::from_rgb(0xf2, 0xa6, 0x4a)),
+            _ => None,
+        }
+    }
+
     pub fn knob(self) -> KnobStyle {
         match self {
             Finish::Aluminium | Finish::Gold | Finish::Copper => KnobStyle::Ring,

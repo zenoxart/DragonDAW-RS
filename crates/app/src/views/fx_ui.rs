@@ -30,10 +30,10 @@ pub struct Hero<'a> {
 }
 
 impl Hero<'_> {
-    fn v(&self, id: &str) -> f32 {
+    pub(super) fn v(&self, id: &str) -> f32 {
         effects::value(self.def, self.params, id)
     }
-    fn t(&self) -> f32 {
+    pub(super) fn t(&self) -> f32 {
         self.time.unwrap_or(0.0)
     }
 }
@@ -145,7 +145,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "saturator" | "bitcrusher" => shaper(&p, r, h, col),
         "clipper" => clipper(&p, r, h, col),
         "multisat" => multisat(&p, r, h, col),
-        "chorus" | "flanger" | "phaser" | "tremolo" => lfo(&p, r, h, col),
+        "chorus" | "flanger" | "phaser" | "tremolo" => super::fx_mod::draw(&p, r, h),
         "imager" => phase_meter(&p, r, h, col),
         "utility" => stereo(&p, r, h, col),
         "tune" => tune(&p, r, h, col),
@@ -1360,58 +1360,6 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 
 // ----------------------------------------------------------------------------------- modulation
 
-fn lfo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    grid(p, r, false);
-    let rate = h.v("rate");
-    let depth = h.v("depth");
-    let id = h.def.id;
-    let wave = |ph: f32| -> f32 {
-        if id == "tremolo" {
-            match h.v("shape").round() as i32 {
-                1 => 1.0 - 4.0 * ((ph / TAU).fract() - 0.5).abs(),
-                2 => {
-                    if (ph / TAU).fract() < 0.5 {
-                        1.0
-                    } else {
-                        -1.0
-                    }
-                }
-                _ => ph.sin(),
-            }
-        } else {
-            ph.sin()
-        }
-    };
-    let mid = r.center().y;
-    let amp = r.height() * 0.4 * depth.max(0.05);
-    let shift = h.t() * rate * TAU;
-    let cycles = 2.0;
-    let pts: Vec<Pos2> = (0..=200).map(|k| k as f32 / 200.0).map(|u| Pos2::new(r.left() + 8.0 + u * (r.width() - 16.0), mid - wave(u * TAU * cycles - shift) * amp)).collect();
-    filled_curve(p, &pts, mid, col);
-    // A "voice" dot that bobs with the LFO at the left; for chorus / flanger echoes trail behind it.
-    let dot = Pos2::new(r.left() + 30.0, mid - wave(-shift) * amp);
-    let trail = match id {
-        "chorus" => 3,
-        "flanger" | "phaser" => (2.0 + h.v("feedback").abs() * 6.0) as i32,
-        _ => 0,
-    };
-    for k in 1..=trail {
-        let d = Pos2::new(dot.x + k as f32 * 9.0, mid - wave(-shift - k as f32 * 0.35) * amp);
-        p.circle_filled(d, 5.0 - k as f32 * 0.4, col.gamma_multiply(0.6 - k as f32 * 0.06));
-    }
-    p.circle_filled(dot, 7.0, Color32::WHITE);
-    let extra = match id {
-        "phaser" => match h.def.param("stages").map(|p| p.kind) {
-            Some(effects::ParamKind::Choice(n)) => format!(" · {} stages", n.get(h.v("stages").round() as usize).copied().unwrap_or("")),
-            _ => String::new(),
-        },
-        "flanger" => format!(" · {:+.0}% feedback", h.v("feedback") * 100.0),
-        "tremolo" if h.v("pan") > 0.5 => " · auto-pan".into(),
-        _ => String::new(),
-    };
-    p.text(r.right_top() + Vec2::new(-8.0, 6.0), egui::Align2::RIGHT_TOP, format!("{rate:.2} Hz · {:.0}% depth{extra}", depth * 100.0), egui::FontId::proportional(10.5), theme::TEXT);
-}
-
 // --------------------------------------------------------------------------------------- utility
 
 fn stereo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -1733,38 +1681,51 @@ fn orbit_layout(r: Rect) -> (Rect, Vec<Rect>, Vec<Rect>) {
     (field, shapes, modes)
 }
 
-fn orbit(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+fn orbit(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
+    use super::fx_mod::{art, glow, halo, stars, window, CREAM, OUROBOROS};
     use dragon_engine::effects::panner::{shape_value, ORBIT_MODES};
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x1a));
+    let amber = Color32::from_rgb(0xff, 0x9a, 0x3c);
+    let col = if h.enabled { amber } else { theme::TEXT_DIM };
+    p.rect_filled(r, 6.0, Color32::from_rgb(0x14, 0x0c, 0x0c));
     let (field, shapes, modes) = orbit_layout(r);
+    window(p, field);
     let (width, center) = (h.v("width") / 100.0, h.v("center") / 100.0);
     let shape = h.v("shape").round() as usize;
     let mode = h.v("mode").round() as usize;
-    // The listener sits at the bottom centre; positions -1 … 1 map to an arc from left to right.
-    let ear = Pos2::new(field.center().x, field.bottom() - 6.0);
-    let rad = (field.height() - 18.0).min(field.width() * 0.46);
+    // The listener sits in the middle of the serpent's ring; positions -1 … 1 map to its upper half.
+    let ring = (field.height() * 0.5 - 6.0).min(field.width() * 0.46).max(20.0);
+    let ear = field.center();
+    let rad = ring * 0.74;
     let at = |pos: f32, rr: f32| {
         let a = PI + (pos.clamp(-1.0, 1.0) + 1.0) * 0.5 * PI;
         Pos2::new(ear.x + rr * a.cos(), ear.y + rr * a.sin())
     };
-    for k in 1..=4 {
-        let rr = rad * k as f32 / 4.0;
+    // The ouroboros, slowly circling.
+    let fp = p.with_clip_rect(field.shrink(2.0));
+    stars(&fp, field.shrink(4.0), h.t(), 90);
+    if let Some(t) = art(p.ctx(), "fx-ouroboros", OUROBOROS) {
+        halo(&fp, ear, ring * 1.35, amber, 0.16);
+        super::analog::rotated(&fp, &t, ear, ring, h.t() * 0.12, Color32::WHITE);
+    }
+    for k in 1..=3 {
+        let rr = rad * k as f32 / 3.0;
         let pts: Vec<Pos2> = (0..=48).map(|j| at(-1.0 + 2.0 * j as f32 / 48.0, rr)).collect();
-        p.add(Shape::line(pts, Stroke::new(1.0_f32, Color32::from_white_alpha(if k == 4 { 40 } else { 14 }))));
+        fp.add(Shape::line(pts, Stroke::new(1.0_f32, CREAM.gamma_multiply(if k == 3 { 0.35 } else { 0.14 }))));
     }
+    fp.line_segment([at(-1.0, rad), at(1.0, rad)], Stroke::new(1.0_f32, CREAM.gamma_multiply(0.14)));
     for (pos, t) in [(-1.0, "L"), (0.0, "C"), (1.0, "R")] {
-        p.text(at(pos, rad + 10.0), egui::Align2::CENTER_CENTER, t, egui::FontId::proportional(10.0), Color32::from_white_alpha(120));
+        fp.text(at(pos, rad + 9.0), egui::Align2::CENTER_CENTER, t, egui::FontId::proportional(10.0), CREAM.gamma_multiply(0.8));
     }
-    // The range the motion covers (a wedge).
+    // The range the motion covers (a wedge of lamplight).
     let (lo, hi) = ((center - width).max(-1.0), (center + width).min(1.0));
     let mut wedge = vec![ear];
     wedge.extend((0..=32).map(|j| at(lo + (hi - lo) * j as f32 / 32.0, rad)));
-    p.add(Shape::convex_polygon(wedge, col.gamma_multiply(0.12), Stroke::NONE));
-    // The shape's path over one cycle, drawn along the arc as a ribbon of dots.
+    fp.add(Shape::convex_polygon(wedge, glow(col, 0.12), Stroke::NONE));
+    // The shape's path over one cycle, as a trail of sparks.
     for j in 0..40 {
         let ph = j as f32 / 40.0;
         let v = (center + width * shape_value(shape, ph, 7)).clamp(-1.0, 1.0);
-        p.circle_filled(at(v, rad * (0.35 + 0.6 * ph)), 1.6, col.gamma_multiply(0.45));
+        fp.circle_filled(at(v, rad * (0.3 + 0.62 * ph)), 1.6, col.gamma_multiply(0.55));
     }
     // The sound: live position, or a demonstration of the motion when there is no audio.
     let (pos, flash) = match h.tele {
@@ -1772,19 +1733,29 @@ fn orbit(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         _ => ((center + width * shape_value(shape, h.t() * 0.5, (h.t() * 0.5) as i64)).clamp(-1.0, 1.0), 0.0),
     };
     let ball = at(pos, rad * 0.8);
-    p.line_segment([ear, ball], Stroke::new(1.0_f32, col.gamma_multiply(0.35)));
+    fp.line_segment([ear, ball], Stroke::new(1.0_f32, col.gamma_multiply(0.35)));
     if flash > 0.02 {
-        p.circle_stroke(ball, 10.0 + 14.0 * (1.0 - flash), Stroke::new(2.0_f32, col.gamma_multiply(flash)));
+        fp.circle_stroke(ball, 10.0 + 14.0 * (1.0 - flash), Stroke::new(2.0_f32, col.gamma_multiply(flash)));
     }
-    p.circle_filled(ball, 12.0, col.gamma_multiply(0.18));
-    p.circle_filled(ball, 7.0, col);
-    p.circle_filled(ear, 5.0, Color32::from_gray(150));
-    p.text(field.left_top(), egui::Align2::LEFT_TOP, format!("centre {:+.0}  width {:.0} %", center * 100.0, width * 100.0), egui::FontId::proportional(10.0), Color32::from_white_alpha(150));
-    // Shape buttons: each draws its waveform.
+    // An ember: its glow, then the hot core.
+    halo(&fp, ball, 26.0, col, 0.6);
+    fp.circle_filled(ball, 6.0, col);
+    fp.circle_filled(ball, 3.0, Color32::from_rgb(0xff, 0xe6, 0xb0));
+    fp.circle_filled(ear, 5.0, Color32::from_rgb(0xb8, 0x96, 0x5a));
+    fp.circle_stroke(ear, 5.0, Stroke::new(1.0_f32, Color32::from_rgb(0x5a, 0x44, 0x22)));
+    p.text(field.left_top() + Vec2::new(8.0, 6.0), egui::Align2::LEFT_TOP, format!("CENTRE {:+.0}   WIDTH {:.0} %", center * 100.0, width * 100.0), egui::FontId::proportional(9.5), CREAM.gamma_multiply(0.8));
+    // Hardware buttons: black caps with an amber lamp when chosen.
+    let button = |b: Rect, on: bool| {
+        p.rect_filled(b.translate(Vec2::new(0.0, 1.5)), 4.0, Color32::from_black_alpha(140));
+        p.rect_filled(b, 4.0, Color32::from_rgb(0x1a, 0x17, 0x16));
+        p.rect_stroke(b, 4.0, Stroke::new(1.0_f32, if on { col } else { Color32::from_white_alpha(28) }), egui::StrokeKind::Inside);
+        if on {
+            p.rect_filled(b.shrink(1.0), 3.0, glow(col, 0.16));
+        }
+    };
     for (k, b) in shapes.iter().enumerate() {
         let on = k == shape;
-        p.rect_filled(*b, 4.0, if on { col.gamma_multiply(0.3) } else { Color32::from_rgb(0x1e, 0x22, 0x2a) });
-        p.rect_stroke(*b, 4.0, Stroke::new(1.0_f32, if on { col } else { Color32::from_white_alpha(25) }), egui::StrokeKind::Inside);
+        button(*b, on);
         let g = b.shrink2(Vec2::new(5.0, 6.0));
         let pts: Vec<Pos2> = (0..=24)
             .map(|j| {
@@ -1794,13 +1765,12 @@ fn orbit(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
                 Pos2::new(g.left() + g.width() * ph, g.center().y - v * g.height() * 0.5)
             })
             .collect();
-        p.add(Shape::line(pts, Stroke::new(1.5_f32, if on { Color32::WHITE } else { Color32::from_white_alpha(140) })));
+        p.add(Shape::line(pts, Stroke::new(1.5_f32, if on { Color32::from_rgb(0xff, 0xd8, 0x9a) } else { CREAM.gamma_multiply(0.55) })));
     }
     for (k, b) in modes.iter().enumerate() {
         let on = k == mode;
-        p.rect_filled(*b, 4.0, if on { col.gamma_multiply(0.3) } else { Color32::from_rgb(0x1e, 0x22, 0x2a) });
-        p.rect_stroke(*b, 4.0, Stroke::new(1.0_f32, if on { col } else { Color32::from_white_alpha(25) }), egui::StrokeKind::Inside);
-        p.text(b.center(), egui::Align2::CENTER_CENTER, ORBIT_MODES[k].to_uppercase(), egui::FontId::proportional(10.0), if on { Color32::WHITE } else { Color32::from_white_alpha(150) });
+        button(*b, on);
+        p.text(b.center(), egui::Align2::CENTER_CENTER, ORBIT_MODES[k].to_uppercase(), egui::FontId::proportional(10.0), if on { Color32::from_rgb(0xff, 0xd8, 0x9a) } else { CREAM.gamma_multiply(0.6) });
     }
 }
 
