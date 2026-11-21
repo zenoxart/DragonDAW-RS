@@ -656,6 +656,17 @@ fn shortcuts_follow_fl_studio() {
 }
 
 /// Ctrl+Alt+Z undoes, pressed again it redoes (FL's toggle), Ctrl+Z keeps stepping back; copy / paste of clips.
+/// The metronome toggles in every editor (in the piano roll it used to open a MIDI file dialog).
+#[test]
+fn metronome_toggles_in_the_piano_roll() {
+    let mut h = Harness::new();
+    h.st.ui.editor = crate::state::Editor::PianoRoll;
+    let on = h.st.session.project.metronome.enabled;
+    let ctx = h.ctx.clone();
+    crate::commands::execute(&mut h.st, "dragon.transport.metronome", &ctx);
+    assert_eq!(h.st.session.project.metronome.enabled, !on);
+}
+
 /// Ctrl+Z goes back hundreds of steps one by one, Ctrl+Y comes forward again.
 #[test]
 fn ctrl_z_steps_back_hundreds_of_steps() {

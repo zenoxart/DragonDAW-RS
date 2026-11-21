@@ -28,6 +28,11 @@ pub const TABS: [(Tab, &str, &str); 5] = [
 
 const TAB_KEY: &str = "options.tab";
 
+/// Shows Options on the Audio page (the tutorial's audio set-up steps).
+pub fn select_audio_tab(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(TAB_KEY), Tab::Audio));
+}
+
 pub fn show(ui: &mut Ui, st: &mut State) {
     let key = egui::Id::new(TAB_KEY);
     let mut tab: Tab = ui.data(|d| d.get_temp(key)).unwrap_or_default();
@@ -63,7 +68,7 @@ fn audio(ui: &mut Ui, st: &mut State) {
     let mut cfg = st.settings.device.clone();
     egui::Grid::new("audio.grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         ui.label("Driver");
-        egui::ComboBox::from_id_salt("audio.host").selected_text(cfg.host.clone().unwrap_or("default".into())).show_ui(ui, |ui| {
+        let host_r = egui::ComboBox::from_id_salt("audio.host").selected_text(cfg.host.clone().unwrap_or("default".into())).show_ui(ui, |ui| {
             ui.selectable_value(&mut cfg.host, None, "default");
             for h in device::hosts() {
                 let tip = match h.as_str() {
@@ -77,6 +82,7 @@ fn audio(ui: &mut Ui, st: &mut State) {
                 ui.selectable_value(&mut cfg.host, Some(h.clone()), h).on_hover_text(tip);
             }
         });
+        crate::tutorial::anchor(ui.ctx(), "options.audio_driver", host_r.response.rect);
         ui.end_row();
         if cfg.host.as_deref() == Some("ASIO") {
             ui.label("");
@@ -92,37 +98,41 @@ fn audio(ui: &mut Ui, st: &mut State) {
             ui.end_row();
         }
         ui.label("Output");
-        egui::ComboBox::from_id_salt("audio.out").selected_text(cfg.output.clone().unwrap_or("default".into())).width(260.0).show_ui(ui, |ui| {
+        let out_r = egui::ComboBox::from_id_salt("audio.out").selected_text(cfg.output.clone().unwrap_or("default".into())).width(260.0).show_ui(ui, |ui| {
             ui.selectable_value(&mut cfg.output, None, "default");
             for d in device::output_devices(cfg.host.as_deref()) {
                 ui.selectable_value(&mut cfg.output, Some(d.clone()), d);
             }
         });
+        crate::tutorial::anchor(ui.ctx(), "options.audio_output", out_r.response.rect);
         ui.end_row();
         ui.label("Input (recording)");
-        egui::ComboBox::from_id_salt("audio.in").selected_text(cfg.input.clone().unwrap_or("default".into())).width(260.0).show_ui(ui, |ui| {
+        let in_r = egui::ComboBox::from_id_salt("audio.in").selected_text(cfg.input.clone().unwrap_or("default".into())).width(260.0).show_ui(ui, |ui| {
             ui.selectable_value(&mut cfg.input, None, "default");
             for d in device::input_devices(cfg.host.as_deref()) {
                 ui.selectable_value(&mut cfg.input, Some(d.clone()), d);
             }
         });
+        crate::tutorial::anchor(ui.ctx(), "options.audio_input", in_r.response.rect);
         ui.end_row();
         ui.label("Sample rate");
-        ui.horizontal(|ui| {
+        let rate_r = ui.horizontal(|ui| {
             ui.selectable_value(&mut cfg.sample_rate, None, "device");
             for r in [44100u32, 48000, 88200, 96000] {
                 ui.selectable_value(&mut cfg.sample_rate, Some(r), format!("{}", r));
             }
         });
+        crate::tutorial::anchor(ui.ctx(), "options.audio_rate", rate_r.response.rect);
         ui.end_row();
         ui.label("Buffer");
-        ui.horizontal(|ui| {
+        let buf_r = ui.horizontal(|ui| {
             ui.selectable_value(&mut cfg.buffer, None, "driver");
             let rate = cfg.sample_rate.unwrap_or_else(|| st.audio.rate()).max(1) as f32;
             for b in [64u32, 128, 256, 512, 1024, 2048] {
                 ui.selectable_value(&mut cfg.buffer, Some(b), b.to_string()).on_hover_text(format!("{:.1} ms at {} Hz", b as f32 * 1000.0 / rate, rate));
             }
         });
+        crate::tutorial::anchor(ui.ctx(), "options.audio_buffer", buf_r.response.rect);
         ui.end_row();
         ui.label("");
         ui.label(RichText::new(format!("Running: {}", st.audio.describe())).small().color(theme::TEXT_DIM));

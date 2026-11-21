@@ -318,11 +318,8 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "edit.mute_sel" if st.ui.editor == Ed::Rack => st.ui.rack_mixer_sel = !st.ui.rack_mixer_sel,
         "edit.move_up" | "edit.move_down" if st.ui.editor == Ed::Rack => rack_extend(st, if id == "edit.move_up" { -1 } else { 1 }),
         "zoom.in" | "zoom.out" if st.ui.editor == Ed::Rack => rack_group_step(st, if id == "zoom.in" { -1 } else { 1 }),
-        "transport.metronome" if st.ui.editor == Ed::PianoRoll => {
-            if let Some(f) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
-                st.import_midi(&f);
-            }
-        }
+        // (FL opens a MIDI file with Ctrl+M in the piano roll; here the metronome always toggles – the
+        // piano roll's MIDI import is File › Import › MIDI file.)
         "transport.precount" if st.ui.editor == Ed::Playlist => st.ctx.open("dragon.launcher", None),
         "edit.quick_quantize2" => {
             let grid = (PPQ as f64 * st.ui.snap.max(0.25)) as u32;

@@ -66,7 +66,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let p = &st.session.project;
         let (met, lp, punch) = (p.metronome.enabled, p.loop_enabled, p.punch_enabled);
         let count_in = p.metronome.count_in_bars;
-        let click = widgets::toggle(ui, met, "♩ CLICK", theme::ACCENT_2).on_hover_text("Metronome (M)");
+        let click = widgets::toggle(ui, met, "♩ CLICK", theme::ACCENT_2).on_hover_text("Metronome on / off (Ctrl+M)");
         if click.clicked() {
             st.ctx.run("dragon.transport.metronome", serde_json::Value::Null);
         }

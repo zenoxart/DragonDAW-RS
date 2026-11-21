@@ -46,10 +46,38 @@ pub const STEPS: &[Step] = &[
         try_it: None,
     },
     Step {
+        target: Some("options.audio_driver"),
+        open: Some("dragon.options"),
+        title: "Set up your audio: the driver",
+        text: "First, sound. Options (F10) › Audio. On Windows choose ASIO when you have an audio interface – your interface's own ASIO driver gives the lowest delay. No interface? WASAPI works with every device (laptop speakers, headphones, USB headsets). Avoid generic ASIO wrappers when your interface has its own driver.",
+        try_it: Some(("A sound device is running", |st| st.audio.health().is_some())),
+    },
+    Step {
+        target: Some("options.audio_output"),
+        open: Some("dragon.options"),
+        title: "Output and input",
+        text: "Output: where you listen – your interface (or headphones). Input: where your mic or guitar is plugged in – usually the same interface. With ASIO both must be the same interface. Only one program can use ASIO at a time, so close other audio apps.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.audio_rate"),
+        open: Some("dragon.options"),
+        title: "Sample rate",
+        text: "44100 or 48000 Hz suit almost everything (48000 for video). Pick one your interface supports; higher rates cost CPU and rarely help.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.audio_buffer"),
+        open: Some("dragon.options"),
+        title: "Buffer size: delay vs. stability",
+        text: "Smaller buffers mean less delay: 128 frames ≈ 3 ms, good for recording and playing live. Crackles or dropouts? Go up to 256 or 512 – best for mixing big projects. The line below shows what really runs (ASIO can override it in its own control panel). Use headphones when you monitor a mic, or the speakers feed back into it.",
+        try_it: None,
+    },
+    Step {
         target: Some("transport.play"),
         open: None,
         title: "Play and stop",
-        text: "Space plays and pauses, Ctrl+Space stops. PAT plays the pattern you are editing, SONG the whole playlist.",
+        text: "Space plays and pauses, Ctrl+Space stops. PATTERN plays the pattern you are editing, SONG the whole playlist.",
         try_it: Some(("Press play (or Space)", |st| st.transport().playing)),
     },
     Step { target: Some("transport.tempo"), open: None, title: "Tempo", text: "Drag the BPM up or down, double-click to type it, or tap the tempo with TAP.", try_it: None },
@@ -109,10 +137,17 @@ pub const RECORD_STEPS: &[Step] = &[
         try_it: None,
     },
     Step {
+        target: Some("options.audio_driver"),
+        open: Some("dragon.options"),
+        title: "Check the audio driver",
+        text: "Options › Audio: ASIO with your interface (Windows) – the same interface as Output and Input – and a buffer of 128 or 256 for recording. No interface: WASAPI and your computer's mic.",
+        try_it: Some(("An input is open", |st| st.audio.can_record())),
+    },
+    Step {
         target: Some("mixer.add_rec"),
         open: Some("dragon.mixer"),
         title: "Add a recording channel",
-        text: "Click + record in the mixer. It makes a mixer channel and an armed track that records into it. Give every mic or instrument its own.",
+        text: "In the mixer's menu bar open + Add › Recording channel. It makes a mixer channel and an armed track that records into it. Give every mic or instrument its own.",
         try_it: Some(("Add a recording channel", |st| st.session.project.tracks.iter().any(|t| t.armed))),
     },
     Step {
@@ -213,6 +248,9 @@ pub fn show(ctx: &Context, st: &mut State) {
     if st.ui.tour.opened != Some(k) {
         if let Some(v) = step.open {
             st.ctx.open(v, None);
+            if v == "dragon.options" {
+                crate::views::options::select_audio_tab(ctx);
+            }
         }
         st.ui.tour.opened = Some(k);
     }

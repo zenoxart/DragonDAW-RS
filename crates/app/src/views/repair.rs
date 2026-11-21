@@ -623,13 +623,24 @@ fn toolbar(ui: &mut Ui, st: &mut State, name: &str, path: &std::path::Path) {
                 st.ui.repair.view = None;
                 st.ui.repair.pitch_view = None;
             }
-            if ui.button(" + ").on_hover_text("Zoom in (Ctrl+wheel, or +)").clicked() {
+            let tip = "Like the playlist: Ctrl+wheel zooms at the mouse, Ctrl+right-drag zooms into a box, Ctrl+right-click zooms out, middle-drag pans, Shift+wheel scrolls";
+            if ui.button(" + ").on_hover_text(format!("Zoom in time · {tip}")).clicked() {
                 zoom_time(st, 0.5, None);
             }
-            if ui.button(" − ").on_hover_text("Zoom out (Ctrl+wheel, or −)").clicked() {
+            if ui.button(" − ").on_hover_text(format!("Zoom out time · {tip}")).clicked() {
                 zoom_time(st, 2.0, None);
             }
             ui.label(RichText::new("Zoom").small().color(theme::TEXT_DIM));
+            if st.ui.repair.tool == Tool::Pitch {
+                ui.separator();
+                if ui.button(" + ").on_hover_text("Zoom in pitch (Alt+wheel)").clicked() {
+                    zoom_pitch(st, 0.6);
+                }
+                if ui.button(" − ").on_hover_text("Zoom out pitch (Alt+wheel)").clicked() {
+                    zoom_pitch(st, 1.6);
+                }
+                ui.label(RichText::new("Pitch").small().color(theme::TEXT_DIM));
+            }
             ui.separator();
             if st.ui.repair.original.as_ref().is_some_and(|o| o != path) {
                 ui.toggle_value(&mut st.ui.repair.compare, "Hear the original").on_hover_text("A / B: play the clip as it was before the repairs");
@@ -747,12 +758,60 @@ fn wheel(ui: &Ui, st: &mut State, data: &AudioData, r: Rect, left: f32, notes: b
     }
 }
 
+/// Playlist navigation in the repair views: Ctrl + right-drag zooms into a box (time; pitch too in
+/// the notes view), Ctrl + right-click zooms out, middle-drag pans.
+fn nav_gestures(ui: &Ui, st: &mut State, data: &AudioData, plot: Rect, notes: bool, key: &str) {
+    let dur = data.duration().max(1e-3);
+    let (t0, t1) = view_range(st, data);
+    let t_of = |x: f32| t0 + (((x - plot.left()) / plot.width()).clamp(0.0, 1.0) as f64) * (t1 - t0);
+    let pv = st.ui.repair.pitch_view;
+    let m_of = |y: f32| pv.map(|(lo, hi)| lo + (plot.bottom() - y) / plot.height() * (hi - lo));
+    match super::nav::area_zoom(ui, plot, key) {
+        Some(super::nav::AreaZoom::To(b)) => {
+            let (a, z) = (t_of(b.left()), t_of(b.right()));
+            let w = (z - a).max(0.05_f64.min(dur));
+            st.ui.repair.view = if w >= dur { None } else { Some((a.clamp(0.0, dur - w), a.clamp(0.0, dur - w) + w)) };
+            if notes {
+                if let (Some(top), Some(bot)) = (m_of(b.top()), m_of(b.bottom())) {
+                    let (lo, hi) = (bot.min(top), bot.max(top));
+                    let c = (lo + hi) / 2.0;
+                    let half = ((hi - lo) / 2.0).max(1.5);
+                    st.ui.repair.pitch_view = Some((c - half, c + half));
+                }
+            }
+        }
+        Some(super::nav::AreaZoom::Out(at)) => {
+            zoom_time(st, 2.0, Some(t_of(at.x)));
+            if notes {
+                zoom_pitch(st, 2.0);
+            }
+        }
+        None => {}
+    }
+    let pan = super::nav::pan_drag(ui, plot, false);
+    if pan != Vec2::ZERO {
+        let (t0, t1) = view_range(st, data);
+        if t1 - t0 < dur {
+            let a = (t0 - pan.x as f64 / plot.width() as f64 * (t1 - t0)).clamp(0.0, dur - (t1 - t0));
+            st.ui.repair.view = Some((a, a + (t1 - t0)));
+        }
+        if notes {
+            if let Some((lo, hi)) = st.ui.repair.pitch_view {
+                let d = pan.y / plot.height() * (hi - lo);
+                st.ui.repair.pitch_view = Some((lo + d, hi + d));
+            }
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+}
+
 fn spectrogram_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
     let (r, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let p = ui.painter_at(r);
     p.rect_filled(r, 4.0, Color32::BLACK);
     let plot = Rect::from_min_max(Pos2::new(r.left() + 44.0, r.top() + 2.0), Pos2::new(r.right() - 2.0, r.bottom() - 2.0));
     wheel(ui, st, data, r, plot.left(), false);
+    nav_gestures(ui, st, data, plot, false, "repair.spectrum");
     let dur = data.duration().max(1e-6);
     let (t0, t1) = view_range(st, data);
     let nyq = data.rate as f32 / 2.0;
@@ -843,6 +902,7 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
         st.ui.repair.pitch_view = Some((lo, hi.max(lo + 12.0)));
     }
     wheel(ui, st, data, r, plot.left(), true);
+    nav_gestures(ui, st, data, plot, true, "repair.notes");
     let (lo, hi) = st.ui.repair.pitch_view.unwrap_or((48.0, 72.0));
     let (t0, t1) = view_range(st, data);
     let x_of = |t: f64| plot.left() + ((t - t0) / (t1 - t0)) as f32 * plot.width();
