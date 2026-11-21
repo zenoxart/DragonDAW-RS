@@ -39,10 +39,13 @@ fn main() -> eframe::Result {
             .with_title("Dragon DAW")
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([720.0, 480.0])
+            // Opens filling the screen (maximized, the taskbar stays reachable).
+            .with_maximized(true)
             .with_icon(brand::window_icon())
             .with_app_id("dragon-daw")
             .with_drag_and_drop(true),
-        persist_window: true,
+        // Not restored from the last session: the app always opens maximized.
+        persist_window: false,
         ..Default::default()
     };
     eframe::run_native(

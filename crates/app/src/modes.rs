@@ -31,7 +31,7 @@ pub const MODES: [(Mode, &str, &str, &str); 7] = [
 ];
 
 /// EQ → multiband → imager → limiter (−1 dBTP) on the master, skipping what is already there; the
-/// limiter stays last.
+/// limiter stays last (the mastering project modes start with it).
 pub fn add_mastering_chain(p: &mut Project) {
     for id in ["eq", "multiband", "imager", "limiter"] {
         if p.mixer.master.inserts.iter().any(|i| i.effect == id) {
@@ -45,6 +45,30 @@ pub fn add_mastering_chain(p: &mut Project) {
         p.mixer.master.inserts.push(Insert { id: iid, effect: id.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
     }
     p.mixer.master.inserts.sort_by_key(|i| i.effect == "limiter");
+}
+
+/// The one-click mastering chain on the master, all stock: a gentle glue compressor → the Obsidian soft
+/// clipper (takes the peaks off) → Philosopher's Stone (the finishing chain, last). Effects already on
+/// the master are kept; what is missing is added, in this order, behind them.
+pub fn add_stone_chain(p: &mut Project) {
+    const CHAIN: [(&str, &[(&str, f32)]); 3] = [
+        ("compressor", &[("threshold", -14.0), ("ratio", 2.0), ("knee", 8.0), ("attack", 30.0), ("release", 200.0), ("auto_makeup", 1.0)]),
+        ("clipper", &[("threshold", -3.0), ("ceiling", -0.3), ("oversampling", 2.0)]),
+        ("dragon_particle", &[]),
+    ];
+    for (id, set) in CHAIN {
+        if p.mixer.master.inserts.iter().any(|i| i.effect == id) {
+            continue;
+        }
+        let iid = p.next_id();
+        let mut params = dragon_engine::effects::find(id).map(|d| d.defaults()).unwrap_or_default();
+        for (k, v) in set {
+            params.insert((*k).into(), *v);
+        }
+        p.mixer.master.inserts.push(Insert { id: iid, effect: id.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+    }
+    // The Stone finishes the chain.
+    p.mixer.master.inserts.sort_by_key(|i| i.effect == "dragon_particle");
 }
 
 /// A playlist track with its own mixer channel (which serves as the group bus for what lands on it).
@@ -267,7 +291,39 @@ pub fn show(ctx: &egui::Context, st: &mut State) -> bool {
                 ui.label(RichText::new("Pick a start and Dragon DAW sets up the project and the views for it. You can always change everything later.").size(13.0).color(theme::TEXT_DIM));
             });
         });
-        ui.add_space(18.0);
+        ui.add_space(16.0);
+        // The tour: a big, obvious first step for new users (it pulses gently until hovered).
+        {
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 76.0), egui::Sense::click());
+            let hot = resp.hovered();
+            let t = ui.input(|i| i.time) as f32;
+            let pulse = if hot { 1.0 } else { 0.55 + 0.45 * (t * 2.4).sin().abs() };
+            let p = ui.painter();
+            p.rect_filled(r, 14.0, if hot { Color32::from_rgb(0x4a, 0x26, 0x12) } else { Color32::from_rgb(0x30, 0x1c, 0x12) });
+            p.rect_stroke(r, 14.0, Stroke::new(2.0 + pulse, theme::ACCENT_2.gamma_multiply(0.5 + 0.5 * pulse)), egui::StrokeKind::Inside);
+            let c = Pos2::new(r.left() + 46.0, r.center().y);
+            p.circle_filled(c, 26.0, theme::ACCENT_2);
+            p.add(egui::Shape::convex_polygon(vec![c + Vec2::new(-8.0, -12.0), c + Vec2::new(13.0, 0.0), c + Vec2::new(-8.0, 12.0)], Color32::BLACK, Stroke::NONE));
+            p.text(Pos2::new(r.left() + 88.0, r.center().y - 12.0), egui::Align2::LEFT_CENTER, "New here? Take the 2-minute tour", egui::FontId::proportional(22.0), Color32::WHITE);
+            p.text(
+                Pos2::new(r.left() + 88.0, r.center().y + 14.0),
+                egui::Align2::LEFT_CENTER,
+                "A guided click-through of the playlist, mixer, recording and plugins. Help › Take the tour brings it back any time.",
+                egui::FontId::proportional(12.5),
+                theme::TEXT_DIM,
+            );
+            p.text(Pos2::new(r.right() - 22.0, r.center().y), egui::Align2::RIGHT_CENTER, "Start tour ▶", egui::FontId::proportional(16.0), theme::ACCENT_2);
+            if hot {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            } else {
+                ui.ctx().request_repaint();
+            }
+            if resp.clicked() {
+                open = false;
+                crate::tutorial::start(st);
+            }
+        }
+        ui.add_space(16.0);
         let mut chosen = None;
         for row in MODES.chunks(4) {
             ui.horizontal(|ui| {
@@ -319,11 +375,6 @@ pub fn show(ctx: &egui::Context, st: &mut State) -> bool {
             if ui.button(RichText::new("Just an empty project").size(13.0)).clicked() {
                 open = false;
             }
-            let tour = egui::Button::new(RichText::new("Take the 2-minute tour").size(13.0).strong().color(Color32::BLACK)).fill(theme::ACCENT_2);
-            if ui.add(tour).on_hover_text("A click-through tour of the interface (Help › Take the tour brings it back)").clicked() {
-                open = false;
-                crate::tutorial::start(st);
-            }
             let mut show = st.settings.show_start;
             if ui.checkbox(&mut show, "Show this at start").changed() {
                 st.settings.show_start = show;
@@ -351,6 +402,16 @@ mod tests {
 
     fn state() -> State {
         State::new(redhive_client_framework::AppContext::new("en"), crate::state::Settings { show_splash: false, ..Default::default() })
+    }
+
+    #[test]
+    fn stone_chain_is_compressor_clipper_stone() {
+        let mut p = Project::default();
+        add_stone_chain(&mut p);
+        let chain: Vec<&str> = p.mixer.master.inserts.iter().map(|i| i.effect.as_str()).collect();
+        assert_eq!(chain, ["compressor", "clipper", "dragon_particle"]);
+        add_stone_chain(&mut p);
+        assert_eq!(p.mixer.master.inserts.len(), 3, "nothing doubled");
     }
 
     #[test]

@@ -173,6 +173,8 @@ impl SharedTransport {
 pub struct StreamHealth {
     pub callbacks: std::sync::atomic::AtomicU64,
     pub failed: std::sync::atomic::AtomicBool,
+    /// Frames of the last callback: the buffer the driver really runs (ASIO may override the request).
+    pub frames: std::sync::atomic::AtomicU32,
 }
 
 /// The running audio engine.
@@ -352,6 +354,7 @@ impl AudioEngine {
                 }
             }
             hb.callbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            hb.frames.store(n as u32, std::sync::atomic::Ordering::Relaxed);
             // Recording: hand input to the recorder once the count-in is over.
             let st = renderer.transport;
             let recording_now = st.recording && !renderer.counting_in();
@@ -466,6 +469,21 @@ impl AudioEngine {
 
     pub fn send(&self, c: Command) {
         let _ = self.tx.send(c);
+    }
+
+    /// The buffer the driver actually runs (frames of the last callback; the requested size until audio
+    /// has run).
+    pub fn buffer_frames(&self) -> u32 {
+        match self.health.frames.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => self.buffer,
+            f => f,
+        }
+    }
+
+    /// Output latency of one buffer, in milliseconds (what DAWs show for the buffer size: 128 frames at
+    /// 44.1 kHz ≈ 2.9 ms).
+    pub fn buffer_ms(&self) -> f64 {
+        self.buffer_frames() as f64 * 1000.0 / self.rate.max(1) as f64
     }
 
     /// Stops the device in a fixed order and waits for the engine's threads: the input stream, then the

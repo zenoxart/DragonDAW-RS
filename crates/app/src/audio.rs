@@ -151,7 +151,10 @@ impl Audio {
 
     pub fn describe(&self) -> String {
         match self {
-            Audio::Device(e) => format!("{} · {} Hz · {} frames ({:.1} ms)", e.output_name, e.rate, e.buffer, e.latency_frames as f64 * 1000.0 / e.rate as f64),
+            Audio::Device(e) => {
+                let rt = if e.input_name.is_some() { format!(", round trip {:.1} ms", e.buffer_ms() * 2.0) } else { String::new() };
+                format!("{} · {} Hz · {} frames · {:.1} ms{rt}", e.output_name, e.rate, e.buffer_frames(), e.buffer_ms())
+            }
             Audio::Null(_, why) => format!("No audio device ({why}) – silent clock"),
         }
     }

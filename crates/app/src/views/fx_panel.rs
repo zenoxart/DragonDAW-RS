@@ -129,7 +129,7 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
             skin: MODERN,
             bands: Some((dragon_engine::effects::eq::EQ_BANDS, "Band")),
             sections: vec![
-                sec(format!("Band {b}"), vec![Ctl::Bands, p(bp("on"), "On"), p(bp("type"), "Shape"), p(bp("stereo"), "Stereo")]),
+                sec(format!("Band {b}"), vec![Ctl::Bands, p(bp("on"), "On"), p(bp("type"), "Shape"), p(bp("slope"), "Slope"), p(bp("stereo"), "Stereo")]),
                 sec("Curve", vec![big(bp("freq"), "Frequency"), k(bp("gain"), "Gain"), k(bp("q"), "Q")]),
                 sec("Dynamic", vec![k(bp("dyn"), "Range"), k(bp("thr"), "Threshold")]),
                 sec("Output", vec![k("output", "Output"), p("auto_gain", "Auto gain"), p("phase", "Phase"), p("solo", "Listen")]),

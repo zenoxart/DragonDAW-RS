@@ -40,31 +40,28 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         widgets::apply(st, &r, "Swing", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.swing = swing));
         ui.separator();
         ui.menu_button("+ Channel", |ui| {
-            for (id, label) in [
-                ("add.sampler", "Grimoire (sampler)…"),
-                ("add.synth", "Cinnabar (synth)"),
-                ("add.wavetable", "Transmuter (wavetable)"),
-                ("add.guitar", "Drakestring (guitar)"),
-                ("add.piano", "Emberkeys (piano)"),
-                ("add.drums", "Wyrmdrum (drum pads)"),
-            ] {
-                if ui.button(label).clicked() {
-                    st.ctx.run(&format!("dragon.{id}"), serde_json::Value::Null);
-                    ui.close_menu();
-                }
-            }
-            ui.separator();
+            // Stock instruments, then the scanned third-party instruments – one searchable list.
+            const STOCK: [(&str, &str, &str); 6] = [
+                ("add.sampler", "Grimoire", "sampler"),
+                ("add.synth", "Cinnabar", "synth"),
+                ("add.wavetable", "Transmuter", "wavetable synth"),
+                ("add.guitar", "Drakestring", "guitar"),
+                ("add.piano", "Emberkeys", "piano"),
+                ("add.drums", "Wyrmdrum", "drum pads"),
+            ];
             let plugins: Vec<_> = st.settings.plugins.iter().filter(|p| p.instrument).cloned().collect();
-            if plugins.is_empty() {
-                ui.label(RichText::new("No instrument plugins scanned").small());
-            }
-            for info in plugins {
-                if ui.button(format!("{} ({:?})", info.name, info.format)).clicked() {
+            let mut items: Vec<widgets::PickItem> = STOCK.iter().map(|(_, n, d)| widgets::PickItem { name: n.to_string(), detail: d.to_string(), group: "Stock instruments", tip: String::new() }).collect();
+            items.extend(plugins.iter().map(|i| widgets::PickItem { name: i.name.clone(), detail: format!("{} · {:?}", i.vendor, i.format), group: "Third-party plugins", tip: String::new() }));
+            if let Some(k) = widgets::plugin_picker(ui, "rack.add", &items) {
+                if k < STOCK.len() {
+                    st.ctx.run(&format!("dragon.{}", STOCK[k].0), serde_json::Value::Null);
+                } else {
+                    let info = &plugins[k - STOCK.len()];
                     let r = info.to_ref();
                     let name = info.name.clone();
                     st.ui.channel = Some(st.session.edit("Add plugin instrument", |p| p.add_channel(&name, Instrument::Plugin(r))));
-                    ui.close_menu();
                 }
+                ui.close_menu();
             }
         });
         ui.menu_button("Pattern ⏷", |ui| pattern_menu(ui, st, pat, None));

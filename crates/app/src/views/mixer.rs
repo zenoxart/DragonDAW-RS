@@ -195,6 +195,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         st.ui.mixer = master;
     }
     let selected = all.iter().find(|c| c.id == st.ui.mixer).cloned().unwrap_or_else(|| all[0].clone());
+    toolbar(ui, st);
     let avail = ui.available_size();
     let strips_w = (avail.x - PANEL_W - 10.0).max(160.0);
     ui.horizontal_top(|ui| {
@@ -219,42 +220,6 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     if empty_click || escape {
                         st.ui.mixer_sel.clear();
                     }
-                    ui.vertical(|ui| {
-                        let rec = ui
-                            .add(egui::Button::new(RichText::new("+\nrecord").small().color(theme::REC)).min_size(Vec2::new(46.0, 40.0)))
-                            .on_hover_text("Add a recording channel: a mixer channel with an armed track that records your mic or instrument into it");
-                        crate::tutorial::anchor(ui.ctx(), "mixer.add_rec", rec.rect);
-                        if rec.clicked() {
-                            st.ctx.run("dragon.add.recording", serde_json::Value::Null);
-                        }
-                        let compact = st.settings.compact_mixer;
-                        let cb = egui::Button::new(RichText::new(if compact { "Full\nstrips" } else { "Compact\nstrips" }).small().color(if compact { Color32::BLACK } else { theme::TEXT })).fill(if compact { theme::ACCENT_2 } else { theme::PANEL_2 }).min_size(Vec2::new(46.0, 40.0));
-                        if ui.add(cb).on_hover_text("Compact: narrow strips with just meter, fader, mute and solo – pan and effects stay in the panel on the right").clicked() {
-                            st.ctx.run("dragon.view.compact_mixer", serde_json::Value::Null);
-                        }
-                        if ui.add(egui::Button::new(RichText::new("+\ninsert").small()).min_size(Vec2::new(46.0, 40.0))).on_hover_text("Add a mixer insert").clicked() {
-                            st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
-                        }
-                        if ui.add(egui::Button::new(RichText::new("+\nVCA").small()).min_size(Vec2::new(46.0, 40.0))).clicked() {
-                            st.ctx.run("dragon.add.vca", serde_json::Value::Null);
-                        }
-                        // Auto-balance all channels.
-                        match &st.balance_job {
-                            Some(j) => {
-                                let pc = j.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10.0;
-                                ui.add(egui::Button::new(RichText::new(format!("{pc:.0} %")).small()).min_size(Vec2::new(46.0, 40.0)).sense(Sense::hover())).on_hover_text("Measuring every channel …");
-                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-                            }
-                            None => {
-                                let b = ui
-                                    .add(egui::Button::new(RichText::new("Auto\nbalance").small()).min_size(Vec2::new(46.0, 40.0)))
-                                    .on_hover_text("Balance all channels: measures each channel's loudness over the song and sets every fader for an even starting mix (lead vocals and the low end forward, hats and pads back). Buses, VCAs and silent channels keep their faders. One undo step.");
-                                if b.clicked() {
-                                    st.ctx.run("dragon.mixer.autobalance", serde_json::Value::Null);
-                                }
-                            }
-                        }
-                    });
                 });
             });
         });
@@ -1260,36 +1225,75 @@ pub fn add_effect_menu_sized(ui: &mut Ui, st: &mut State, mixer: Id, label: &str
     let text = if size == Vec2::ZERO { RichText::new(label).small().color(theme::ACCENT_2) } else { RichText::new(label).color(theme::ACCENT_2) };
     let button = egui::Button::new(text).min_size(size).fill(if size == Vec2::ZERO { theme::PANEL_2 } else { Color32::TRANSPARENT });
     egui::menu::menu_custom_button(ui, button, |ui| {
-        let mut cats: Vec<&str> = dragon_engine::effects::registry().iter().map(|d| d.category).collect();
-        cats.sort();
-        cats.dedup();
-        for cat in cats {
-            ui.menu_button(cat, |ui| {
-                for d in dragon_engine::effects::registry().iter().filter(|d| d.category == cat) {
-                    if ui.button(d.name).on_hover_text(d.description).clicked() {
-                        put(st, d.id.to_string(), d.defaults(), None);
-                        ui.close_menu();
-                    }
+        // Stock effects (by category) first, then the scanned third-party effects – one searchable list.
+        let mut stock: Vec<_> = dragon_engine::effects::registry().iter().collect();
+        stock.sort_by(|a, b| a.category.cmp(b.category).then(a.name.cmp(b.name)));
+        let order: Vec<&str> = stock.iter().map(|d| d.id).collect();
+        let fx: Vec<_> = st.settings.plugins.iter().filter(|p| !p.instrument).cloned().collect();
+        let mut items: Vec<widgets::PickItem> = stock.iter().map(|d| widgets::PickItem { name: d.name.to_string(), detail: d.category.to_string(), group: "Stock effects", tip: d.description.to_string() }).collect();
+        items.extend(fx.iter().map(|i| widgets::PickItem { name: i.name.clone(), detail: format!("{} · {:?}", i.vendor, i.format), group: "Third-party plugins", tip: String::new() }));
+        if let Some(k) = widgets::plugin_picker(ui, &format!("fx.{mixer:?}.{replace:?}"), &items) {
+            if k < order.len() {
+                if let Some(d) = dragon_engine::effects::find(order[k]) {
+                    put(st, d.id.to_string(), d.defaults(), None);
                 }
-            });
-        }
-        if replace.is_none() && ui.button("Browse the effect gallery…").on_hover_text("See every stock effect in action").clicked() {
-            st.ui.mixer = mixer;
-            st.ui.fx_gallery = true;
+            } else {
+                let info = &fx[k - order.len()];
+                put(st, "plugin".into(), Default::default(), Some(info.to_ref()));
+            }
             ui.close_menu();
         }
-        ui.separator();
-        let fx: Vec<_> = st.settings.plugins.iter().filter(|p| !p.instrument).cloned().collect();
-        ui.menu_button("Plugins", |ui| {
-            if fx.is_empty() {
-                ui.label(RichText::new("No effect plugins – scan in View › Plugin manager").small());
+        if replace.is_none() {
+            ui.separator();
+            if ui.button("Browse the effect gallery…").on_hover_text("See every stock effect in action").clicked() {
+                st.ui.mixer = mixer;
+                st.ui.fx_gallery = true;
+                ui.close_menu();
             }
-            for info in fx {
-                if ui.button(format!("{} · {}", info.name, info.vendor)).clicked() {
-                    put(st, "plugin".into(), Default::default(), Some(info.to_ref()));
-                    ui.close_menu();
-                }
+        }
+    });
+}
+
+/// The mixer's menu bar (top of the view): add channels, the strip size and auto-balance.
+fn toolbar(ui: &mut Ui, st: &mut State) {
+    egui::menu::bar(ui, |ui| {
+        let add = ui.menu_button(RichText::new("+ Add ▾").strong(), |ui| {
+            if ui.button(RichText::new("⏺ Recording channel").color(theme::REC)).on_hover_text("A mixer channel with an armed track that records your mic or instrument into it").clicked() {
+                st.ctx.run("dragon.add.recording", serde_json::Value::Null);
+                ui.close_menu();
+            }
+            if ui.button("Insert channel").on_hover_text("Add a mixer insert").clicked() {
+                st.ctx.run("dragon.add.mixer", serde_json::Value::Null);
+                ui.close_menu();
+            }
+            if ui.button("VCA").on_hover_text("A VCA fader that moves the gain of the channels assigned to it").clicked() {
+                st.ctx.run("dragon.add.vca", serde_json::Value::Null);
+                ui.close_menu();
             }
         });
+        crate::tutorial::anchor(ui.ctx(), "mixer.add_rec", add.response.rect);
+        ui.menu_button("View ▾", |ui| {
+            let mut compact = st.settings.compact_mixer;
+            if ui.checkbox(&mut compact, "Compact strips").on_hover_text("Narrow strips with just meter, fader, mute and solo – pan and effects stay in the panel on the right").clicked() {
+                st.ctx.run("dragon.view.compact_mixer", serde_json::Value::Null);
+                ui.close_menu();
+            }
+        });
+        ui.menu_button("Tools ▾", |ui| {
+            let busy = st.balance_job.is_some();
+            let b = ui.add_enabled(!busy, egui::Button::new("Auto-balance all channels")).on_hover_text(
+                "Measures each channel's loudness over the song and sets every fader for an even starting mix (lead vocals and the low end forward, hats and pads back). Buses, VCAs and silent channels keep their faders. One undo step.",
+            );
+            if b.clicked() {
+                st.ctx.run("dragon.mixer.autobalance", serde_json::Value::Null);
+                ui.close_menu();
+            }
+        });
+        if let Some(j) = &st.balance_job {
+            let pc = j.progress.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10.0;
+            ui.label(RichText::new(format!("Balancing … {pc:.0} %")).small().color(theme::ACCENT_2));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
     });
+    ui.add_space(2.0);
 }

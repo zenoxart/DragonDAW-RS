@@ -1,6 +1,7 @@
 //! 24-band parametric EQ (7 on by default) (bell, shelves, cuts, notch, band pass per band) with output gain, after
 //! FabFilter Pro-Q: per-band stereo placement (stereo, mid, side, left, right), per-band dynamic gain
-//! (range and threshold), band solo, auto gain and a live analyzer.
+//! (range and threshold), band solo, auto gain and a live analyzer; pass filters and shelves have
+//! slopes from 6 to 96 dB/octave.
 
 use super::{Effect, EffectDef, ParamInfo};
 use crate::dsp::spectrum::{Analyzer, BANDS};
@@ -154,8 +155,148 @@ pub const PLACEMENTS: &[&str] = &["Stereo", "Mid", "Side", "Left", "Right"];
 /// every block).
 /// Natural phase runs the filters at twice the rate (analog-like curves up to the top, small latency).
 pub const PHASE_MODES: &[&str] = &["Zero latency", "Linear phase", "Natural phase"];
+/// Slopes of the pass and shelf bands (dB/octave), as in Pro-Q / Parametric EQ 2. 12 dB/oct is a
+/// single biquad (the old behaviour); steeper slopes cascade sections, 6 dB/oct is first order.
+pub const SLOPES: &[&str] = &["6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct", "30 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct"];
+const SLOPE_DB: [u32; 9] = [6, 12, 18, 24, 30, 36, 48, 72, 96];
+
+/// Whether a band type has a slope (pass filters and shelves).
+pub fn has_slope(kind: BiquadKind) -> bool {
+    matches!(kind, BiquadKind::LowPass | BiquadKind::HighPass | BiquadKind::LowShelf | BiquadKind::HighShelf)
+}
+
+/// One band's filter: a cascade of up to 8 sections, so pass filters and shelves get Pro-Q's slopes.
+/// Bells, band pass and notch are one section.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BandFilter {
+    secs: [Biquad; 8],
+    n: usize,
+}
+
+impl BandFilter {
+    pub fn new(kind: BiquadKind, freq: f32, q: f32, gain: f32, slope: usize, rate: f32) -> Self {
+        let mut f = BandFilter::default();
+        f.set(kind, freq, q, gain, slope, rate);
+        f
+    }
+
+    /// `slope` indexes [`SLOPES`]. The state of sections that stay in use is kept (no clicks on a
+    /// frequency or gain move).
+    pub fn set(&mut self, kind: BiquadKind, freq: f32, q: f32, gain: f32, slope: usize, rate: f32) {
+        let order = if has_slope(kind) { SLOPE_DB[slope.min(SLOPE_DB.len() - 1)] / 6 } else { 2 };
+        let order = order.clamp(1, 16) as usize;
+        let odd = order % 2 == 1;
+        let pairs = order / 2;
+        let n = pairs + odd as usize;
+        let f = freq.clamp(10.0, rate * 0.49);
+        let mut k = 0;
+        match kind {
+            BiquadKind::LowPass | BiquadKind::HighPass => {
+                // Butterworth poles; the band's Q shapes the resonance of the sharpest section (Q 0.707 =
+                // plain Butterworth).
+                let res = q / std::f32::consts::FRAC_1_SQRT_2;
+                for i in 0..pairs {
+                    let theta = if odd { std::f32::consts::PI * (i + 1) as f32 / order as f32 } else { std::f32::consts::PI * (2 * i + 1) as f32 / (2 * order) as f32 };
+                    let mut sq = 1.0 / (2.0 * theta.cos());
+                    if i + 1 == pairs {
+                        sq *= res;
+                    }
+                    if order == 2 {
+                        sq = q;
+                    }
+                    self.secs[k].set(kind, f, sq, 0.0, rate);
+                    k += 1;
+                }
+                if odd {
+                    self.secs[k] = keep_state(self.secs[k], first_order_pass(kind == BiquadKind::HighPass, f, rate));
+                    k += 1;
+                }
+            }
+            BiquadKind::LowShelf | BiquadKind::HighShelf => {
+                // The gain is split over the sections by their order, so the total stays `gain`.
+                let per2 = gain * 2.0 / order as f32;
+                for _ in 0..pairs {
+                    self.secs[k].set(kind, f, q, per2, rate);
+                    k += 1;
+                }
+                if odd {
+                    self.secs[k] = keep_state(self.secs[k], first_order_shelf(kind == BiquadKind::HighShelf, f, gain / order as f32, rate));
+                    k += 1;
+                }
+            }
+            _ => {
+                self.secs[0].set(kind, f, q, gain, rate);
+                k = 1;
+            }
+        }
+        debug_assert_eq!(k, n);
+        for s in &mut self.secs[k..] {
+            *s = Biquad::default();
+        }
+        if k > self.n {
+            for s in &mut self.secs[self.n..k] {
+                s.reset();
+            }
+        }
+        self.n = k;
+    }
+
+    #[inline]
+    pub fn process(&mut self, x: f32) -> f32 {
+        let mut y = x;
+        for s in &mut self.secs[..self.n] {
+            y = s.process(y);
+        }
+        y
+    }
+
+    pub fn reset(&mut self) {
+        for s in &mut self.secs {
+            s.reset();
+        }
+    }
+
+    pub fn response_db(&self, freq: f32, rate: f32) -> f32 {
+        self.secs[..self.n].iter().map(|s| s.response_db(freq, rate)).sum()
+    }
+}
+
+/// New coefficients, the old section's state (so retuning does not click).
+fn keep_state(old: Biquad, new: Biquad) -> Biquad {
+    let mut b = old;
+    b.copy_coefficients(&new);
+    b
+}
+
+/// First-order (6 dB/oct) low or high pass by the bilinear transform.
+fn first_order_pass(high: bool, f: f32, rate: f32) -> Biquad {
+    let k = (std::f32::consts::PI * f / rate).tan();
+    let a1 = (k - 1.0) / (k + 1.0);
+    if high {
+        Biquad::from_coefficients(1.0 / (k + 1.0), -1.0 / (k + 1.0), 0.0, a1, 0.0)
+    } else {
+        Biquad::from_coefficients(k / (k + 1.0), k / (k + 1.0), 0.0, a1, 0.0)
+    }
+}
+
+/// First-order shelf with `gain` dB, its half-gain point at `f`.
+fn first_order_shelf(high: bool, f: f32, gain: f32, rate: f32) -> Biquad {
+    let a = db_to_gain(gain);
+    // The pole sits at f / sqrt(A) (low) or f * sqrt(A) (high): the geometric middle is then at f.
+    let fp = if high { f * a.sqrt() } else { f / a.sqrt() }.clamp(5.0, rate * 0.49);
+    let k = (std::f32::consts::PI * fp / rate).tan();
+    let a1 = (k - 1.0) / (k + 1.0);
+    if high {
+        // H(s) = (A s + w) / (s + w)
+        Biquad::from_coefficients((a + k) / (k + 1.0), (k - a) / (k + 1.0), 0.0, a1, 0.0)
+    } else {
+        // H(s) = (s + A w) / (s + w)
+        Biquad::from_coefficients((k * a + 1.0) / (k + 1.0), (k * a - 1.0) / (k + 1.0), 0.0, a1, 0.0)
+    }
+}
+
 /// Parameters per band.
-pub const PER_BAND: usize = 8;
+pub const PER_BAND: usize = 9;
 
 macro_rules! band {
     ($n:literal, $on:expr, $ty:expr, $f:expr) => {
@@ -168,6 +309,7 @@ macro_rules! band {
             ParamInfo::choice(concat!("b", $n, "_stereo"), concat!("Band ", $n, " stereo"), PLACEMENTS, 0.0),
             ParamInfo::lin(concat!("b", $n, "_dyn"), concat!("Band ", $n, " dynamic range"), -18.0, 18.0, 0.0, "dB"),
             ParamInfo::lin(concat!("b", $n, "_thr"), concat!("Band ", $n, " threshold"), -60.0, 0.0, -24.0, "dB"),
+            ParamInfo::choice(concat!("b", $n, "_slope"), concat!("Band ", $n, " slope"), SLOPES, 1.0),
         ]
     };
 }
@@ -278,6 +420,7 @@ pub fn match_bands(own: &[f32], reference: &[f32], max: usize, limit: f32, amoun
 #[derive(Debug, Clone, Copy)]
 struct Band {
     on: bool,
+    slope: usize,
     kind: BiquadKind,
     freq: f32,
     gain: f32,
@@ -299,7 +442,7 @@ struct Dyn {
 pub struct ParametricEq {
     rate: f32,
     bands: [Band; EQ_BANDS],
-    filters: [[Biquad; 2]; EQ_BANDS],
+    filters: [[BandFilter; 2]; EQ_BANDS],
     output: f32,
     dirty: bool,
     auto_gain: bool,
@@ -325,11 +468,11 @@ pub struct ParametricEq {
 
 impl ParametricEq {
     pub fn new(rate: f32) -> Self {
-        let b = Band { on: false, kind: BiquadKind::Peak, freq: 1000.0, gain: 0.0, q: 0.9, place: 0, dyn_range: 0.0, thr: -24.0 };
+        let b = Band { on: false, slope: 1, kind: BiquadKind::Peak, freq: 1000.0, gain: 0.0, q: 0.9, place: 0, dyn_range: 0.0, thr: -24.0 };
         ParametricEq {
             rate,
             bands: [b; EQ_BANDS],
-            filters: [[Biquad::default(); 2]; EQ_BANDS],
+            filters: [[BandFilter::default(); 2]; EQ_BANDS],
             output: 1.0,
             dirty: true,
             auto_gain: false,
@@ -355,7 +498,7 @@ impl ParametricEq {
         for (i, b) in self.bands.iter().enumerate() {
             let g = b.gain + self.dyns[i].applied;
             for f in &mut self.filters[i] {
-                f.set(b.kind, b.freq, b.q, g, self.frate);
+                f.set(b.kind, b.freq, b.q, g, b.slope, self.frate);
             }
             self.dyns[i].det.set(BiquadKind::BandPass, b.freq, b.q.max(0.5), 0.0, self.frate);
         }
@@ -374,7 +517,7 @@ impl ParametricEq {
     /// Linear phase: the kernels from every band at its current (static + dynamic) gain, by placement.
     fn design_linear(&mut self) {
         let rate = self.rate;
-        let fl: Vec<(usize, Biquad)> = self.bands.iter().zip(&self.dyns).filter(|(b, _)| b.on).map(|(b, d)| (b.place.min(4), Biquad::new(b.kind, b.freq, b.q, b.gain + d.applied, rate))).collect();
+        let fl: Vec<(usize, BandFilter)> = self.bands.iter().zip(&self.dyns).filter(|(b, _)| b.on).map(|(b, d)| (b.place.min(4), BandFilter::new(b.kind, b.freq, b.q, b.gain + d.applied, b.slope, rate))).collect();
         let mut used = [false; 5];
         for (p, _) in &fl {
             used[*p] = true;
@@ -432,7 +575,7 @@ impl ParametricEq {
             if get("on") < 0.5 {
                 continue;
             }
-            let b = Biquad::new(BiquadKind::from_index(get("type")), get("freq"), get("q"), get("gain"), rate);
+            let b = BandFilter::new(BiquadKind::from_index(get("type")), get("freq"), get("q"), get("gain"), get("slope").round().max(0.0) as usize, rate);
             sum += b.response_db(freq, rate);
         }
         sum + super::value(&d, params, "output")
@@ -466,13 +609,13 @@ impl ParametricEq {
                     if (want - d.applied).abs() > 0.05 {
                         d.applied = want;
                         for f in &mut self.filters[i] {
-                            f.set(b.kind, b.freq, b.q, b.gain + want, self.frate);
+                            f.set(b.kind, b.freq, b.q, b.gain + want, b.slope, self.frate);
                         }
                     }
                 } else if self.dyns[i].applied != 0.0 {
                     self.dyns[i].applied = 0.0;
                     for f in &mut self.filters[i] {
-                        f.set(b.kind, b.freq, b.q, b.gain, self.frate);
+                        f.set(b.kind, b.freq, b.q, b.gain, b.slope, self.frate);
                     }
                 }
                 let [fl, fr] = &mut self.filters[i];
@@ -567,6 +710,7 @@ impl Effect for ParametricEq {
             "stereo" => b.place = (v.round().max(0.0) as usize).min(PLACEMENTS.len() - 1),
             "dyn" => b.dyn_range = v,
             "thr" => b.thr = v,
+            "slope" => b.slope = (v.round().max(0.0) as usize).min(SLOPES.len() - 1),
             _ => return,
         }
         self.dirty = true;
@@ -668,6 +812,30 @@ pub fn def() -> EffectDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pass filters fall at their slope (an octave past the corner, about the slope down; two octaves
+    /// further, another slope); shelves keep their total gain whatever the slope.
+    #[test]
+    fn slopes_are_steep_and_shelves_keep_their_gain() {
+        let rate = 48000.0;
+        for (k, db) in SLOPE_DB.iter().enumerate() {
+            let f = BandFilter::new(BiquadKind::HighPass, 1000.0, std::f32::consts::FRAC_1_SQRT_2, 0.0, k, rate);
+            let at = |hz: f32| f.response_db(hz, rate);
+            assert!((at(1000.0) + 3.0).abs() < 1.0, "{db}: −3 dB at the corner, got {}", at(1000.0));
+            let fall = at(250.0) - at(125.0);
+            assert!((fall - *db as f32).abs() < 1.5 + *db as f32 * 0.08, "{db} dB/oct: fell {fall}");
+            assert!(at(8000.0).abs() < 0.5, "pass band flat");
+            let s = BandFilter::new(BiquadKind::LowShelf, 500.0, 0.7, 9.0, k, rate);
+            assert!((s.response_db(20.0, rate) - 9.0).abs() < 0.6, "{db}: shelf gain {}", s.response_db(20.0, rate));
+            assert!(s.response_db(15000.0, rate).abs() < 0.4);
+            let mid = s.response_db(500.0, rate);
+            assert!((mid - 4.5).abs() < 2.0, "{db}: half gain near the frequency, {mid}");
+        }
+        // Steeper shelves change faster around the frequency.
+        let soft = BandFilter::new(BiquadKind::HighShelf, 2000.0, 0.7, 12.0, 0, rate);
+        let hard = BandFilter::new(BiquadKind::HighShelf, 2000.0, 0.7, 12.0, 6, rate);
+        assert!(hard.response_db(4000.0, rate) > soft.response_db(4000.0, rate));
+    }
 
     #[test]
     fn curve_matches_band_gain() {

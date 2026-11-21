@@ -645,17 +645,23 @@ pub fn imager_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ Philosopher's Stone
 
+/// Philosopher's Stone defaults: (amount, low dB, high dB, ceiling dBTP, character, punch, width, clip).
+const DP_DEFAULT: (f32, f32, f32, f32, usize, f32, f32, f32) = (0.6, 1.0, 1.0, -0.3, 3, 0.45, 0.45, 0.5);
+
 const DP_PARAMS: &[ParamInfo] = &[
-    ParamInfo::lin("amount", "Amount", 0.0, 1.0, 0.4, ""),
+    // Defaults voiced like the big one-knob mastering processors (Cradle's God Particle): loud and
+    // finished out of the box – a solid, tight low end, forward mids, open air, a clipped-then-limited
+    // top end close to 0 dBTP.
+    ParamInfo::lin("amount", "Amount", 0.0, 1.0, DP_DEFAULT.0, ""),
     ParamInfo::lin("input", "Input", -12.0, 12.0, 0.0, "dB"),
-    ParamInfo::lin("low", "Low", -6.0, 6.0, 0.0, "dB"),
+    ParamInfo::lin("low", "Low", -6.0, 6.0, DP_DEFAULT.1, "dB"),
     ParamInfo::lin("mid", "Mid", -6.0, 6.0, 0.0, "dB"),
-    ParamInfo::lin("high", "High", -6.0, 6.0, 0.0, "dB"),
-    ParamInfo::lin("ceiling", "Ceiling", -3.0, 0.0, -1.0, "dBTP"),
-    ParamInfo::choice("character", "Character", &["Clean", "Warm", "Bright", "Punchy"], 1.0),
-    ParamInfo::lin("punch", "Punch", 0.0, 1.0, 0.3, ""),
-    ParamInfo::lin("width", "Width", 0.0, 1.0, 0.35, ""),
-    ParamInfo::lin("clip", "Clipper", 0.0, 1.0, 0.25, ""),
+    ParamInfo::lin("high", "High", -6.0, 6.0, DP_DEFAULT.2, "dB"),
+    ParamInfo::lin("ceiling", "Ceiling", -3.0, 0.0, DP_DEFAULT.3, "dBTP"),
+    ParamInfo::choice("character", "Character", &["Clean", "Warm", "Bright", "Punchy"], DP_DEFAULT.4 as f32),
+    ParamInfo::lin("punch", "Punch", 0.0, 1.0, DP_DEFAULT.5, ""),
+    ParamInfo::lin("width", "Width", 0.0, 1.0, DP_DEFAULT.6, ""),
+    ParamInfo::lin("clip", "Clipper", 0.0, 1.0, DP_DEFAULT.7, ""),
     ParamInfo::toggle("auto_gain", "Auto gain (A/B at equal loudness)", false),
 ];
 
@@ -705,10 +711,12 @@ impl DragonParticle {
         let (cl, cm, ch, tube) = match self.character {
             0 => (0.0, 0.0, 0.0, 2.0),
             2 => (-0.5, 0.3, 1.5, 2.0),
-            3 => (1.0, 0.5, 0.5, 0.0),
+            // Punchy: weight in the sub and kick, presence, a touch of air; a warm tube for density.
+            3 => (1.4, 0.6, 0.8, 3.0),
             _ => (0.8, -0.3, 0.3, 3.0),
         };
-        let shape = [(BiquadKind::LowShelf, 90.0, self.low + a * 1.5 + cl * a), (BiquadKind::Peak, 1200.0, self.mid - a * 0.8 + cm * a), (BiquadKind::HighShelf, 9000.0, self.high + a * 2.0 + ch * a)];
+        let low_f = if self.character == 3 { 70.0 } else { 90.0 };
+        let shape = [(BiquadKind::LowShelf, low_f, self.low + a * 1.5 + cl * a), (BiquadKind::Peak, 1200.0, self.mid - a * 0.8 + cm * a), (BiquadKind::HighShelf, 9000.0, self.high + a * 2.0 + ch * a)];
         for (i, (k, f, g)) in shape.iter().enumerate() {
             for b in &mut self.eq[i] {
                 b.set(*k, *f, 0.7, *g, self.rate);
@@ -830,22 +838,22 @@ pub fn dragon_particle_def() -> EffectDef {
         create: |rate| {
             let mut d = DragonParticle {
                 rate,
-                amount: 0.4,
+                amount: DP_DEFAULT.0,
                 input: 1.0,
-                low: 0.0,
+                low: DP_DEFAULT.1,
                 mid: 0.0,
-                high: 0.0,
-                ceiling: -1.0,
+                high: DP_DEFAULT.2,
+                ceiling: DP_DEFAULT.3,
                 eq: [[Biquad::default(); 2]; 3],
                 glue: (dynamics::compressor_def().create)(rate),
                 sat: (saturator_def().create)(rate),
                 width: (imager_def().create)(rate),
                 limiter: (dynamics::limiter_def().create)(rate),
                 punch_fx: (dynamics::transient_def().create)(rate),
-                character: 1,
-                punch: 0.3,
-                widen: 0.35,
-                clip: 0.25,
+                character: DP_DEFAULT.4,
+                punch: DP_DEFAULT.5,
+                widen: DP_DEFAULT.6,
+                clip: DP_DEFAULT.7,
                 auto_gain: false,
                 in_pow: 0.0,
                 out_pow: 0.0,
@@ -878,8 +886,8 @@ mod scope_tests {
             l
         };
         let rms = |v: &[f32]| (v[48000..].iter().map(|s| s * s).sum::<f32>() / 48000.0).sqrt();
-        let lo = run(&[("amount", 0.1)]);
-        let hi = run(&[("amount", 0.9)]);
+        let lo = run(&[("amount", 0.1), ("ceiling", -1.0)]);
+        let hi = run(&[("amount", 0.9), ("ceiling", -1.0)]);
         assert!(rms(&hi) > rms(&lo) * 1.3, "louder with more amount: {} vs {}", rms(&hi), rms(&lo));
         assert!(hi.iter().all(|v| v.abs() < 0.95), "under the ceiling");
         let ag = run(&[("amount", 0.9), ("auto_gain", 1.0)]);

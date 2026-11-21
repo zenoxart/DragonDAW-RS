@@ -29,95 +29,11 @@ fn master_chain(ui: &mut Ui, st: &mut State) {
     let all: Vec<dragon_engine::model::MixerChannel> = std::iter::once(st.session.project.mixer.master.clone()).chain(st.session.project.mixer.channels.iter().cloned()).collect();
     let master = all[0].clone();
     ui.heading("Master chain");
-    flow(ui, st, &master, &meters);
-    ui.add_space(6.0);
+    ui.add_space(4.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(380.0);
             super::mixer::insert_panel(ui, st, &master, &all, &meters);
-        });
-    });
-}
-
-/// IN → effect → effect → … → OUT, one block per insert.
-fn flow(ui: &mut Ui, st: &mut State, master: &dragon_engine::model::MixerChannel, meters: &dragon_engine::render::MeterValues) {
-    let mid = master.id;
-    let pill = |ui: &mut Ui, text: &str| {
-        egui::Frame::NONE.fill(egui::Color32::from_white_alpha(14)).stroke(Stroke::new(1.0_f32, egui::Color32::from_white_alpha(30))).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-            ui.label(RichText::new(text).strong().size(12.0));
-        });
-    };
-    let arrow = |ui: &mut Ui| {
-        let (r, _) = ui.allocate_exact_size(Vec2::new(26.0, 56.0), egui::Sense::hover());
-        let y = r.center().y;
-        let p = ui.painter();
-        p.line_segment([Pos2::new(r.left() + 3.0, y), Pos2::new(r.right() - 4.0, y)], Stroke::new(1.5_f32, theme::TEXT_DIM));
-        p.line_segment([Pos2::new(r.right() - 9.0, y - 4.0), Pos2::new(r.right() - 4.0, y)], Stroke::new(1.5_f32, theme::TEXT_DIM));
-        p.line_segment([Pos2::new(r.right() - 9.0, y + 4.0), Pos2::new(r.right() - 4.0, y)], Stroke::new(1.5_f32, theme::TEXT_DIM));
-    };
-    egui::ScrollArea::horizontal().id_salt("master.flow").max_height(64.0).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.set_height(60.0);
-            ui.spacing_mut().item_spacing.x = 0.0;
-            pill(ui, "IN");
-            for ins in &master.inserts {
-                arrow(ui);
-                let iid = ins.id;
-                let def = dragon_engine::effects::find(&ins.effect);
-                let cat = def.map(|d| d.category).unwrap_or("Plugin");
-                let col = super::mixer::category_color(cat);
-                let name = match &ins.plugin {
-                    Some(p) => p.name.clone(),
-                    None => def.map(|d| d.name.to_string()).unwrap_or_else(|| ins.effect.clone()),
-                };
-                let (r, resp) = ui.allocate_exact_size(Vec2::new(132.0, 56.0), egui::Sense::click());
-                let p = ui.painter();
-                let on = ins.enabled;
-                p.rect_filled(r, 6.0, if resp.hovered() { theme::PANEL.gamma_multiply(1.4) } else { theme::PANEL });
-                p.rect_stroke(r, 6.0, Stroke::new(1.0_f32, col.gamma_multiply(if on { 0.8 } else { 0.25 })), egui::StrokeKind::Inside);
-                p.rect_filled(egui::Rect::from_min_size(r.min, Vec2::new(r.width(), 4.0)), egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, if on { col } else { theme::GRID_BAR });
-                p.text(Pos2::new(r.left() + 8.0, r.top() + 12.0), egui::Align2::LEFT_TOP, &name, egui::FontId::proportional(12.0), if on { theme::TEXT } else { theme::TEXT_DIM });
-                let gr = meters.gain_reduction.get(&iid).copied().unwrap_or(0.0);
-                let info = if !on {
-                    "bypassed".to_string()
-                } else if gr > 0.05 {
-                    format!("−{gr:.1} dB")
-                } else {
-                    cat.to_lowercase()
-                };
-                p.text(Pos2::new(r.left() + 8.0, r.bottom() - 8.0), egui::Align2::LEFT_BOTTOM, info, egui::FontId::monospace(10.0), if gr > 0.05 && on { theme::WARN } else { theme::TEXT_DIM });
-                // Bypass switch in the corner.
-                let sw = egui::Rect::from_center_size(Pos2::new(r.right() - 14.0, r.bottom() - 14.0), Vec2::splat(16.0));
-                let sresp = ui.interact(sw, egui::Id::new(("master.flow.on", iid)), egui::Sense::click()).on_hover_text(if on { "Bypass" } else { "Switch on" });
-                p.circle_stroke(sw.center(), 6.0, Stroke::new(1.5_f32, if on { theme::OK } else { theme::TEXT_DIM }));
-                p.line_segment([sw.center() - Vec2::new(0.0, 7.0), sw.center() - Vec2::new(0.0, 2.0)], Stroke::new(1.5_f32, if on { theme::OK } else { theme::TEXT_DIM }));
-                if sresp.clicked() {
-                    st.session.edit("Bypass effect", |p| {
-                        if let Some(i) = p.mixer.master.inserts.iter_mut().find(|i| i.id == iid) {
-                            i.enabled = !i.enabled;
-                        }
-                    });
-                } else if resp.clicked() && !st.ui.effect_windows.contains(&(mid, iid)) {
-                    st.ui.effect_windows.push((mid, iid));
-                }
-                resp.on_hover_text("Click to open; the switch bypasses it").context_menu(|ui| {
-                    if ui.button("Open").clicked() {
-                        if !st.ui.effect_windows.contains(&(mid, iid)) {
-                            st.ui.effect_windows.push((mid, iid));
-                        }
-                        ui.close_menu();
-                    }
-                    if ui.button("Remove").clicked() {
-                        st.session.edit("Remove effect", |p| p.mixer.master.inserts.retain(|i| i.id != iid));
-                        ui.close_menu();
-                    }
-                });
-            }
-            arrow(ui);
-            let tp = meters.true_peak;
-            pill(ui, &if meters.momentary > -69.0 { format!("OUT  {tp:+.1} dBTP") } else { "OUT".into() });
-            ui.add_space(10.0);
-            super::mixer::add_effect_menu(ui, st, mid, "+ Add effect", None);
         });
     });
 }
@@ -174,8 +90,8 @@ fn meters(ui: &mut Ui, st: &mut State) {
             }
             ui.label(RichText::new("Export can normalise to the target (File › Export › Normalise: loudness).").small().color(theme::TEXT_DIM));
             ui.separator();
-            if ui.button("Add mastering chain to master").on_hover_text("EQ ➡ multiband compressor ➡ stereo imager ➡ limiter (−1 dBTP)").clicked() {
-                st.session.edit("Mastering chain", crate::modes::add_mastering_chain);
+            if ui.button("Add mastering chain to master").on_hover_text("Compressor (gentle glue) ➡ Obsidian soft clipper ➡ Philosopher's Stone – all stock").clicked() {
+                st.session.edit("Mastering chain", crate::modes::add_stone_chain);
                 st.ui.mixer = st.session.project.mixer.master.id;
             }
         });
@@ -196,6 +112,12 @@ fn meters(ui: &mut Ui, st: &mut State) {
         });
     });
 }
+
+/// A surface point: (frequency 0 … 1, age 0 … 1, level 0 … 1).
+type Vertex3 = (f32, f32, f32);
+
+/// The 3D spectrum's starting view (yaw, pitch in radians): from the front left, looking down a little.
+const DEFAULT_VIEW: (f32, f32) = (-0.45, 0.55);
 
 /// Seconds of history the 3D spectrum shows.
 const HISTORY: f64 = 5.0;
@@ -264,13 +186,41 @@ fn spectrum_3d(ui: &mut Ui, scope: &[f32], rate: f32, animate: bool) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
     let w = ui.available_width().clamp(320.0, 760.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 260.0), egui::Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, 260.0), egui::Sense::click_and_drag());
+    // The view turns with a left-drag (yaw across, tilt up/down); a double-click resets it.
+    let view_id = egui::Id::new("master.spectrum3d.view");
+    let (mut yaw, mut pitch): (f32, f32) = ui.data(|d| d.get_temp(view_id)).unwrap_or(DEFAULT_VIEW);
+    if resp.dragged_by(egui::PointerButton::Primary) {
+        let d = resp.drag_delta();
+        yaw = (yaw + d.x * 0.008).clamp(-1.5, 1.5);
+        pitch = (pitch + d.y * 0.008).clamp(0.0, 1.45);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    if resp.double_clicked() {
+        (yaw, pitch) = DEFAULT_VIEW;
+    }
+    ui.data_mut(|d| d.insert_temp(view_id, (yaw, pitch)));
+    let resp = resp.on_hover_text("Drag to rotate · double-click to reset the view");
+    let _ = resp;
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 4.0, egui::Color32::from_rgb(0x0b, 0x0c, 0x12));
-    // Projection: f (0 … 1 across), age (0 = now … 1 = five seconds ago, into the depth), level (0 … 1 up).
-    let origin = Pos2::new(rect.left() + 34.0, rect.bottom() - 26.0);
-    let (fw, dx, dy, lh) = (rect.width() * 0.66, rect.width() * 0.24, rect.height() * 0.36, rect.height() * 0.5);
-    let proj = |f: f32, age: f32, lvl: f32| Pos2::new(origin.x + f * fw + age * dx, origin.y - age * dy - lvl * lh);
+    // A real 3D projection: f (0 … 1 across), age (0 = now at the front … 1 = five seconds ago, into the
+    // depth), level (0 … 1 up); turned by yaw / pitch and drawn orthographically.
+    let (cy, sy, cp, sp) = (yaw.cos(), yaw.sin(), pitch.cos(), pitch.sin());
+    let scale = (rect.width() / 2.0).min(rect.height() / 1.25);
+    let centre = Pos2::new(rect.center().x, rect.center().y + rect.height() * 0.08);
+    let rot = move |f: f32, age: f32, lvl: f32| {
+        let (x, y, z) = ((f - 0.5) * 1.6, lvl * 0.7 - 0.2, (age - 0.5) * 1.1);
+        let (x1, z1) = (x * cy + z * sy, -x * sy + z * cy);
+        (x1, y * cp + z1 * sp, z1 * cp - y * sp)
+    };
+    let proj = move |f: f32, age: f32, lvl: f32| {
+        let (x, up, _) = rot(f, age, lvl);
+        Pos2::new(centre.x + x * scale, centre.y - up * scale)
+    };
+    let depth = move |f: f32, age: f32, lvl: f32| rot(f, age, lvl).2;
     let grid = Stroke::new(1.0_f32, egui::Color32::from_white_alpha(22));
     let small = egui::FontId::monospace(9.0);
     // Floor grid and the back wall.
@@ -301,22 +251,29 @@ fn spectrum_3d(ui: &mut Ui, scope: &[f32], rate: f32, animate: bool) {
     let h = hist.lock().unwrap_or_else(|e| e.into_inner());
     let frames: Vec<(f32, &Vec<f32>)> = h.iter().map(|(t, v)| (((now - t) / HISTORY) as f32, v)).collect();
     let lvl = |db: f32| ((db - FLOOR) / -FLOOR).clamp(0.0, 1.0);
-    let mut mesh = egui::epaint::Mesh::default();
+    // Painter's algorithm: the quads furthest from the viewer first, whatever the rotation.
+    let mut quads: Vec<(f32, [Vertex3; 4])> = Vec::with_capacity(frames.len() * BINS);
     for pair in frames.windows(2) {
         let ((a0, v0), (a1, v1)) = (pair[0], pair[1]);
         for k in 0..BINS - 1 {
             let f0 = k as f32 / (BINS - 1) as f32;
             let f1 = (k + 1) as f32 / (BINS - 1) as f32;
-            let base = mesh.vertices.len() as u32;
-            for (f, age, db) in [(f0, a0, v0[k]), (f1, a0, v0[k + 1]), (f1, a1, v1[k + 1]), (f0, a1, v1[k])] {
-                let l = lvl(db);
-                // Older rows fade towards the background.
-                let c = heat(l).gamma_multiply(1.0 - 0.55 * age.clamp(0.0, 1.0));
-                mesh.colored_vertex(proj(f, age, l), c);
-            }
-            mesh.add_triangle(base, base + 1, base + 2);
-            mesh.add_triangle(base, base + 2, base + 3);
+            let q = [(f0, a0, lvl(v0[k])), (f1, a0, lvl(v0[k + 1])), (f1, a1, lvl(v1[k + 1])), (f0, a1, lvl(v1[k]))];
+            let d = q.iter().map(|(f, a, l)| depth(*f, *a, *l)).sum::<f32>();
+            quads.push((d, q));
         }
+    }
+    quads.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut mesh = egui::epaint::Mesh::default();
+    for (_, q) in &quads {
+        let base = mesh.vertices.len() as u32;
+        for (f, age, l) in q {
+            // Older rows fade towards the background.
+            let c = heat(*l).gamma_multiply(1.0 - 0.55 * age.clamp(0.0, 1.0));
+            mesh.colored_vertex(proj(*f, *age, *l), c);
+        }
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
     }
     p.add(egui::Shape::mesh(mesh));
     // The current spectrum as a bright line along the front.

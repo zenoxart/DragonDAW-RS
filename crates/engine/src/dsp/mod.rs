@@ -141,6 +141,11 @@ impl Biquad {
         b
     }
 
+    /// Takes `other`'s coefficients, keeping this filter's state.
+    pub fn copy_coefficients(&mut self, other: &Biquad) {
+        (self.b0, self.b1, self.b2, self.a1, self.a2) = (other.b0, other.b1, other.b2, other.a1, other.a2);
+    }
+
     /// From normalized coefficients (a0 = 1).
     pub fn from_coefficients(b0: f32, b1: f32, b2: f32, a1: f32, a2: f32) -> Self {
         Biquad { b0, b1, b2, a1, a2, z1: 0.0, z2: 0.0 }

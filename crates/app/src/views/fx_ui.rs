@@ -194,6 +194,10 @@ fn square(r: Rect) -> Rect {
 
 fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f32)> {
     let mut out = Vec::new();
+    if h.def.id == "eq" {
+        // The band panel stays while the mouse is on it (off the graph).
+        eq_band_panel(ui, r, h, 18.0, &mut out);
+    }
     let Some(pos) = resp.interact_pointer_pos().or_else(|| resp.hover_pos()) else { return out };
     let grab = resp.id.with("grab");
     match h.def.id {
@@ -230,9 +234,27 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
             let held: usize = ui.data(|d| d.get_temp(grab)).unwrap_or(0);
             if resp.dragged() && held > 0 {
-                out.push((format!("b{held}_freq"), freq_at(r, pos.x).clamp(20.0, 20_000.0)));
-                let db = ((r.center().y - pos.y) / (r.height() * 0.5) * range).clamp(-range, range);
-                out.push((format!("b{held}_gain"), (db * 10.0).round() / 10.0));
+                let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
+                let ty = h.v(&format!("b{held}_type")).round() as usize;
+                let d = resp.drag_delta();
+                // Shift: fine moves (a tenth of the mouse); Ctrl: gain / Q only (frequency locked) – Pro-Q's
+                // modifiers. Pass filters, band pass and notch have no gain: up/down is their Q.
+                let fine = if shift { 0.1 } else { 1.0 };
+                if !ctrl {
+                    let f0 = h.v(&format!("b{held}_freq"));
+                    let f = if shift { f0 * 2f32.powf(d.x * fine / (r.width() / 10.0)) } else { freq_at(r, pos.x) };
+                    out.push((format!("b{held}_freq"), f.clamp(20.0, 20_000.0)));
+                }
+                if matches!(ty, 3..=6) {
+                    let q0 = h.v(&format!("b{held}_q"));
+                    out.push((format!("b{held}_q"), (q0 * 2f32.powf(-d.y * fine / 60.0)).clamp(0.1, 18.0)));
+                } else if shift || ctrl {
+                    let g0 = h.v(&format!("b{held}_gain"));
+                    out.push((format!("b{held}_gain"), (g0 - d.y * fine / (r.height() * 0.5) * range).clamp(-range, range)));
+                } else {
+                    let db = ((r.center().y - pos.y) / (r.height() * 0.5) * range).clamp(-range, range);
+                    out.push((format!("b{held}_gain"), (db * 10.0).round() / 10.0));
+                }
             }
             if let Some(b) = nearest {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -248,7 +270,10 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                     let ty = EQ_TYPES.get(h.v(&format!("b{b}_type")).round() as usize).copied().unwrap_or("Bell");
                     egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), resp.id.with("eq.tip"), |ui| {
                         ui.label(format!("Band {b} · {ty}\n{} · {:+.1} dB · Q {:.2}", hz_text(h.v(&format!("b{b}_freq"))), h.v(&format!("b{b}_gain")), h.v(&format!("b{b}_q"))));
-                        ui.label(egui::RichText::new("drag · wheel = Q · right-click = shape · Alt+click = remove").size(10.0).color(theme::TEXT_DIM));
+                        if dragon_engine::effects::eq::has_slope(BiquadKind::from_index(h.v(&format!("b{b}_type")))) {
+                            ui.label(format!("Slope {}", dragon_engine::effects::eq::SLOPES.get(h.v(&format!("b{b}_slope")).round() as usize).copied().unwrap_or("")));
+                        }
+                        ui.label(egui::RichText::new("drag · Shift = fine · Ctrl = gain only · wheel = Q · right-click = shape / slope · Alt+click = remove").size(10.0).color(theme::TEXT_DIM));
                     });
                 }
             } else if resp.hovered() {
@@ -283,9 +308,8 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
             // Right-click on a band: shape, Q presets, gain reset and removal.
             if resp.clicked() {
-                if let Some(b) = nearest {
-                    ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), b));
-                }
+                // A click on a band selects it (its panel opens); on empty space it closes the panel.
+                ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), nearest.unwrap_or(0)));
             }
             let menu_id = resp.id.with("eq.menu");
             if resp.secondary_clicked() {
@@ -302,6 +326,17 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                             out.push((format!("b{b}_type"), k as f32));
                             ui.close_menu();
                         }
+                    }
+                    if dragon_engine::effects::eq::has_slope(BiquadKind::from_index(cur as f32)) {
+                        ui.menu_button("Slope", |ui| {
+                            let cs = h.v(&format!("b{b}_slope")).round() as usize;
+                            for (k, name) in dragon_engine::effects::eq::SLOPES.iter().enumerate() {
+                                if ui.selectable_label(k == cs, *name).clicked() {
+                                    out.push((format!("b{b}_slope"), k as f32));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                     }
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -669,6 +704,83 @@ fn region_drag(ui: &Ui, resp: &egui::Response, h: &Hero, pos: Pos2, hits: &[(Rec
 
 // ---------------------------------------------------------------------------------------------- EQ
 
+/// Pro-Q's band panel: a small floating bar under the selected band with its shape, slope, frequency,
+/// gain and Q as draggable values, plus solo and remove. Hidden while a band is dragged.
+fn eq_band_panel(ui: &Ui, r: Rect, h: &Hero, range: f32, out: &mut Vec<(String, f32)>) {
+    use dragon_engine::effects::eq::{has_slope, SLOPES};
+    let pr = plot(r);
+    let b: usize = ui.data(|d| d.get_temp(h.key.with("eq.sel"))).unwrap_or(0);
+    if b == 0 || h.v(&format!("b{b}_on")) < 0.5 || ui.input(|i| i.pointer.primary_down()) && ui.ctx().dragged_id().is_some() {
+        return;
+    }
+    let k = |n: &str| format!("b{b}_{n}");
+    let y_of = |db: f32| pr.center().y - db.clamp(-range, range) / range * pr.height() * 0.5;
+    let node = Pos2::new(fx(pr, h.v(&k("freq"))), y_of(h.v(&k("gain"))));
+    let size = Vec2::new(372.0, 30.0);
+    let below = node.y + 18.0 + size.y < r.bottom();
+    let at = Pos2::new((node.x - size.x / 2.0).clamp(r.left() + 4.0, r.right() - size.x - 4.0), if below { node.y + 18.0 } else { node.y - 18.0 - size.y });
+    let col = BAND_COLORS[(b - 1) % 7];
+    egui::Area::new(h.key.with(("eq.panel", b))).order(egui::Order::Foreground).fixed_pos(at).show(ui.ctx(), |ui| {
+        egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(18, 18, 24, 235)).stroke(Stroke::new(1.0_f32, col.gamma_multiply(0.8))).corner_radius(8.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(egui::RichText::new(format!("{b}")).strong().color(col));
+                let ty = h.v(&k("type")).round() as usize;
+                egui::ComboBox::from_id_salt(h.key.with(("eq.panel.type", b))).width(84.0).selected_text(EQ_TYPES.get(ty).copied().unwrap_or("Bell")).show_ui(ui, |ui| {
+                    for (n, name) in EQ_TYPES.iter().enumerate() {
+                        if ui.selectable_label(n == ty, *name).clicked() {
+                            out.push((k("type"), n as f32));
+                        }
+                    }
+                });
+                if has_slope(BiquadKind::from_index(ty as f32)) {
+                    let sl = h.v(&k("slope")).round() as usize;
+                    egui::ComboBox::from_id_salt(h.key.with(("eq.panel.slope", b))).width(66.0).selected_text(SLOPES.get(sl).copied().unwrap_or("12 dB/oct").replace(" dB/oct", " dB")).show_ui(ui, |ui| {
+                        for (n, name) in SLOPES.iter().enumerate() {
+                            if ui.selectable_label(n == sl, *name).clicked() {
+                                out.push((k("slope"), n as f32));
+                            }
+                        }
+                    });
+                }
+                let mut f = h.v(&k("freq"));
+                let fspeed = f * 0.005;
+                if ui.add(egui::DragValue::new(&mut f).range(20.0..=20_000.0).speed(fspeed).custom_formatter(|v, _| hz_text(v as f32)).custom_parser(parse_hz)).changed() {
+                    out.push((k("freq"), f));
+                }
+                if !matches!(ty, 3..=6) {
+                    let mut g = h.v(&k("gain"));
+                    if ui.add(egui::DragValue::new(&mut g).range(-range..=range).speed(0.1).suffix(" dB").fixed_decimals(1)).changed() {
+                        out.push((k("gain"), g));
+                    }
+                }
+                let mut q = h.v(&k("q"));
+                let qspeed = q * 0.01;
+                if ui.add(egui::DragValue::new(&mut q).range(0.1..=18.0).speed(qspeed).prefix("Q ").fixed_decimals(2)).changed() {
+                    out.push((k("q"), q));
+                }
+                let soloed = h.v("solo").round() as usize == b;
+                if ui.selectable_label(soloed, "🎧").on_hover_text("Solo: listen to this band").clicked() {
+                    out.push(("solo".into(), if soloed { 0.0 } else { b as f32 }));
+                }
+                if ui.small_button("✕").on_hover_text("Remove the band").clicked() {
+                    out.push((k("on"), 0.0));
+                }
+            });
+        });
+    });
+}
+
+/// "1.2k", "800 Hz", "2 kHz" → Hz.
+fn parse_hz(t: &str) -> Option<f64> {
+    let t = t.trim().to_lowercase().replace("hz", "");
+    let t = t.trim();
+    match t.strip_suffix('k') {
+        Some(n) => n.trim().parse::<f64>().ok().map(|v| v * 1000.0),
+        None => t.parse::<f64>().ok(),
+    }
+}
+
 const EQ_TYPES: [&str; 7] = ["Bell", "Low shelf", "High shelf", "Low pass", "High pass", "Band pass", "Notch"];
 
 fn hz_text(f: f32) -> String {
@@ -727,15 +839,17 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let pr = plot(r);
     let y_of = |db: f32| pr.center().y - db.clamp(-range, range) / range * pr.height() * 0.5;
     y_axis(p, pr, &[(12.0, "+12"), (6.0, "+6"), (0.0, "0"), (-6.0, "-6"), (-12.0, "-12")], y_of);
-    let bands: Vec<(usize, Biquad, f32, f32)> = (1..=dragon_engine::effects::eq::EQ_BANDS)
+    let bands: Vec<(usize, dragon_engine::effects::eq::BandFilter, f32, f32)> = (1..=dragon_engine::effects::eq::EQ_BANDS)
         .filter(|b| h.v(&format!("b{b}_on")) > 0.5)
         .map(|b| {
             let f = h.v(&format!("b{b}_freq"));
             let g = h.v(&format!("b{b}_gain"));
             let q = h.v(&format!("b{b}_q"));
-            (b - 1, Biquad::new(BiquadKind::from_index(h.v(&format!("b{b}_type"))), f, q, g, RATE), f, g)
+            let slope = h.v(&format!("b{b}_slope")).round().max(0.0) as usize;
+            (b - 1, dragon_engine::effects::eq::BandFilter::new(BiquadKind::from_index(h.v(&format!("b{b}_type"))), f, q, g, slope, RATE), f, g)
         })
         .collect();
+    let selected: usize = p.ctx().data(|d| d.get_temp(h.key.with("eq.sel"))).unwrap_or(0);
     let auto = h.v("auto_gain") > 0.5;
     let out = h.v("output") + if auto { dragon_engine::effects::eq::ParametricEq::auto_gain_for(h.params, RATE) } else { 0.0 };
     let solo = h.v("solo").round() as usize;
@@ -784,10 +898,18 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             }
         }
     }
-    // Each band's own shape, faint, then the sum.
+    // Each band's own shape, faint; the selected band filled in its colour (Pro-Q), then the sum.
     for (k, bq, _, _) in &bands {
         let pts: Vec<Pos2> = (0..=120).map(|i| pr.left() + pr.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
-        p.add(Shape::line(pts, Stroke::new(1.0_f32, BAND_COLORS[*k % 7].gamma_multiply(0.4))));
+        let sel = selected == k + 1;
+        if sel {
+            let zero = y_of(0.0);
+            for w in pts.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                p.add(Shape::convex_polygon(vec![Pos2::new(a.x, zero), a, b, Pos2::new(b.x, zero)], BAND_COLORS[*k % 7].gamma_multiply(0.16), Stroke::NONE));
+            }
+        }
+        p.add(Shape::line(pts, Stroke::new(if sel { 2.0_f32 } else { 1.0 }, BAND_COLORS[*k % 7].gamma_multiply(if sel { 0.95 } else { 0.4 }))));
     }
     let pts: Vec<Pos2> = (0..=180)
         .map(|i| pr.left() + pr.width() * i as f32 / 180.0)
@@ -801,8 +923,9 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         let c = Pos2::new(fx(pr, *f), y_of(bq.response_db(*f, RATE)));
         let pulse = 1.0 + 0.15 * (h.t() * 2.0 + *k as f32).sin();
         p.circle_filled(c, 10.0 * pulse, BAND_COLORS[*k % 7].gamma_multiply(0.22));
-        p.circle_filled(c, 6.5, BAND_COLORS[*k % 7]);
-        p.circle_stroke(c, 6.5, Stroke::new(1.5_f32, Color32::from_white_alpha(200)));
+        let rad = if selected == k + 1 { 8.0 } else { 6.5 };
+        p.circle_filled(c, rad, BAND_COLORS[*k % 7]);
+        p.circle_stroke(c, rad, Stroke::new(if selected == k + 1 { 2.5_f32 } else { 1.5 }, Color32::from_white_alpha(if selected == k + 1 { 255 } else { 200 })));
         p.text(c, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(8.5), Color32::BLACK);
         if solo == k + 1 {
             p.circle_stroke(c, 11.0, Stroke::new(2.0_f32, Color32::WHITE));

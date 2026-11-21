@@ -1015,9 +1015,21 @@ pub struct MeterValues {
 #[derive(Clone, Default)]
 pub struct Meters {
     inner: Arc<Mutex<MeterValues>>,
+    /// Set by the audio thread when input monitoring runs away into feedback (the monitored input is hot
+    /// and the output sits at full scale); monitoring stays muted until the UI clears it.
+    feedback_mute: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Meters {
+    /// Whether input monitoring was muted because of feedback.
+    pub fn feedback_muted(&self) -> bool {
+        self.feedback_mute.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Turns input monitoring back on after a feedback mute.
+    pub fn clear_feedback_mute(&self) {
+        self.feedback_mute.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> MeterValues {
         self.inner.lock().map(|m| m.clone()).unwrap_or_default()
     }
@@ -1168,6 +1180,10 @@ impl StripSlot {
 }
 
 pub struct Renderer {
+    /// Peak of the monitored inputs in the current render call, and how long the feedback guard has seen
+    /// a hot input with a full-scale output (seconds).
+    monitor_peak: f32,
+    feedback_hot: f32,
     /// Modulation state per (insert, route).
     mod_runs: HashMap<(Id, usize), ModRun>,
     /// Automated XY pad values per (insert, axis).
@@ -1247,6 +1263,8 @@ impl Renderer {
     pub fn new(song: Arc<Song>) -> Self {
         let rate = song.rate;
         Renderer {
+            monitor_peak: 0.0,
+            feedback_hot: 0.0,
             mod_runs: HashMap::new(),
             xy: HashMap::new(),
             rate,
@@ -1389,6 +1407,19 @@ impl Renderer {
             done += n;
         }
         let budget = total as f32 / self.rate;
+        // Feedback guard: a hot monitored input while the output is pinned at full scale for a moment is
+        // a loop (mic into speakers, or a loopback input of the driver) – mute monitoring before it howls.
+        let out_peak = out_l.iter().chain(out_r.iter()).fold(0.0f32, |m, v| m.max(v.abs()));
+        if self.monitor_peak > 0.25 && out_peak > 0.97 {
+            self.feedback_hot += budget;
+        } else {
+            self.feedback_hot = (self.feedback_hot - budget * 0.5).max(0.0);
+        }
+        self.monitor_peak = 0.0;
+        if self.feedback_hot > 0.3 {
+            self.feedback_hot = 0.0;
+            self.meters.feedback_mute.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let load = started.elapsed().as_secs_f32() / budget.max(1e-6);
         if let Ok(mut m) = self.meters.inner.try_lock() {
             m.cpu_load = m.cpu_load * 0.9 + load * 0.1;
@@ -1514,16 +1545,24 @@ impl Renderer {
                 }
             }
         }
-        for tr in &song.tracks {
-            if tr.monitor {
-                if let Some(src) = tr.input {
-                    add_input(&mut self.bufs[tr.strip], src, input, n);
+        // Each input reaches a strip once (a monitored track and the strip's own input on the same source
+        // used to double it), and nothing while a feedback mute is on.
+        if !self.meters.feedback_muted() {
+            for tr in &song.tracks {
+                if tr.monitor {
+                    if let Some(src) = tr.input {
+                        if song.strips[tr.strip].input != Some(src) && !song.tracks.iter().take_while(|o| !std::ptr::eq(*o, tr)).any(|o| o.monitor && o.strip == tr.strip && o.input == Some(src)) {
+                            self.monitor_peak = self.monitor_peak.max(input_peak(src, input, n));
+                            add_input(&mut self.bufs[tr.strip], src, input, n);
+                        }
+                    }
                 }
             }
-        }
-        for (i, s) in song.strips.iter().enumerate() {
-            if let Some(src) = s.input {
-                add_input(&mut self.bufs[i], src, input, n);
+            for (i, s) in song.strips.iter().enumerate() {
+                if let Some(src) = s.input {
+                    self.monitor_peak = self.monitor_peak.max(input_peak(src, input, n));
+                    add_input(&mut self.bufs[i], src, input, n);
+                }
             }
         }
 
@@ -2198,6 +2237,11 @@ impl Renderer {
             }
         }
     }
+}
+
+/// The peak of input `src` over `n` frames.
+fn input_peak(src: InputSource, input: &[&[f32]], n: usize) -> f32 {
+    [Some(src.left), src.right].into_iter().flatten().filter_map(|c| input.get(c as usize)).flat_map(|c| c.iter().take(n)).fold(0.0f32, |m, v| m.max(v.abs()))
 }
 
 fn add_input(buf: &mut (Vec<f32>, Vec<f32>), src: InputSource, input: &[&[f32]], n: usize) {

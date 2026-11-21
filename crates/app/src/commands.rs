@@ -85,6 +85,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("rack.delete", "Delete selected channels", "", 0, "Alt+Delete"),
     ("rack.up", "Select channel above", "", 0, "Up"),
     ("rack.down", "Select channel below", "", 0, "Down"),
+    ("nav.left", "Playlist: move the selected clips left (or scroll left)", "", 0, "Left"),
+    ("nav.right", "Playlist: move the selected clips right (or scroll right)", "", 0, "Right"),
     ("ctx.ctrl_enter", "Focus playlist (rack) / select time around the selection (playlist)", "", 0, "Ctrl+Enter"),
     ("pl.time_prev", "Select time before the selection", "", 0, "Ctrl+Left"),
     ("pl.time_next", "Select time after the selection", "", 0, "Ctrl+Right"),
@@ -418,7 +420,30 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 st.ui.rack_sel = vec![c];
             }
         }
-        "rack.up" | "rack.down" => {}
+        // Arrow keys in the playlist: with clips selected they move them (by the snap / a track), else
+        // they scroll the view (a bar left/right, a track up/down).
+        "rack.up" | "rack.down" | "nav.left" | "nav.right" if st.ui.editor == Ed::Playlist => {
+            if st.ui.clips.is_empty() {
+                let bar = st.session.project.beats_per_bar(st.ui.pl_x);
+                let row = 56.0 * st.ui.pl_vzoom;
+                st.ui.pl_anim = None;
+                match id {
+                    "nav.left" => st.ui.pl_x = (st.ui.pl_x - bar).max(0.0),
+                    "nav.right" => st.ui.pl_x += bar,
+                    "rack.up" => st.ui.pl_y = (st.ui.pl_y - row).max(0.0),
+                    _ => st.ui.pl_y += row,
+                }
+            } else {
+                let m = match id {
+                    "nav.left" => "edit.move_left",
+                    "nav.right" => "edit.move_right",
+                    "rack.up" => "edit.move_up",
+                    _ => "edit.move_down",
+                };
+                move_selection(st, m);
+            }
+        }
+        "rack.up" | "rack.down" | "nav.left" | "nav.right" => {}
         "ctx.ctrl_enter" if st.ui.editor == Ed::Rack => st.ctx.open("dragon.playlist", None),
         "ctx.ctrl_enter" => {
             let span = st

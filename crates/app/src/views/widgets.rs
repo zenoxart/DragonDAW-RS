@@ -463,6 +463,71 @@ pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &egui::Response) -> Opt
     }
 }
 
+/// One row of [`plugin_picker`]: the name, a dim detail (category or vendor · format) and the group
+/// heading it is listed under ("Stock", "Plugins").
+pub struct PickItem {
+    pub name: String,
+    pub detail: String,
+    pub group: &'static str,
+    pub tip: String,
+}
+
+/// A searchable, scrollable list of plugin names (stock first, then third-party), for the add-synth
+/// and add-effect menus. The search box has the focus when the menu opens; Enter picks the first match.
+/// Returns the index of the item picked.
+pub fn plugin_picker(ui: &mut Ui, id: &str, items: &[PickItem]) -> Option<usize> {
+    let qid = egui::Id::new(("plugin_picker.q", id));
+    let mut q: String = ui.data(|d| d.get_temp(qid)).unwrap_or_default();
+    ui.set_min_width(300.0);
+    let edit = ui.add(egui::TextEdit::singleline(&mut q).hint_text("🔍 Search plugins …").desired_width(290.0));
+    if !edit.has_focus() && !ui.ctx().memory(|m| m.focused().is_some()) {
+        edit.request_focus();
+    }
+    ui.data_mut(|d| d.insert_temp(qid, q.clone()));
+    let words: Vec<String> = q.to_lowercase().split_whitespace().map(str::to_string).collect();
+    let hits: Vec<usize> = (0..items.len())
+        .filter(|&k| {
+            let hay = format!("{} {} {}", items[k].name, items[k].detail, items[k].group).to_lowercase();
+            words.iter().all(|w| hay.contains(w.as_str()))
+        })
+        .collect();
+    let mut picked = None;
+    if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        picked = hits.first().copied();
+    }
+    ui.add_space(4.0);
+    egui::ScrollArea::vertical().id_salt(("plugin_picker.list", id)).max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+        if hits.is_empty() {
+            ui.label(RichText::new("Nothing matches – plugins are found in View › Plugin manager").small().color(theme::TEXT_DIM));
+        }
+        let mut last_group = "";
+        for &k in &hits {
+            let it = &items[k];
+            if it.group != last_group {
+                last_group = it.group;
+                ui.add_space(2.0);
+                ui.label(RichText::new(it.group).small().strong().color(theme::ACCENT_2));
+            }
+            let w = ui.available_width();
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 22.0), egui::Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(r, 4.0, Color32::from_white_alpha(20));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            ui.painter().text(r.left_center() + Vec2::new(8.0, 0.0), egui::Align2::LEFT_CENTER, &it.name, egui::FontId::proportional(13.0), theme::TEXT);
+            ui.painter().text(r.right_center() - Vec2::new(8.0, 0.0), egui::Align2::RIGHT_CENTER, &it.detail, egui::FontId::proportional(10.5), theme::TEXT_DIM);
+            let resp = if it.tip.is_empty() { resp } else { resp.on_hover_text(&it.tip) };
+            if resp.clicked() {
+                picked = Some(k);
+            }
+        }
+    });
+    if picked.is_some() {
+        ui.data_mut(|d| d.remove::<String>(qid));
+    }
+    picked
+}
+
 #[cfg(test)]
 mod tests {
     /// Right-click on the tempo display lists examples from 70 to 160 BPM, every 5 BPM, each with styles.

@@ -16,11 +16,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.spacing_mut().item_spacing.x = 6.0;
         // Song / pattern mode.
         let pat_mode = st.ui.pattern_mode;
-        if widgets::toggle(ui, pat_mode, "PAT", theme::ACCENT_2).on_hover_text("Pattern mode (L)").clicked() && !pat_mode {
-            st.ctx.run("dragon.transport.mode", serde_json::Value::Null);
-        }
-        if widgets::toggle(ui, !pat_mode, "SONG", theme::PLAYHEAD).on_hover_text("Song mode (L)").clicked() && pat_mode {
-            st.ctx.run("dragon.transport.mode", serde_json::Value::Null);
+        if let Some(want_pat) = mode_switch(ui, pat_mode) {
+            if want_pat != pat_mode {
+                st.ctx.run("dragon.transport.mode", serde_json::Value::Null);
+            }
         }
         ui.separator();
         let big = |s: &str| RichText::new(s).size(18.0);
@@ -131,6 +130,23 @@ pub fn status_bar(ui: &mut Ui, st: &mut State) {
             ui.label(RichText::new(if m.names.is_empty() { "No MIDI input".to_string() } else { format!("MIDI: {}", m.names.join(", ")) }).small().color(theme::TEXT_DIM));
             ui.separator();
         }
+        // Feedback guard: the engine muted input monitoring because the input looped into the output.
+        let muted = st.audio.meters().feedback_muted();
+        let seen_id = egui::Id::new("feedback.toast");
+        let seen: bool = ui.data(|d| d.get_temp(seen_id)).unwrap_or(false);
+        if muted {
+            if !seen {
+                st.toast("Feedback detected – input monitoring was muted. Use headphones (or lower the speakers), then turn monitoring back on in the status bar.", redhive_contracts::ui::Severity::Warning);
+            }
+            ui.label(RichText::new("🔇 Feedback – input monitoring muted").small().strong().color(theme::REC));
+            if ui.small_button("Monitor again").on_hover_text("Turn input monitoring back on (use headphones to avoid the loop)").clicked() {
+                st.audio.meters().clear_feedback_mute();
+            }
+            ui.separator();
+        }
+        if muted != seen {
+            ui.data_mut(|d| d.insert_temp(seen_id, muted));
+        }
         if !st.session.warnings.is_empty() {
             ui.label(RichText::new(format!("⚠ {}", st.session.warnings[0])).small().color(theme::WARN)).on_hover_text(st.session.warnings.join("\n"));
             ui.separator();
@@ -152,4 +168,66 @@ pub fn status_bar(ui: &mut Ui, st: &mut State) {
             }
         });
     });
+}
+
+/// The pattern / song switch: one segmented control with an icon on each half (a step grid for the
+/// pattern, clips on a timeline for the song), the active half lit. Returns the half clicked
+/// (`true` = pattern).
+fn mode_switch(ui: &mut Ui, pat_mode: bool) -> Option<bool> {
+    use egui::{Pos2, Rect, Sense, Stroke};
+    let seg = Vec2::new(78.0, 30.0);
+    let (r, _) = ui.allocate_exact_size(Vec2::new(seg.x * 2.0 + 2.0, seg.y), Sense::hover());
+    let p = ui.painter().clone();
+    p.rect_filled(r, 8.0, theme::PANEL_2);
+    p.rect_stroke(r, 8.0, Stroke::new(1.0_f32, Color32::from_white_alpha(40)), egui::StrokeKind::Inside);
+    let mut out = None;
+    for (k, (label, pat, color, tip)) in
+        [("PATTERN", true, theme::ACCENT_2, "Pattern mode: play the current pattern on a loop (L)"), ("SONG", false, theme::PLAYHEAD, "Song mode: play the arrangement in the playlist (L)")].into_iter().enumerate()
+    {
+        let h = Rect::from_min_size(Pos2::new(r.left() + k as f32 * (seg.x + 2.0), r.top()), seg);
+        let resp = ui.interact(h, ui.id().with(("mode_switch", k)), Sense::click()).on_hover_text(tip);
+        let on = pat == pat_mode;
+        let hot = resp.hovered();
+        if on {
+            p.rect_filled(h.shrink(2.0), 6.0, color);
+        } else if hot {
+            p.rect_filled(h.shrink(2.0), 6.0, Color32::from_white_alpha(18));
+        }
+        let ink = if on {
+            Color32::BLACK
+        } else if hot {
+            Color32::WHITE
+        } else {
+            theme::TEXT_DIM
+        };
+        // Icon.
+        let ic = Rect::from_center_size(Pos2::new(h.left() + 17.0, h.center().y), Vec2::splat(16.0));
+        if pat {
+            for row in 0..3 {
+                for col in 0..4 {
+                    let lit = (row + col) % 3 == 0;
+                    let c = Rect::from_min_size(Pos2::new(ic.left() + col as f32 * 4.2, ic.top() + 1.5 + row as f32 * 4.6), Vec2::new(3.2, 3.6));
+                    if lit {
+                        p.rect_filled(c, 0.8, ink);
+                    } else {
+                        p.rect_stroke(c, 0.8, Stroke::new(1.0_f32, ink), egui::StrokeKind::Inside);
+                    }
+                }
+            }
+        } else {
+            for (row, (a, b)) in [(0.0, 0.55), (0.3, 0.95), (0.1, 0.7)].into_iter().enumerate() {
+                let y = ic.top() + 1.5 + row as f32 * 4.8;
+                p.rect_filled(Rect::from_min_max(Pos2::new(ic.left() + a * 16.0, y), Pos2::new(ic.left() + b * 16.0, y + 3.4)), 1.0, ink);
+            }
+            p.line_segment([Pos2::new(ic.left() + 9.0, ic.top() - 1.0), Pos2::new(ic.left() + 9.0, ic.bottom() + 1.0)], Stroke::new(1.2_f32, if on { Color32::BLACK } else { theme::PLAYHEAD }));
+        }
+        p.text(Pos2::new(h.left() + 31.0, h.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), ink);
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            out = Some(pat);
+        }
+    }
+    out
 }

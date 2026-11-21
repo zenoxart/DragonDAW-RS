@@ -278,6 +278,8 @@ pub struct UiState {
     pub last_note_len: u32,
     pub tap_times: Vec<Instant>,
     pub record_started: Option<Instant>,
+    /// Where an audio recording started (beat), for the live take drawn in the playlist.
+    pub record_beat: Option<f64>,
     pub status: String,
     pub plugin_scan: Option<redhive_client_framework::runtime::Promise<(Vec<PluginInfo>, Vec<String>)>>,
 }
@@ -371,6 +373,7 @@ impl UiState {
             last_note_len: PPQ,
             tap_times: Vec::new(),
             record_started: None,
+            record_beat: None,
             status: String::new(),
             plugin_scan: None,
         }
@@ -762,17 +765,23 @@ impl State {
             self.toast("No audio input device is open – choose one in Options › Audio", Severity::Warning);
             return;
         }
+        // Audio is recorded into the arrangement: switch to song mode so the take lands in the playlist.
+        if self.ui.pattern_mode {
+            self.ui.pattern_mode = false;
+        }
         let dir = self.recordings_dir();
         let _ = std::fs::create_dir_all(&dir);
         let stamp = chrono_like_stamp();
         let targets: Vec<RecordTarget> = armed.iter().map(|(id, src, name)| RecordTarget { track: *id, source: *src, path: dir.join(format!("{} {stamp}.wav", sanitize(name))) }).collect();
         let count_in = self.session.project.metronome.count_in_bars;
+        self.ui.record_beat = Some(self.beat_now().max(0.0));
         self.audio.start_recording(targets, count_in);
         self.ui.record_started = Some(Instant::now());
     }
 
     pub fn stop_recording(&mut self) {
         self.ui.record_started = None;
+        self.ui.record_beat = None;
         let takes = self.audio.stop_recording();
         if !takes.is_empty() {
             crate::views::quests::event(self, crate::views::quests::Event::Recorded);
@@ -795,15 +804,20 @@ impl State {
         let n = takes.len();
         self.session.edit("Record audio", |p| {
             let tm = TempoMap::from_project(p);
+            let punch = p.punch_enabled && p.punch.is_some_and(|r| r.len() > 0.01);
             for t in takes {
-                let has_clips = p.track(t.track).map(|tr| tr.clips.iter().any(|c| c.end() > t.start_beat)).unwrap_or(false);
-                if has_clips {
-                    let k = p.track(t.track).map(|tr| tr.takes.len() + 1).unwrap_or(1);
-                    dragon_engine::edit::push_take(p, t.track, &format!("Take {k}"));
-                }
                 let secs = t.frames as f64 / t.rate as f64 - t.latency;
                 let s0 = tm.beat_to_seconds(t.start_beat);
                 let len = tm.seconds_to_beat(s0 + secs.max(0.0)) - t.start_beat;
+                let end = t.start_beat + len.max(0.01);
+                let overlaps = p.track(t.track).map(|tr| tr.clips.iter().any(|c| c.end() > t.start_beat + 1e-6 && c.start < end - 1e-6)).unwrap_or(false);
+                // Punch recording replaces (the old clips stay as a take to comp); otherwise recording over
+                // existing audio never touches it: the new take goes onto a new track right below, grouped
+                // with the armed one and on the same mixer channel.
+                if punch && overlaps {
+                    let k = p.track(t.track).map(|tr| tr.takes.len() + 1).unwrap_or(1);
+                    dragon_engine::edit::push_take(p, t.track, &format!("Take {k}"));
+                }
                 let id = p.next_id();
                 let name = t.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 if let Some(tr) = p.track_mut(t.track) {
@@ -816,6 +830,9 @@ impl State {
                         color: tr.color,
                         kind: ClipKind::Audio(AudioClip { source: t.path, offset: t.latency, ..Default::default() }),
                     });
+                }
+                if !punch && overlaps {
+                    dragon_engine::edit::clips_to_grouped_track(p, t.track, &[id]);
                 }
             }
         });

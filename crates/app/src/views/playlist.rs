@@ -478,6 +478,22 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.label(RichText::new(format!("{} tracks", tracks.len())).small().color(theme::TEXT_DIM));
     });
 
+    // The audio take being recorded: a red audio clip growing on each armed track (it becomes the real
+    // audio clip when recording stops).
+    if let (Some(b0), true) = (st.ui.record_beat, st.audio.is_recording()) {
+        let now = beat_now.max(b0);
+        let p = ui.painter_at(timeline);
+        for (row, t) in rows.iter().zip(&tracks) {
+            if !t.armed || now <= b0 {
+                continue;
+            }
+            let r = Rect::from_min_max(Pos2::new(x_of(b0, sx), row.y + 2.0), Pos2::new(x_of(now, sx), row.y + row.h - 2.0));
+            p.rect_filled(r, 4.0, theme::REC.gamma_multiply(0.35));
+            p.rect_stroke(r, 4.0, Stroke::new(1.5_f32, theme::REC), egui::StrokeKind::Inside);
+            p.text(r.left_top() + Vec2::new(6.0, 4.0), egui::Align2::LEFT_TOP, "⏺ Recording audio", egui::FontId::proportional(11.0), Color32::WHITE);
+        }
+        ui.ctx().request_repaint();
+    }
     if st.ui.pl_drag.is_none() {
         ui.data_mut(|dd| dd.remove::<bool>(egui::Id::new("pl.spawned")));
     }
@@ -1118,8 +1134,6 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     Some(ClipKind::Automation { .. }) => st.ctx.open("dragon.automation", None),
                     None => {}
                 }
-            } else if ruler.contains(pos) {
-                st.ctx.run("dragon.add.marker", serde_json::Value::Null);
             }
         }
     }
@@ -1225,7 +1239,7 @@ fn draw_clip(st: &mut State, p: &egui::Painter, r: Rect, c: &Clip, tm: &TempoMap
                     let (lo, hi) = w[f0..f1.min(w.len())].iter().fold((0.0f32, 0.0f32), |(l, h), (a, b)| (l.min(*a), h.max(*b)));
                     // The fades shape the waveform as they will sound.
                     let g = gain * fade_env(a, c.length, b0 - c.start);
-                    p.line_segment([Pos2::new(x, mid - (hi * g).min(1.0) * half), Pos2::new(x, mid - (lo * g).max(-1.0) * half)], Stroke::new(1.0_f32, col));
+                    p.line_segment([Pos2::new(x, mid - wave_disp(hi * g) * half), Pos2::new(x, mid - wave_disp(lo * g) * half)], Stroke::new(1.0_f32, col));
                 }
                 x += 1.0;
             }
@@ -1489,6 +1503,9 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
             st.ui.playlist_zoom = ((ui.available_width() + 400.0) / len as f32).clamp(3.0, 400.0);
             st.ui.pl_x = 0.0;
         }
+        if ui.small_button(RichText::new("⚑ Marker").color(theme::ACCENT_2)).on_hover_text("Add a time marker at the playhead (Alt+T)").clicked() {
+            st.ctx.run("dragon.add.marker", serde_json::Value::Null);
+        }
         ui.checkbox(&mut st.settings.follow_playhead, "Follow");
         let compact = st.settings.compact_tracks;
         if widgets::toggle(ui, compact, "Compact", theme::ACCENT_2).on_hover_text("Compact tracks: one thin row each, so many more fit on screen").clicked() {
@@ -1502,4 +1519,17 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
                 .color(theme::TEXT_DIM),
         );
     });
+}
+
+/// Waveform display scale: level in dB over a 54 dB range instead of linear amplitude, so a recording at
+/// a healthy level (peaks around −12 … −18 dBFS) fills most of the clip instead of a thin line, as in
+/// the waveform views of Pro Tools / Studio One. Full scale stays at the clip edge.
+pub fn wave_disp(a: f32) -> f32 {
+    const RANGE: f32 = 54.0;
+    let m = a.abs();
+    if m < 1e-6 {
+        return 0.0;
+    }
+    let v = (1.0 + 20.0 * m.log10() / RANGE).clamp(0.0, 1.0);
+    v.copysign(a)
 }

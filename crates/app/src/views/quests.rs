@@ -55,7 +55,7 @@ pub const QUESTS: &[Quest] = &[
     Quest { id: "record", title: "Studio session", hint: "Arm a track and record audio.", xp: 80, icon: "⏺", chapter: "Recording & repair" },
     Quest { id: "repair", title: "Audio surgeon", hint: "Double-click an audio clip › Audio repair…, then render a repair (de-noise, de-click …).", xp: 70, icon: "⚙", chapter: "Recording & repair" },
     Quest { id: "notes", title: "Pitch doctor", hint: "Audio repair › Notes: move a note (or centre the pitch) and render it.", xp: 60, icon: "♪", chapter: "Recording & repair" },
-    Quest { id: "master", title: "Mastering engineer", hint: "Mastering: add a mastering chain (the limiter goes last).", xp: 60, icon: "🎧", chapter: "Mastering & release" },
+    Quest { id: "master", title: "Mastering engineer", hint: "Mastering: add a mastering chain (the limiter or the Philosopher's Stone goes last).", xp: 60, icon: "🎧", chapter: "Mastering & release" },
     Quest { id: "reference", title: "Ear training", hint: "Mastering: load a reference song and analyse your mix against it.", xp: 60, icon: "🎧", chapter: "Mastering & release" },
     Quest { id: "album", title: "Album producer", hint: "Start an album master, add your songs and match their loudness.", xp: 80, icon: "💾", chapter: "Mastering & release" },
     Quest { id: "export", title: "Release day", hint: "File › Export your song.", xp: 100, icon: "🚀", chapter: "Mastering & release" },
@@ -176,7 +176,7 @@ fn achieved(id: &str, p: &Project, events: &[Event]) -> bool {
         "hammerstein" => events.contains(&Event::Hammerstein),
         "repair" => events.contains(&Event::Repaired),
         "notes" => events.contains(&Event::NotesEdited),
-        "master" => p.mixer.master.inserts.last().is_some_and(|i| i.effect == "limiter") && p.mixer.master.inserts.len() >= 2,
+        "master" => p.mixer.master.inserts.last().is_some_and(|i| i.effect == "limiter" || i.effect == "dragon_particle") && p.mixer.master.inserts.len() >= 2,
         "album" => events.contains(&Event::AlbumMatched),
         _ => false,
     }

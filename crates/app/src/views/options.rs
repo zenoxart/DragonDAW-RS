@@ -118,10 +118,14 @@ fn audio(ui: &mut Ui, st: &mut State) {
         ui.label("Buffer");
         ui.horizontal(|ui| {
             ui.selectable_value(&mut cfg.buffer, None, "driver");
+            let rate = cfg.sample_rate.unwrap_or_else(|| st.audio.rate()).max(1) as f32;
             for b in [64u32, 128, 256, 512, 1024, 2048] {
-                ui.selectable_value(&mut cfg.buffer, Some(b), b.to_string());
+                ui.selectable_value(&mut cfg.buffer, Some(b), b.to_string()).on_hover_text(format!("{:.1} ms at {} Hz", b as f32 * 1000.0 / rate, rate));
             }
         });
+        ui.end_row();
+        ui.label("");
+        ui.label(RichText::new(format!("Running: {}", st.audio.describe())).small().color(theme::TEXT_DIM));
         ui.end_row();
         ui.label("Recording offset");
         ui.add(egui::Slider::new(&mut cfg.record_offset_ms, -50.0..=50.0).suffix(" ms")).on_hover_text("Fine-tunes latency compensation of recordings (positive = earlier)");
