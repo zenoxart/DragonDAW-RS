@@ -183,22 +183,36 @@ pub fn show(ui: &mut Ui, st: &mut State) {
 
 pub fn history(ui: &mut Ui, st: &mut State) {
     ui.horizontal(|ui| {
-        if ui.add_enabled(st.session.history.can_undo().is_some(), egui::Button::new("↩ Undo")).clicked() {
+        if ui.add_enabled(st.session.history.can_undo().is_some(), egui::Button::new("↩ Undo")).on_hover_text("Ctrl+Z (again and again)").clicked() {
             st.session.undo();
         }
-        if ui.add_enabled(st.session.history.can_redo().is_some(), egui::Button::new("↪ Redo")).clicked() {
+        if ui.add_enabled(st.session.history.can_redo().is_some(), egui::Button::new("↪ Redo")).on_hover_text("Ctrl+Y or Ctrl+Shift+Z").clicked() {
             st.session.redo();
         }
+        ui.label(RichText::new(format!("{} / {} steps", st.session.history.undo_len(), dragon_engine::history::UNDO_STEPS)).small().color(theme::TEXT_DIM));
     });
     ui.separator();
     let labels = st.session.history.labels();
+    let redo = st.session.history.redo_labels();
     egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-        ui.label(RichText::new("(opened)").color(theme::TEXT_DIM));
+        if ui.selectable_label(labels.is_empty(), RichText::new("(opened)").color(theme::TEXT_DIM)).on_hover_text("Click to undo everything back to here").clicked() {
+            for _ in 0..labels.len() {
+                st.session.undo();
+            }
+        }
         let n = labels.len();
         for (i, l) in labels.iter().enumerate() {
-            if ui.selectable_label(i + 1 == n, l).on_hover_text("Click to undo back to here").clicked() {
+            if ui.selectable_label(i + 1 == n, format!("{}. {l}", i + 1)).on_hover_text("Click to go back to here").clicked() {
                 for _ in (i + 1)..n {
                     st.session.undo();
+                }
+            }
+        }
+        // Undone steps (greyed): a click redoes up to there.
+        for (k, l) in redo.iter().enumerate() {
+            if ui.selectable_label(false, RichText::new(format!("{}. {l}", n + k + 1)).color(theme::TEXT_DIM).italics()).on_hover_text("Undone – click to redo up to here").clicked() {
+                for _ in 0..=k {
+                    st.session.redo();
                 }
             }
         }

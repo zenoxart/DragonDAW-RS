@@ -176,8 +176,12 @@ pub fn status_bar(ui: &mut Ui, st: &mut State) {
 /// (`true` = pattern).
 fn mode_switch(ui: &mut Ui, pat_mode: bool) -> Option<bool> {
     use egui::{Pos2, Rect, Sense, Stroke};
-    let seg = Vec2::new(78.0, 30.0);
-    let (r, _) = ui.allocate_exact_size(Vec2::new(seg.x * 2.0 + 2.0, seg.y), Sense::hover());
+    // Each half is as wide as its icon and label need (measured, so no font or scale overflows it).
+    let font = egui::FontId::proportional(12.5);
+    let text_w = |t: &str| ui.painter().layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE).size().x;
+    let widths = [31.0 + text_w("PATTERN") + 12.0, 31.0 + text_w("SONG") + 12.0];
+    let seg_h = 30.0;
+    let (r, _) = ui.allocate_exact_size(Vec2::new(widths[0] + widths[1] + 2.0, seg_h), Sense::hover());
     let p = ui.painter().clone();
     p.rect_filled(r, 8.0, theme::PANEL_2);
     p.rect_stroke(r, 8.0, Stroke::new(1.0_f32, Color32::from_white_alpha(40)), egui::StrokeKind::Inside);
@@ -185,7 +189,8 @@ fn mode_switch(ui: &mut Ui, pat_mode: bool) -> Option<bool> {
     for (k, (label, pat, color, tip)) in
         [("PATTERN", true, theme::ACCENT_2, "Pattern mode: play the current pattern on a loop (L)"), ("SONG", false, theme::PLAYHEAD, "Song mode: play the arrangement in the playlist (L)")].into_iter().enumerate()
     {
-        let h = Rect::from_min_size(Pos2::new(r.left() + k as f32 * (seg.x + 2.0), r.top()), seg);
+        let x0 = if k == 0 { r.left() } else { r.left() + widths[0] + 2.0 };
+        let h = Rect::from_min_size(Pos2::new(x0, r.top()), Vec2::new(widths[k], seg_h));
         let resp = ui.interact(h, ui.id().with(("mode_switch", k)), Sense::click()).on_hover_text(tip);
         let on = pat == pat_mode;
         let hot = resp.hovered();
@@ -207,7 +212,7 @@ fn mode_switch(ui: &mut Ui, pat_mode: bool) -> Option<bool> {
             p.circle_filled(ic.center(), 12.0, Color32::from_black_alpha(170));
         }
         crate::brand::paint_icon(&p, ic, if pat { crate::brand::icon::PATTERN } else { crate::brand::icon::SONG }, if on || hot { Color32::WHITE } else { Color32::from_gray(150) });
-        p.text(Pos2::new(h.left() + 31.0, h.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), ink);
+        p.text(Pos2::new(h.left() + 31.0, h.center().y), egui::Align2::LEFT_CENTER, label, font.clone(), ink);
         if hot {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }

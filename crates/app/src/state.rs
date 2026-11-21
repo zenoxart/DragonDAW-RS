@@ -57,7 +57,7 @@ impl Default for Settings {
             recent: Vec::new(),
             browser_folders: Vec::new(),
             autosave_minutes: 3,
-            undo_limit: 200,
+            undo_limit: dragon_engine::history::UNDO_STEPS,
             ui_scale: 1.0,
             show_splash: true,
             show_start: true,
@@ -511,9 +511,14 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
 }
 
 impl State {
-    pub fn new(ctx: AppContext, settings: Settings) -> Self {
+    pub fn new(ctx: AppContext, mut settings: Settings) -> Self {
         let kit = default_kit(&ctx.paths);
         let mut session = Session::new(Project::empty(), None);
+        // 200 was the old default: lift it to the new one (500); anything below 200 is raised to 200.
+        if settings.undo_limit == 200 {
+            settings.undo_limit = dragon_engine::history::UNDO_STEPS;
+        }
+        settings.undo_limit = settings.undo_limit.max(200);
         session.history.limit = settings.undo_limit;
         let song = session.compile(48000.0);
         let audio = Audio::start(&settings.device, song);

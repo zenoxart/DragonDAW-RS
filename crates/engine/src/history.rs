@@ -3,6 +3,9 @@
 
 use crate::model::Project;
 
+/// Undo steps kept (the oldest drop off beyond this).
+pub const UNDO_STEPS: usize = 500;
+
 pub struct History {
     undo: Vec<(String, Project)>,
     redo: Vec<(String, Project)>,
@@ -15,7 +18,7 @@ pub struct History {
 
 impl Default for History {
     fn default() -> Self {
-        History { undo: Vec::new(), redo: Vec::new(), limit: 200, revision: 0, saved_revision: 0 }
+        History { undo: Vec::new(), redo: Vec::new(), limit: UNDO_STEPS, revision: 0, saved_revision: 0 }
     }
 }
 
@@ -61,6 +64,11 @@ impl History {
     }
     pub fn can_redo(&self) -> Option<&str> {
         self.redo.last().map(|u| u.0.as_str())
+    }
+
+    /// The steps that can be redone, next first (for the history panel).
+    pub fn redo_labels(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|u| u.0.clone()).collect()
     }
 
     /// Labels, oldest first (for the history panel).

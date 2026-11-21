@@ -573,7 +573,9 @@ fn shortcuts_follow_fl_studio() {
     for (id, want) in [
         ("edit.duplicate", "Ctrl+B"),
         ("edit.deselect", "Ctrl+D"),
-        ("edit.undo_toggle", "Ctrl+Z"),
+        ("edit.undo", "Ctrl+Z"),
+        ("edit.redo", "Ctrl+Y"),
+        ("edit.undo_toggle", "Ctrl+Alt+Z"),
         ("edit.quantize", "Alt+Q"),
         ("edit.quick_quantize", "Shift+Q"),
         ("transport.play", "Space"),
@@ -653,7 +655,33 @@ fn shortcuts_follow_fl_studio() {
     }
 }
 
-/// Ctrl+Z undoes, pressed again it redoes (FL), Ctrl+Alt+Z keeps stepping back; copy / paste of clips.
+/// Ctrl+Alt+Z undoes, pressed again it redoes (FL's toggle), Ctrl+Z keeps stepping back; copy / paste of clips.
+/// Ctrl+Z goes back hundreds of steps one by one, Ctrl+Y comes forward again.
+#[test]
+fn ctrl_z_steps_back_hundreds_of_steps() {
+    let mut h = Harness::new();
+    let base = h.st.session.project.bpm;
+    for k in 0..300 {
+        h.st.session.edit("Tempo", |p| p.bpm = 60.0 + k as f64 * 0.1);
+    }
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        crate::commands::execute(&mut h.st, id, &ctx);
+    };
+    for _ in 0..250 {
+        run(&mut h, "dragon.edit.undo");
+    }
+    assert!((h.st.session.project.bpm - (60.0 + 49.0 * 0.1)).abs() < 1e-6, "250 steps back: {}", h.st.session.project.bpm);
+    for _ in 0..50 {
+        run(&mut h, "dragon.edit.undo");
+    }
+    assert_eq!(h.st.session.project.bpm, base, "all 300 steps undone");
+    for _ in 0..10 {
+        run(&mut h, "dragon.edit.redo");
+    }
+    assert!((h.st.session.project.bpm - (60.0 + 9.0 * 0.1)).abs() < 1e-6);
+}
+
 #[test]
 fn undo_toggle_and_clip_clipboard() {
     let mut h = Harness::new();
@@ -669,7 +697,7 @@ fn undo_toggle_and_clip_clipboard() {
     assert_eq!(h.st.session.project.bpm, 110.0, "second Ctrl+Z redoes");
     run(&mut h, "dragon.edit.undo_toggle");
     run(&mut h, "dragon.edit.undo");
-    assert_ne!(h.st.session.project.bpm, 100.0, "Ctrl+Alt+Z steps further back");
+    assert_ne!(h.st.session.project.bpm, 100.0, "Ctrl+Z steps further back");
     // Copy two clips and paste them at the playhead.
     let before: usize = h.st.session.project.tracks.iter().map(|t| t.clips.len()).sum();
     h.st.ui.editor = crate::state::Editor::Playlist;

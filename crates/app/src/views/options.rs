@@ -223,7 +223,7 @@ fn general(ui: &mut Ui, st: &mut State) {
     ui.heading("General");
     let s = &mut st.settings;
     ui.add(egui::Slider::new(&mut s.autosave_minutes, 0..=30).text("autosave every (min, 0 = off)"));
-    ui.add(egui::Slider::new(&mut s.undo_limit, 20..=2000).text("undo steps"));
+    ui.add(egui::Slider::new(&mut s.undo_limit, 200..=2000).text("undo steps")).on_hover_text("How many steps Ctrl+Z can go back");
     if ui.add(egui::Slider::new(&mut s.ui_scale, 0.7..=2.0).text("interface scale")).drag_stopped() {
         ui.ctx().set_zoom_factor(s.ui_scale);
     }

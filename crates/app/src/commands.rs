@@ -11,7 +11,8 @@ use redhive_contracts::{IconRef, TextKey};
 
 /// (id, label, menu path, section, shortcut)
 /// Shortcuts follow FL Studio's defaults: Ctrl+N saves a new version, Ctrl+R / Ctrl+Shift+R export WAV /
-/// MP3, Ctrl+Z undoes (pressed again it redoes, like FL), Ctrl+Alt+Z steps further back, Ctrl+B duplicates,
+/// MP3, Ctrl+Z steps back through the undo history (500 steps; Ctrl+Y / Ctrl+Shift+Z forward, Ctrl+Alt+Z is
+/// FL's undo / redo toggle), Ctrl+B duplicates,
 /// Ctrl+D deselects, Alt+Q quantizes and Shift+Q quick-quantizes, Space plays / stops, Ctrl+Space pauses,
 /// Backspace toggles snap, Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Shift+I inverts,
 /// Ctrl+G glues, Ctrl+U chops, Alt+F flams, Ctrl+H stops all sound, Ctrl+P toggles precount, Alt+P the picker,
@@ -37,9 +38,10 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("file.export_midi", "Export pattern as MIDI…", "File/Export", 3, "Ctrl+Shift+M"),
     ("file.recover", "Recover autosave…", "File", 4, ""),
     ("file.quit", "Exit", "File", 5, "Alt+F4"),
-    ("edit.undo_toggle", "Undo / redo last", "Edit", 0, "Ctrl+Z"),
-    ("edit.undo", "Undo (step back)", "Edit", 0, "Ctrl+Alt+Z"),
-    ("edit.redo", "Redo (step forward)", "Edit", 0, "Ctrl+Shift+Z"),
+    ("edit.undo", "Undo (step back, again and again)", "Edit", 0, "Ctrl+Z"),
+    ("edit.redo", "Redo (step forward)", "Edit", 0, "Ctrl+Y"),
+    ("edit.redo_alt", "Redo (step forward)", "", 0, "Ctrl+Shift+Z"),
+    ("edit.undo_toggle", "Undo / redo last (FL toggle)", "Edit", 0, "Ctrl+Alt+Z"),
     ("edit.cut", "Cut", "Edit", 1, "Ctrl+X"),
     ("edit.copy", "Copy", "Edit", 1, "Ctrl+C"),
     ("edit.paste", "Paste", "Edit", 1, "Ctrl+V"),
@@ -790,10 +792,13 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "edit.undo" => {
             if let Some(l) = st.session.undo() {
-                st.ui.status = format!("Undo: {l}");
+                let left = st.session.history.undo_len();
+                st.ui.status = format!("Undo: {l}  ({left} more step{} back)", if left == 1 { "" } else { "s" });
+            } else {
+                st.ui.status = "Nothing more to undo".into();
             }
         }
-        "edit.redo" => {
+        "edit.redo" | "edit.redo_alt" => {
             if let Some(l) = st.session.redo() {
                 st.ui.status = format!("Redo: {l}");
             }
