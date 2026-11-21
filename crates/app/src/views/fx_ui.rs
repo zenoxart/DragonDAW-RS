@@ -91,7 +91,7 @@ fn x_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, String)], x_of: impl Fn(f3
 }
 
 fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
+    super::fx_mod::screen(p, r, 6.0);
     let pr = plot(r);
     if log_freq {
         let marks: Vec<(f32, String)> = [20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0].iter().map(|f| (*f, if *f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") })).collect();
@@ -130,7 +130,18 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         let _ = resp.clone().on_hover_text("Drag a control up / down (Shift = fine), wheel, double-click resets");
     }
     let p = ui.painter_at(r);
-    let col = if h.enabled { h.color } else { theme::TEXT_DIM };
+    // Every display is a screen in its unit's phosphor.
+    let finish = super::analog::finish_of(h.def.id);
+    let phosphor = super::fx_mod::phosphor(finish);
+    super::fx_mod::set_screen(phosphor);
+    let themed = !matches!(h.def.id, "class_a_strip" | "orbit" | "clipper" | "chorus" | "flanger" | "phaser" | "tremolo");
+    let col = if !h.enabled {
+        theme::TEXT_DIM
+    } else if themed {
+        phosphor
+    } else {
+        h.color
+    };
     match h.def.id {
         "eq" => eq(&p, r, h, col),
         "filter" => filter(&p, r, h, col),
@@ -164,6 +175,9 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     if !h.enabled {
         p.rect_filled(r, 6.0, Color32::from_black_alpha(110));
         p.text(r.center(), egui::Align2::CENTER_CENTER, "BYPASSED", egui::FontId::proportional(18.0), theme::TEXT_DIM);
+    }
+    if themed {
+        super::fx_mod::crt_glass(&p, r);
     }
     p.rect_stroke(r, 6.0, Stroke::new(1.0_f32, col.gamma_multiply(0.4)), egui::StrokeKind::Inside);
     (edits, resp.dragged())
@@ -924,7 +938,7 @@ fn filter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 // --------------------------------------------------------------------------------------- dynamics
 
 fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
+    super::fx_mod::screen(p, r, 6.0);
     // Left: transfer curve (input dB → output dB). Right: big gain-reduction meter.
     let sq = square(r);
     let lo = -60.0;
@@ -1027,7 +1041,7 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 /// (orange, hanging from the top), on one dB scale. `static_gr` gives the curve for the gallery demo.
 fn level_history(p: &egui::Painter, g: Rect, h: &Hero, col: Color32, static_out: impl Fn(f32) -> f32) {
     const LEN: usize = 240;
-    p.rect_filled(g, 3.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+    super::fx_mod::inset(p, g, 3.0);
     let hist_id = h.key.with("comp.hist");
     let mut hist: std::collections::VecDeque<[f32; 3]> = p.ctx().data(|d| d.get_temp(hist_id)).unwrap_or_default();
     if h.time.is_some() {
@@ -1072,7 +1086,7 @@ fn level_history(p: &egui::Painter, g: Rect, h: &Hero, col: Color32, static_out:
 
 fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::effects::dynamics::{ts_shape, ts_sus_shape, TS_SHAPES, TS_SUS_SHAPES};
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x10, 0x12, 0x16));
+    super::fx_mod::screen(p, r, 6.0);
     let att = [h.v("attack") / 100.0, h.v("att_dur") / 1000.0, h.v("att_shape").round()];
     let sus = [h.v("sustain") / 100.0, h.v("sus_dur") / 1000.0, h.v("sus_shape").round()];
     let weights = |t: f32| -> (f32, f32) {
@@ -1084,7 +1098,7 @@ fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     };
     // ---- top: scrolling level (grey) and gain change (attack orange-ish, sustain colour)
     let top = Rect::from_min_max(r.min + Vec2::new(10.0, 10.0), Pos2::new(r.right() - 10.0, r.top() + r.height() * 0.55));
-    p.rect_filled(top, 4.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+    super::fx_mod::inset(p, top, 4.0);
     let hist_id = h.key.with("ts.hist");
     let mut hist: std::collections::VecDeque<[f32; 4]> = p.ctx().data(|d| d.get_temp(hist_id)).unwrap_or_default();
     if h.time.is_some() {
@@ -1127,7 +1141,7 @@ fn transient(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let half = bot.width() / 2.0 - 4.0;
     for (k, (name, amt, dur, shape, color)) in [("ATTACK", att[0], att[1], att[2], attack_col), ("SUSTAIN", sus[0], sus[1], sus[2], col)].into_iter().enumerate() {
         let pr = Rect::from_min_size(Pos2::new(bot.left() + k as f32 * (half + 8.0), bot.top()), Vec2::new(half, bot.height()));
-        p.rect_filled(pr, 4.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+        super::fx_mod::inset(p, pr, 4.0);
         let cy = pr.center().y + 6.0;
         let span = att[1] * 0.6 + sus[1];
         let pts: Vec<Pos2> = (0..=80)
@@ -1297,7 +1311,7 @@ fn reverb(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 // ---------------------------------------------------------------------------------- distortion
 
 fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
+    super::fx_mod::screen(p, r, 6.0);
     let sq = square(r);
     p.rect_stroke(sq, 3.0, Stroke::new(1.0_f32, Color32::from_white_alpha(20)), egui::StrokeKind::Inside);
     let crush = h.def.id == "bitcrusher";
@@ -1363,7 +1377,7 @@ fn shaper(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 // --------------------------------------------------------------------------------------- utility
 
 fn stereo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x12, 0x14, 0x18));
+    super::fx_mod::screen(p, r, 6.0);
     let width = h.v("width");
     let mono = h.def.id == "utility" && h.v("mono") > 0.5;
     let pan = if h.def.id == "utility" { h.v("pan") } else { 0.0 };
@@ -1392,7 +1406,7 @@ fn stereo(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 /// The stereo imager as a phase meter: a goniometer (mid vertical, side horizontal) of the output, a
 /// correlation meter from −1 (out of phase) to +1 (mono) and a left / right balance bar.
 fn phase_meter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x10, 0x12, 0x16));
+    super::fx_mod::screen(p, r, 6.0);
     // Live data, or a synthetic signal with the set width in the gallery.
     let demo: Vec<f32>;
     let data: &[f32] = if h.tele.len() > 3 {
@@ -1517,7 +1531,7 @@ fn phase_meter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 /// trace over the note lanes (input white, corrected output coloured) and the key's notes underneath.
 fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::effects::pitch::{KEYS, TUNE_SCALES};
-    p.rect_filled(r, 8.0, Color32::from_rgb(0x10, 0x12, 0x16));
+    super::fx_mod::screen(p, r, 8.0);
     let key = h.v("key").round() as usize % 12;
     let sc = TUNE_SCALES.get(h.v("scale").round() as usize).map(|s| s.1).unwrap_or(TUNE_SCALES[0].1);
     let in_scale = |n: usize| sc.contains(&(((n + 12 - key) % 12) as u8));
@@ -1574,7 +1588,7 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(c.x + rad, c.y + 2.0), egui::Align2::CENTER_TOP, "+50", egui::FontId::proportional(8.5), theme::TEXT_DIM);
     // ---- right: pitch trace over note lanes
     let tr = Rect::from_min_max(Pos2::new(left.right() + 16.0, r.top() + 10.0), Pos2::new(r.right() - 10.0, r.bottom() - 46.0));
-    p.rect_filled(tr, 4.0, Color32::from_rgb(0x16, 0x19, 0x1f));
+    super::fx_mod::inset(p, tr, 4.0);
     let mid = det.or_else(|| hist.iter().rev().find(|x| x.0 >= 0.0).map(|x| x.0)).unwrap_or(60.0).round();
     let lo = mid - 6.5;
     let y_of = |m: f32| tr.bottom() - ((m - lo) / 13.0) * tr.height();
@@ -1903,7 +1917,7 @@ fn gain_to_db_ui(x: f32) -> f32 {
 /// the macro settings as rings around the pad.
 fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::effects::strips::{DRUM_COLOURS, HEQ_FREQS};
-    p.rect_filled(r, 8.0, Color32::from_rgb(0x12, 0x10, 0x10));
+    super::fx_mod::screen(p, r, 8.0);
     let t = h.t();
     let (pin, pout, gr, rin, rout) = match h.tele {
         [a, b, c, d, e, ..] => (*a, *b, *c, *d, *e),
@@ -1939,7 +1953,7 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let tw = top.width() / 4.0;
     for (k, (name, v, sub)) in tiles.iter().enumerate() {
         let tr = Rect::from_min_size(Pos2::new(top.left() + k as f32 * tw + 3.0, top.top()), Vec2::new(tw - 6.0, top.height()));
-        p.rect_filled(tr, 6.0, Color32::from_rgb(0x1e, 0x1a, 0x1a));
+        super::fx_mod::inset(p, tr, 6.0);
         let c = Pos2::new(tr.center().x, tr.center().y + 4.0);
         let rad = (tr.height() * 0.32).min(tr.width() * 0.3);
         let a0 = std::f32::consts::PI * 0.75;
@@ -1959,7 +1973,7 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let half = bottom.width() / 2.0;
     let bars = |x0: f32, title: &str, items: &[(String, f32, f32)]| {
         let area = Rect::from_min_max(Pos2::new(x0 + 3.0, bottom.top()), Pos2::new(x0 + half - 3.0, bottom.bottom()));
-        p.rect_filled(area, 6.0, Color32::from_rgb(0x1e, 0x1a, 0x1a));
+        super::fx_mod::inset(p, area, 6.0);
         p.text(Pos2::new(area.left() + 6.0, area.top() + 3.0), egui::Align2::LEFT_TOP, title, egui::FontId::proportional(9.0), theme::TEXT);
         let bw = (area.width() - 12.0) / items.len() as f32;
         for (k, (name, v, max)) in items.iter().enumerate() {
@@ -1979,7 +1993,7 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 /// Alter: the pitch and formant shifts as two big vertical sliders around a voice "face" whose mouth (the
 /// spectral envelope) moves with the formant and whose wave moves with the pitch; robot mode shows its note.
 fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 10.0, Color32::from_rgb(0x14, 0x18, 0x22));
+    super::fx_mod::screen(p, r, 10.0);
     let t = h.t();
     let pitch = h.v("pitch");
     let formant = h.v("formant");
@@ -2000,7 +2014,7 @@ fn alter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     slider(r.right() - 34.0, formant + if link { pitch } else { 0.0 }, if link { "FORMANT (LINK)" } else { "FORMANT" }, Color32::from_rgb(0x5d, 0xe0, 0xa8));
     // The "voice": a spectral envelope (mouth) shifted by the formant, a wave whose period follows the pitch.
     let face = Rect::from_min_max(Pos2::new(r.left() + 70.0, r.top() + 14.0), Pos2::new(r.right() - 70.0, r.bottom() - 14.0));
-    p.rect_filled(face, 8.0, Color32::from_rgb(0x1c, 0x22, 0x2e));
+    super::fx_mod::inset(p, face, 8.0);
     let fshift = 2f32.powf((formant + if link { pitch } else { 0.0 }) / 12.0);
     let env = |f: f32| -> f32 { (1.0 / (1.0 + ((f / fshift - 700.0) / 260.0).powi(2))) + 0.6 / (1.0 + ((f / fshift - 1700.0) / 380.0).powi(2)) + 0.3 / (1.0 + ((f / fshift - 2800.0) / 500.0).powi(2)) };
     let spec = Rect::from_min_max(Pos2::new(face.left() + 10.0, face.center().y), face.max - Vec2::new(10.0, 10.0));
@@ -2095,7 +2109,7 @@ fn hz_label(f: f32) -> String {
 /// sideways, a band up / down for its threshold.
 fn multiband(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
     use super::fx_panel::BAND_COLORS;
-    p.rect_filled(r, 6.0, Color32::from_rgb(0x0f, 0x11, 0x15));
+    super::fx_mod::screen(p, r, 6.0);
     let g = MbGeom::new(r, h);
     let small = egui::FontId::proportional(9.0);
     let grid = Stroke::new(1.0_f32, Color32::from_white_alpha(12));
@@ -2387,7 +2401,7 @@ fn clipper(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
 /// the vari-mu gain reduction, and gain-reduction bars for the de-esser, the four multiband faders and the
 /// resonance suppressor.
 fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
-    p.rect_filled(r, 8.0, Color32::from_rgb(0x14, 0x16, 0x1b));
+    super::fx_mod::screen(p, r, 8.0);
     let t = h.t();
     let tele: Vec<f32> = if h.tele.len() >= 9 {
         h.tele.to_vec()
@@ -2468,7 +2482,7 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
 fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::effects::DragonParticle;
     // Deep background with a faint radial glow.
-    p.rect_filled(r, 10.0, Color32::from_rgb(0x0c, 0x0d, 0x11));
+    super::fx_mod::screen(p, r, 10.0);
     let a = h.v("amount");
     let c = r.center();
     let rad = (r.height() * 0.5 - 22.0).max(30.0);

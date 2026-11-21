@@ -547,8 +547,18 @@ pub fn nameplate(ui: &mut egui::Ui, pl: &Plate) {
         vu(&p, mr, pos, caption, is_gr, glow);
         right -= mw + gap;
     }
+    // The unit's emblem, alive with what it does.
+    if super::fx_mod::has_emblem(pl.id) && right - (h - 8.0) - 4.0 >= r.left() + 250.0 {
+        let follow = if super::fx_mod::emblem_follows_reduction(pl.id) { (pl.gr / 12.0).clamp(0.0, 1.0) } else { vu_pos(db(l.max(rr))).clamp(0.0, 1.0) };
+        let (sig, mv) = spring(&ctx, pl.key.with("emblem"), if pl.enabled { follow } else { 0.0 }, 1.2, 0.9, motion);
+        moving |= mv;
+        let side = h - 8.0;
+        let er = Rect::from_min_size(Pos2::new(right - side - 4.0, r.top() + 4.0), Vec2::splat(side));
+        super::fx_mod::emblem(&p, er, pl.id, sig, t);
+        right -= side + 12.0;
+    }
     // The valve, glowing with the signal it is driving.
-    if has_valve(pl.id) && room >= mw + 50.0 {
+    if has_valve(pl.id) && right - 44.0 >= r.left() + 250.0 {
         let drive = if pl.enabled { 0.55 + 0.45 * (vu_pos(db(l.max(rr))).clamp(0.0, 1.0)) } else { 0.0 };
         let (g, mv) = spring(&ctx, pl.key.with("valve"), drive, 0.6, 1.0, motion);
         moving |= mv;

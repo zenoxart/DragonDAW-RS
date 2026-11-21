@@ -75,6 +75,52 @@ pub(super) fn quad(p: &egui::Painter, t: &TextureHandle, c: [Pos2; 4], tint: Col
     p.add(Shape::mesh(m));
 }
 
+thread_local! {
+    /// The phosphor of the screen being drawn (set per unit by the display).
+    static SCREEN: std::cell::Cell<Color32> = const { std::cell::Cell::new(PHOSPHOR) };
+}
+
+/// The phosphor colour of a finish's screens: green on the metal units, amber on the valve, console,
+/// gold and copper units, ice blue on the space units.
+pub fn phosphor(f: super::analog::Finish) -> Color32 {
+    use super::analog::Finish::*;
+    match f {
+        Cream | Console | Gold | Copper => Color32::from_rgb(0xff, 0xb8, 0x4a),
+        Verdigris => Color32::from_rgb(0x84, 0xe4, 0xff),
+        _ => PHOSPHOR,
+    }
+}
+
+pub fn set_screen(c: Color32) {
+    SCREEN.with(|s| s.set(c));
+}
+
+/// The background of a display: a phosphor screen in the unit's colour (dark glass, a faint glow in the
+/// middle, a vignette at the edges).
+pub fn screen(p: &egui::Painter, r: Rect, round: f32) {
+    let c = SCREEN.with(|s| s.get());
+    let base = Color32::from_rgb((c.r() as f32 * 0.05) as u8 + 4, (c.g() as f32 * 0.05) as u8 + 4, (c.b() as f32 * 0.05) as u8 + 4);
+    p.rect_filled(r, round, base);
+    if c == PHOSPHOR {
+        if let Some(t) = art(p.ctx(), "fx-crt", CRT) {
+            p.image(t.id(), r, Rect::from_min_max(Pos2::new(0.03, 0.04), Pos2::new(0.97, 0.96)), Color32::from_gray(200));
+        }
+    } else {
+        let cp = p.with_clip_rect(r);
+        halo(&cp, r.center(), r.width().max(r.height()) * 0.6, c, 0.07);
+    }
+    for k in 0..6 {
+        p.rect_stroke(r.shrink(k as f32 * 2.0), round, Stroke::new(2.0_f32, Color32::from_black_alpha(60 - k * 10)), egui::StrokeKind::Inside);
+    }
+}
+
+/// A recessed panel on a screen (a graph inside a display).
+pub fn inset(p: &egui::Painter, r: Rect, round: f32) {
+    let c = SCREEN.with(|s| s.get());
+    p.rect_filled(r, round, Color32::from_black_alpha(110));
+    p.rect_stroke(r, round, Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 34)), egui::StrokeKind::Inside);
+}
+
 /// A recessed window in the display (behind the emblem): black velvet with a soft inner shadow.
 pub(super) fn window(p: &egui::Painter, r: Rect) {
     p.rect_filled(r, 6.0, Color32::from_rgb(0x0b, 0x08, 0x08));
@@ -428,5 +474,214 @@ pub(super) fn stars(p: &egui::Painter, r: Rect, t: f32, n: usize) {
         let y = r.top() + ((s >> 10) % 1000) as f32 / 1000.0 * r.height();
         let tw = 0.5 + 0.5 * (t * (1.0 + (s % 7) as f32 * 0.4) + (s % 13) as f32).sin();
         p.circle_filled(Pos2::new(x, y), 0.6 + (s % 3) as f32 * 0.35, Color32::from_white_alpha((40.0 + 90.0 * tw) as u8));
+    }
+}
+
+// ------------------------------------------------------------------------------------------- emblems
+
+/// How a unit's emblem moves.
+#[derive(Clone, Copy, PartialEq)]
+enum Motion {
+    /// Sparkling glints over it.
+    Shimmer,
+    /// Bubbles rising through its liquid.
+    Bubbles,
+    /// Stretching wider with the signal.
+    Spread,
+    /// Trembling (a struck fork, a pulled lodestone, a twitching claw).
+    Tremble,
+    /// Glowing at points (an eye, a heart) with the signal.
+    Eyes(&'static [(f32, f32)]),
+    /// Lifting (the portcullis opens as the gate does).
+    Rise,
+    /// Turning slowly.
+    Turn,
+    /// Sparks and embers flying up.
+    Sparks,
+    /// Ripples spreading out.
+    Ripples,
+    /// Breathing in and out.
+    Breathe,
+}
+
+/// What a unit's emblem follows: its output level or its gain reduction.
+#[derive(Clone, Copy, PartialEq)]
+enum Follows {
+    Level,
+    Reduction,
+}
+
+macro_rules! emblem_art {
+    ($($id:literal),*) => {
+        fn emblem_bytes(id: &str) -> Option<(&'static str, &'static [u8])> {
+            match id {
+                $($id => Some((concat!("fx-emblem-", $id), include_bytes!(concat!("../../assets/fx/emblems/", $id, ".png")))),)*
+                _ => None,
+            }
+        }
+    };
+}
+emblem_art!(
+    "alter",
+    "bitcrusher",
+    "class_a_strip",
+    "clean_voice",
+    "clipper",
+    "compressor",
+    "deesser",
+    "delay",
+    "dragon_particle",
+    "drum_bus",
+    "eq",
+    "filter",
+    "gate",
+    "imager",
+    "limiter",
+    "multiband",
+    "multisat",
+    "reverb",
+    "saturator",
+    "transient",
+    "tune",
+    "utility"
+);
+
+fn emblem_spec(id: &str) -> (Motion, Follows, Color32) {
+    use Follows::*;
+    use Motion::*;
+    match id {
+        "eq" => (Shimmer, Level, Color32::from_rgb(0xd8, 0xe8, 0xff)),
+        "filter" => (Bubbles, Level, Color32::from_rgb(0x6c, 0xff, 0x7a)),
+        "utility" => (Bubbles, Level, Color32::from_rgb(0x5a, 0x8c, 0xff)),
+        "imager" => (Spread, Level, Color32::from_rgb(0xd8, 0xa0, 0x5a)),
+        "tune" => (Tremble, Level, Color32::from_rgb(0xff, 0xd0, 0x60)),
+        "compressor" => (Eyes(&[(0.63, 0.30)]), Reduction, Color32::from_rgb(0xff, 0x9a, 0x2c)),
+        "limiter" => (Tremble, Reduction, Color32::from_rgb(0x9a, 0xb8, 0xff)),
+        "gate" => (Rise, Level, Color32::from_rgb(0xff, 0xb0, 0x60)),
+        "deesser" => (Eyes(&[(0.52, 0.17)]), Reduction, Color32::from_rgb(0x6c, 0xff, 0x9a)),
+        "transient" => (Tremble, Level, Color32::from_rgb(0xff, 0xa0, 0x50)),
+        "multiband" => (Turn, Level, Color32::from_rgb(0xff, 0xff, 0xff)),
+        "class_a_strip" => (Eyes(&[(0.30, 0.47), (0.70, 0.47)]), Level, Color32::from_rgb(0xff, 0x8a, 0x2c)),
+        "drum_bus" => (Sparks, Level, Color32::from_rgb(0xff, 0xa8, 0x3c)),
+        "saturator" => (Sparks, Level, Color32::from_rgb(0xff, 0x8a, 0x2c)),
+        "multisat" => (Eyes(&[(0.50, 0.55)]), Level, Color32::from_rgb(0xff, 0x7a, 0x2c)),
+        "alter" => (Breathe, Level, Color32::from_rgb(0xd8, 0xa0, 0x5a)),
+        "clipper" => (Shimmer, Level, Color32::from_rgb(0xff, 0xd8, 0x80)),
+        "reverb" => (Ripples, Level, Color32::from_rgb(0xb0, 0x70, 0xff)),
+        "delay" => (Ripples, Level, Color32::from_rgb(0x50, 0xff, 0xd8)),
+        "bitcrusher" => (Turn, Level, Color32::from_rgb(0xff, 0x80, 0x40)),
+        "dragon_particle" => (Breathe, Level, Color32::from_rgb(0xff, 0x30, 0x30)),
+        "clean_voice" => (Ripples, Level, Color32::from_rgb(0xc8, 0xe8, 0xff)),
+        _ => (Breathe, Level, AMBER),
+    }
+}
+
+/// Whether a unit has an animated emblem in its nameplate.
+pub fn has_emblem(id: &str) -> bool {
+    emblem_bytes(id).is_some()
+}
+
+/// Whether the emblem follows gain reduction (otherwise the output level).
+pub fn emblem_follows_reduction(id: &str) -> bool {
+    emblem_spec(id).1 == Follows::Reduction
+}
+
+fn hash(a: u32) -> f32 {
+    let mut x = a.wrapping_mul(0x9e37_79b9) ^ 0x85eb_ca6b;
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x2c1b_3c6d);
+    x ^= x >> 12;
+    (x % 10_000) as f32 / 10_000.0
+}
+
+/// Draws unit `id`'s emblem in its lit window `r`, moving with `s` (0 … 1: the level or the gain
+/// reduction it follows) at time `t`.
+pub fn emblem(p: &egui::Painter, r: Rect, id: &str, s: f32, t: f32) {
+    let Some((name, bytes)) = emblem_bytes(id) else { return };
+    let Some(tex) = art(p.ctx(), name, bytes) else { return };
+    let (motion, _, c) = emblem_spec(id);
+    let s = s.clamp(0.0, 1.0);
+    window(p, r);
+    let p = p.with_clip_rect(r.shrink(2.0));
+    let ts = tex.size_vec2();
+    let inner = r.shrink(7.0);
+    let k = (inner.width() / ts.x).min(inner.height() / ts.y);
+    let mut size = ts * k;
+    let mut center = inner.center();
+    let mut rot = 0.0;
+    halo(&p, center, r.width() * 0.6, c, 0.08 + 0.25 * s);
+    match motion {
+        Motion::Spread => size.x *= 0.85 + 0.25 * s,
+        Motion::Breathe => size *= 0.94 + 0.06 * (t * 2.2).sin() * (0.3 + 0.7 * s) + 0.04 * s,
+        Motion::Tremble => {
+            rot = (t * 47.0).sin() * 0.06 * s;
+            center.x += (t * 61.0).sin() * 1.5 * s;
+        }
+        Motion::Rise => center.y -= size.y * 0.55 * s,
+        Motion::Turn => rot = t * (0.15 + 0.9 * s),
+        _ => {}
+    }
+    let (sn, cs) = rot.sin_cos();
+    let pt = |x: f32, y: f32| Pos2::new(center.x + x * cs - y * sn, center.y + x * sn + y * cs);
+    let (hx, hy) = (size.x / 2.0, size.y / 2.0);
+    quad(&p, &tex, [pt(-hx, -hy), pt(hx, -hy), pt(hx, hy), pt(-hx, hy)], Color32::from_gray((150.0 + 105.0 * (0.4 + 0.6 * s)) as u8));
+    let img = Rect::from_center_size(center, size);
+    match motion {
+        Motion::Shimmer => {
+            for i in 0..10u32 {
+                let ph = t * (0.7 + hash(i) * 0.8) + hash(i + 50);
+                let cyc = ph.floor() as u32;
+                let f = ph.fract();
+                let at = Pos2::new(img.left() + img.width() * (0.2 + 0.6 * hash(i * 7 + cyc)), img.top() + img.height() * (0.1 + 0.6 * hash(i * 13 + cyc)));
+                let a = (f * PI).sin() * (0.25 + 0.75 * s);
+                halo(&p, at, 6.0, c, 0.8 * a);
+                p.line_segment([at - Vec2::new(4.0 * a, 0.0), at + Vec2::new(4.0 * a, 0.0)], Stroke::new(1.0_f32, glow(Color32::WHITE, a)));
+                p.line_segment([at - Vec2::new(0.0, 4.0 * a), at + Vec2::new(0.0, 4.0 * a)], Stroke::new(1.0_f32, glow(Color32::WHITE, a)));
+            }
+        }
+        Motion::Bubbles => {
+            let liquid = Rect::from_min_max(Pos2::new(img.left() + img.width() * 0.3, img.top() + img.height() * 0.45), Pos2::new(img.right() - img.width() * 0.3, img.bottom() - img.height() * 0.12));
+            let n = (3.0 + 9.0 * s) as u32;
+            for i in 0..n {
+                let ph = t * (0.4 + 0.5 * hash(i)) + hash(i + 9);
+                let cyc = ph.floor() as u32;
+                let f = ph.fract();
+                let x = liquid.left() + liquid.width() * hash(i * 31 + cyc) + (f * 9.0 + i as f32).sin() * 1.5;
+                let y = liquid.bottom() - liquid.height() * f;
+                p.circle_stroke(Pos2::new(x, y), 1.0 + 1.5 * hash(i + 3), Stroke::new(1.0_f32, glow(c, 0.9 * (1.0 - f))));
+            }
+        }
+        Motion::Eyes(points) => {
+            for (u, v) in points {
+                let at = Pos2::new(img.left() + img.width() * u, img.top() + img.height() * v);
+                let flick = 1.0 + 0.06 * (t * 9.0).sin();
+                halo(&p, at, 6.0 + 10.0 * s, c, (0.25 + 0.75 * s) * flick);
+            }
+        }
+        Motion::Sparks => {
+            let n = (2.0 + 16.0 * s) as u32;
+            let from = Pos2::new(img.center().x, img.top() + img.height() * 0.25);
+            for i in 0..n {
+                let ph = t * (0.8 + 0.8 * hash(i)) + hash(i + 77);
+                let cyc = ph.floor() as u32;
+                let f = ph.fract();
+                let dir = (hash(i * 17 + cyc) - 0.5) * 2.0;
+                let at = Pos2::new(from.x + dir * r.width() * 0.45 * f, from.y - r.height() * 0.5 * f + r.height() * 0.4 * f * f);
+                p.circle_filled(at, 1.2, glow(Color32::from_rgb(0xff, 0xd0, 0x80), 1.0 - f));
+                halo(&p, at, 4.0, c, 0.5 * (1.0 - f));
+            }
+        }
+        Motion::Ripples => {
+            let at = Pos2::new(img.center().x, img.top() + img.height() * 0.62);
+            for i in 0..3 {
+                let f = (t * (0.35 + 0.5 * s) + i as f32 / 3.0).fract();
+                let rr = Vec2::new(img.width() * 0.45 * f, img.height() * 0.14 * f);
+                let pts: Vec<Pos2> = (0..=32).map(|j| j as f32 / 32.0 * TAU).map(|a| Pos2::new(at.x + rr.x * a.cos(), at.y + rr.y * a.sin())).collect();
+                p.add(Shape::line(pts, Stroke::new(1.0_f32, glow(c, (1.0 - f) * (0.3 + 0.6 * s)))));
+            }
+        }
+        Motion::Turn | Motion::Spread | Motion::Breathe | Motion::Tremble | Motion::Rise => {
+            halo(&p, img.center(), img.width() * 0.3, c, 0.12 * s);
+        }
     }
 }
