@@ -28,11 +28,12 @@ pub enum KnobStyle {
 
 #[derive(Clone, Copy)]
 pub struct Skin {
-    /// Behind the sections.
-    pub face: Color32,
     /// The sections.
     pub section: Color32,
     pub knob: KnobStyle,
+    /// The printing on the face (labels, values).
+    pub ink: Color32,
+    pub ink_dim: Color32,
 }
 
 pub enum Ctl {
@@ -93,16 +94,29 @@ thread_local! {
     static COLUMN: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
 }
 
+thread_local! {
+    /// The ink of the face being drawn (labels and values printed on it).
+    static INK: std::cell::Cell<(Color32, Color32)> = const { std::cell::Cell::new((theme::TEXT, theme::TEXT_DIM)) };
+}
+
+fn ink() -> Color32 {
+    INK.with(|c| c.get().0)
+}
+
+fn ink_dim() -> Color32 {
+    INK.with(|c| c.get().1)
+}
+
 fn column() -> Option<f32> {
     COLUMN.with(|c| c.get())
 }
 
 /// Brushed gold (the Soft Clipper).
-const GOLD: Skin = Skin { face: Color32::from_rgb(0x4a, 0x3a, 0x1c), section: Color32::from_rgb(0x5e, 0x4a, 0x24), knob: KnobStyle::Metal };
-const MODERN: Skin = Skin { face: Color32::from_rgb(0x15, 0x18, 0x1e), section: Color32::from_rgb(0x1d, 0x21, 0x29), knob: KnobStyle::Ring };
-const STUDIO: Skin = Skin { face: Color32::from_rgb(0x1a, 0x1c, 0x20), section: Color32::from_rgb(0x26, 0x29, 0x2f), knob: KnobStyle::Metal };
-const CONSOLE: Skin = Skin { face: Color32::from_rgb(0x2e, 0x36, 0x42), section: Color32::from_rgb(0x3a, 0x44, 0x52), knob: KnobStyle::Chicken };
-const VALVE: Skin = Skin { face: Color32::from_rgb(0x24, 0x1e, 0x1a), section: Color32::from_rgb(0x33, 0x2a, 0x24), knob: KnobStyle::Cream };
+const GOLD: Skin = Skin { section: Color32::from_rgb(0x5e, 0x4a, 0x24), knob: KnobStyle::Metal, ink: theme::TEXT, ink_dim: theme::TEXT_DIM };
+const MODERN: Skin = Skin { section: Color32::from_rgb(0x1d, 0x21, 0x29), knob: KnobStyle::Ring, ink: theme::TEXT, ink_dim: theme::TEXT_DIM };
+const STUDIO: Skin = Skin { section: Color32::from_rgb(0x26, 0x29, 0x2f), knob: KnobStyle::Metal, ink: theme::TEXT, ink_dim: theme::TEXT_DIM };
+const CONSOLE: Skin = Skin { section: Color32::from_rgb(0x3a, 0x44, 0x52), knob: KnobStyle::Chicken, ink: theme::TEXT, ink_dim: theme::TEXT_DIM };
+const VALVE: Skin = Skin { section: Color32::from_rgb(0x33, 0x2a, 0x24), knob: KnobStyle::Cream, ink: theme::TEXT, ink_dim: theme::TEXT_DIM };
 
 /// The panel of a stock effect, showing band `band` (1-based) where the effect has bands.
 pub fn panel(id: &str, band: usize) -> Option<Panel> {
@@ -364,6 +378,9 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
         },
         _ => return None,
     };
+    // Every stock effect is an analog unit in its own finish.
+    let mut panel = panel;
+    panel.skin = super::analog::skin(super::analog::finish_of(id));
     Some(panel)
 }
 
@@ -418,6 +435,27 @@ pub fn draw_knob(p: &egui::Painter, c: Pos2, rad: f32, n: f32, style: KnobStyle,
     let arc = |from: f32, to: f32, r: f32| -> Vec<Pos2> { (0..=32).map(|i| from + (to - from) * i as f32 / 32.0).map(|a| pt(a, r)).collect() };
     if active {
         p.circle_filled(c, rad + 5.0, accent.gamma_multiply(0.10));
+    }
+    // The photographed cap of the style, turned to the value, over a printed scale and the value arc.
+    if let Some(cap) = super::analog::knob_cap(p.ctx(), style) {
+        let ink = ink();
+        for t in 0..=10 {
+            let a = a0 + sweep * t as f32 / 10.0;
+            let long = t % 5 == 0;
+            p.line_segment([pt(a, rad + 1.5), pt(a, rad + if long { 6.0 } else { 4.0 })], Stroke::new(if long { 1.4_f32 } else { 1.0_f32 }, ink));
+            if style == KnobStyle::Chicken && rad >= 20.0 && t % 2 == 0 {
+                p.text(pt(a, rad + 12.0), egui::Align2::CENTER_CENTER, format!("{t}"), egui::FontId::proportional(8.0), ink);
+            }
+        }
+        p.add(Shape::line(arc(a0, ang, rad - 0.5), Stroke::new(2.0_f32, accent)));
+        let size = match style {
+            KnobStyle::Chicken => rad * 1.02,
+            _ => rad * 0.92,
+        };
+        p.circle_filled(c + Vec2::new(1.0, size * 0.18), size * 0.9, Color32::from_black_alpha(70));
+        p.circle_filled(c + Vec2::new(0.5, size * 0.08), size * 0.95, Color32::from_black_alpha(60));
+        super::analog::rotated(p, &cap, c, size, ang + PI / 2.0, Color32::WHITE);
+        return;
     }
     match style {
         KnobStyle::Ring => {
@@ -500,10 +538,10 @@ fn knob_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, skin: Skin, acce
     let value = prm.denormalize(n);
     let p = ui.painter_at(rect.expand(4.0));
     let active = r.hovered() || r.dragged();
-    fit_text(&p, Pos2::new(rect.center().x, rect.top() + 1.0), egui::Align2::CENTER_TOP, &label.to_uppercase(), w - 4.0, if big { 10.5 } else { 9.5 }, theme::TEXT);
+    fit_text(&p, Pos2::new(rect.center().x, rect.top() + 1.0), egui::Align2::CENTER_TOP, &label.to_uppercase(), w - 4.0, if big { 10.5 } else { 9.5 }, ink());
     let c = Pos2::new(rect.center().x, rect.top() + 18.0 + rad + 4.0);
     draw_knob(&p, c, rad, n, skin.knob, accent, active);
-    fit_text(&p, Pos2::new(rect.center().x, rect.bottom() - 1.0), egui::Align2::CENTER_BOTTOM, &shown(prm, value), w - 2.0, 10.0, if active { accent } else { theme::TEXT_DIM });
+    fit_text(&p, Pos2::new(rect.center().x, rect.bottom() - 1.0), egui::Align2::CENTER_BOTTOM, &shown(prm, value), w - 2.0, 10.0, if active { accent } else { ink_dim() });
     (r, value)
 }
 
@@ -527,7 +565,7 @@ fn fader_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, accent: Color32
     let value = prm.denormalize(n);
     let p = ui.painter_at(rect.expand(4.0));
     let active = r.hovered() || r.dragged();
-    fit_text(&p, Pos2::new(rect.center().x, rect.top() + 1.0), egui::Align2::CENTER_TOP, &label.to_uppercase(), w + 6.0, 9.5, theme::TEXT);
+    fit_text(&p, Pos2::new(rect.center().x, rect.top() + 1.0), egui::Align2::CENTER_TOP, &label.to_uppercase(), w + 6.0, 9.5, ink());
     p.rect_filled(track, 3.0, Color32::from_rgb(0x0e, 0x10, 0x14));
     // Bipolar ranges fill from the centre.
     let zero = if prm.min < 0.0 && prm.max > 0.0 { prm.normalize(0.0) } else { 0.0 };
@@ -541,7 +579,7 @@ fn fader_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, accent: Color32
     p.rect_filled(cap.translate(Vec2::new(0.0, 2.0)), 3.0, Color32::from_black_alpha(100));
     p.rect_filled(cap, 3.0, if active { Color32::from_gray(230) } else { Color32::from_gray(200) });
     p.line_segment([Pos2::new(cap.left() + 3.0, cap.center().y), Pos2::new(cap.right() - 3.0, cap.center().y)], Stroke::new(1.5_f32, Color32::from_gray(40)));
-    fit_text(&p, Pos2::new(rect.center().x, rect.bottom() - 1.0), egui::Align2::CENTER_BOTTOM, &shown(prm, value), w + 6.0, 10.0, if active { accent } else { theme::TEXT_DIM });
+    fit_text(&p, Pos2::new(rect.center().x, rect.bottom() - 1.0), egui::Align2::CENTER_BOTTOM, &shown(prm, value), w + 6.0, 10.0, if active { accent } else { ink_dim() });
     (r, value)
 }
 
@@ -556,8 +594,11 @@ fn switch_cell(ui: &mut Ui, v: f32, label: &str, accent: Color32) -> (Response, 
         r.mark_changed();
     }
     let p = ui.painter();
-    let fill = if on { accent.gamma_multiply(0.22) } else { Color32::from_rgb(0x14, 0x17, 0x1c) };
-    p.rect_filled(rect, 5.0, fill);
+    // A dark button on any finish, lit by its LED colour when on.
+    p.rect_filled(rect, 5.0, Color32::from_rgb(0x14, 0x17, 0x1c));
+    if on {
+        p.rect_filled(rect, 5.0, accent.gamma_multiply(0.22));
+    }
     p.rect_stroke(rect, 5.0, Stroke::new(1.0_f32, if on { accent } else { Color32::from_white_alpha(r.hovered() as u8 * 30 + 25) }), egui::StrokeKind::Inside);
     let led = Pos2::new(rect.left() + 11.0, rect.center().y);
     if on {
@@ -580,7 +621,7 @@ fn choice_cell(ui: &mut Ui, prm: &ParamInfo, names: &[&str], v: f32, label: &str
             ui.spacing_mut().item_spacing.y = 3.0;
             let limit = column().unwrap_or(300.0);
             let (lr, _) = ui.allocate_exact_size(Vec2::new(total.clamp(CELL_W, 300.0).min(if names.len() <= 5 { 300.0 } else { 170.0 }).min(limit), 12.0), Sense::hover());
-            fit_text(ui.painter(), lr.left_top(), egui::Align2::LEFT_TOP, &label.to_uppercase(), lr.width(), 9.5, theme::TEXT);
+            fit_text(ui.painter(), lr.left_top(), egui::Align2::LEFT_TOP, &label.to_uppercase(), lr.width(), 9.5, ink());
             if names.len() <= 5 && total <= limit {
                 let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(total, 24.0), Sense::click());
                 let p = ui.painter();
@@ -681,18 +722,18 @@ fn bands_width(n: usize) -> f32 {
 }
 
 /// Numbered buttons picking the band the section shows.
-fn band_picker(ui: &mut Ui, n: usize, label: &str, band: &mut usize, accent: Color32, skin: Skin) {
+fn band_picker(ui: &mut Ui, n: usize, label: &str, band: &mut usize, accent: Color32) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
         let (lr, _) = ui.allocate_exact_size(Vec2::new(bands_width(n), 12.0), Sense::hover());
-        fit_text(ui.painter(), lr.left_top(), egui::Align2::LEFT_TOP, &label.to_uppercase(), lr.width(), 9.5, theme::TEXT);
+        fit_text(ui.painter(), lr.left_top(), egui::Align2::LEFT_TOP, &label.to_uppercase(), lr.width(), 9.5, ink());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for b in 1..=n {
                 let sel = *band == b;
                 let (r, resp) = ui.allocate_exact_size(Vec2::new(26.0, 24.0), Sense::click());
                 let p = ui.painter();
-                p.rect_filled(r, 4.0, if sel { accent.gamma_multiply(0.35) } else { skin.face });
+                p.rect_filled(r, 4.0, if sel { accent.gamma_multiply(0.35) } else { Color32::from_rgb(0x14, 0x17, 0x1c) });
                 p.rect_stroke(r, 4.0, Stroke::new(1.0_f32, if sel { accent } else { Color32::from_white_alpha(if resp.hovered() { 50 } else { 20 }) }), egui::StrokeKind::Inside);
                 p.text(r.center(), egui::Align2::CENTER_CENTER, format!("{b}"), egui::FontId::proportional(11.0), if sel { Color32::WHITE } else { theme::TEXT_DIM });
                 if resp.clicked() {
@@ -731,16 +772,12 @@ pub struct View<'a> {
 /// Draws the effect's panel. `band` is the band shown (picked here when the effect has bands); `touch`
 /// gets every control's response with its new value (apply it when `resp.changed()`); `custom` draws the
 /// layout's custom cells.
-/// The finish of an effect's panel (its faceplate colour, group colour and knobs).
-pub fn skin_of(id: &str) -> Option<Skin> {
-    panel(id, 1).map(|p| p.skin)
-}
-
 pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mut Ui, Touch), custom: &mut dyn FnMut(&mut Ui, &str)) -> bool {
     let View { def, params, accent, salt } = view;
     let mut rects: Vec<(String, Rect)> = Vec::new();
     let Some(panel) = panel(def.id, *band) else { return false };
     let skin = panel.skin;
+    INK.with(|c| c.set((skin.ink, skin.ink_dim)));
     // The editor draws the faceplate (skin.face) around the display and this panel: here only the groups,
     // engraved into it.
     egui::Frame::NONE.show(ui, |ui| {
@@ -779,6 +816,7 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                 }
             }
         }
+        let main_accent = accent;
         let mut draw = |ui: &mut Ui, k: usize, inner: f32, accent: Color32, dim: bool| {
             let s = &panel.sections[k];
             ui.scope(|ui| {
@@ -788,7 +826,7 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                 egui::Frame::NONE.fill(skin.section).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).stroke(Stroke::new(1.0_f32, Color32::from_black_alpha(90))).show(ui, |ui| {
                     ui.set_width(inner);
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(s.title.to_uppercase()).size(10.0).strong().color(accent));
+                        ui.label(egui::RichText::new(s.title.to_uppercase()).size(10.0).strong().color(if accent == main_accent { skin.ink } else { accent }));
                         // A lone control named like its section needs no label of its own.
                         let lone = s.ctls.len() == 1;
                         let mut cell = |ui: &mut Ui, c: &Ctl| {
@@ -799,7 +837,7 @@ pub fn show(ui: &mut Ui, view: View, band: &mut usize, touch: &mut dyn FnMut(&mu
                                 }
                                 Ctl::Bands => {
                                     if let Some((n, label)) = panel.bands {
-                                        band_picker(ui, n, label, band, accent, skin);
+                                        band_picker(ui, n, label, band, accent);
                                     }
                                     return;
                                 }

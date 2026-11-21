@@ -380,16 +380,6 @@ fn info_dot(ui: &mut Ui, text: &str, accent: egui::Color32) {
     iresp.on_hover_text(text);
 }
 
-/// Four screws in the corners of a faceplate.
-fn screws(ui: &Ui, r: egui::Rect, face: egui::Color32) {
-    let p = ui.painter();
-    for c in [r.left_top() + egui::vec2(7.0, 7.0), r.right_top() + egui::vec2(-7.0, 7.0), r.left_bottom() + egui::vec2(7.0, -7.0), r.right_bottom() + egui::vec2(-7.0, -7.0)] {
-        p.circle_filled(c, 3.2, shade(face, 1.9));
-        p.circle_stroke(c, 3.2, egui::Stroke::new(0.8_f32, shade(face, 0.5)));
-        p.line_segment([c + egui::vec2(-2.0, 1.2), c + egui::vec2(2.0, -1.2)], egui::Stroke::new(0.9_f32, shade(face, 0.6)));
-    }
-}
-
 pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let Some(ins) = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).cloned() else { return };
     let gr = st.audio.meters().snapshot().gain_reduction.get(&i).copied().unwrap_or(0.0);
@@ -399,7 +389,7 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     // Header, after the design reference: colour stripe, "Dragon <name> | category", A/B compare, power
     // button and the mix knob.
     let fx_name = effects::find(&ins.effect).map(|d| d.name.to_string()).or_else(|| ins.plugin.as_ref().map(|p| p.name.clone())).unwrap_or_default();
-    let brand = if fx_name.starts_with("Dragon") || ins.plugin.is_some() { fx_name.clone() } else { format!("Dragon {fx_name}") };
+    let brand = fx_name.clone();
     egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
         ui.horizontal(|ui| {
             // The controls are laid out first (from the right); the name takes what is left and is shortened
@@ -504,8 +494,16 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     let tele = st.audio.meters().snapshot().fx_data.get(&i).cloned().unwrap_or_else(|| vec![-1.0]);
     // The device: display and controls on one faceplate in the effect's own finish – the display in its
     // bezel, the control groups engraved into the same face, screws in the corners.
-    let face = super::fx_panel::skin_of(def.id).map(|s| s.face).unwrap_or(theme::PANEL);
-    let dev = egui::Frame::NONE.fill(face).corner_radius(10.0).inner_margin(egui::Margin { left: 14, right: 14, top: 8, bottom: 12 }).stroke(egui::Stroke::new(1.0_f32, shade(face, 1.6))).show(ui, |ui| {
+    // An analog rack unit: the faceplate (painted behind once its size is known), the nameplate with
+    // lamp and VU meters, then the display and the controls.
+    let finish = super::analog::finish_of(def.id);
+    let face = finish.base();
+    let plate_at = ui.painter().add(egui::Shape::Noop);
+    let ear = super::analog::EAR as i8;
+    let level = st.audio.meters().snapshot().strips.get(&m).copied().unwrap_or((0.0, 0.0));
+    let dev = egui::Frame::NONE.inner_margin(egui::Margin { left: 14 + ear, right: 14 + ear, top: 8, bottom: 14 }).show(ui, |ui| {
+        super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: ins.enabled, gr, level, time, key: egui::Id::new(("fx.unit", m, i)) });
+        ui.add_space(6.0);
         let bezel = egui::Frame::NONE.fill(egui::Color32::from_rgb(0x08, 0x09, 0x0b)).corner_radius(7.0).inner_margin(egui::Margin::same(3)).stroke(egui::Stroke::new(2.0_f32, shade(face, 0.55)));
         let (edits, _) =
             bezel.show(ui, |ui| super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) })).inner;
@@ -538,7 +536,12 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             }
         });
         if def.id == "eq" && super::fx_panel::panel("eq", 1).is_some() {
-            eq_compare(ui, st, m, i, &ins);
+            // A recessed strip in the plate, so its controls read on any finish.
+            egui::Frame::NONE.fill(egui::Color32::from_black_alpha(150)).corner_radius(5.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                eq_compare(ui, st, m, i, &ins);
+            });
+            ui.add_space(6.0);
         }
         let params = ins.params.clone();
         let shown = {
@@ -588,7 +591,7 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         ui.data_mut(|d| d.insert_temp(band_key, band));
         shown
     });
-    screws(ui, dev.response.rect, face);
+    ui.painter().set(plate_at, egui::Shape::Vec(super::analog::faceplate(ui.ctx(), dev.response.rect, finish)));
     let shown = dev.inner;
     if !shown {
         // Group "Band 3 freq" / "Band 3 gain" … into one row per band, and parameters sharing a first word
@@ -609,7 +612,12 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             let n = dragon_engine::effects::eq::EQ_BANDS;
             let on = |b: usize| effects::value(def, &ins.params, &format!("b{b}_on")) > 0.5;
             let mut sel: usize = ui.data(|d| d.get_temp(eq_sel_key)).unwrap_or_else(|| (1..=n).find(|b| on(*b)).unwrap_or(1));
-            eq_compare(ui, st, m, i, &ins);
+            // A recessed strip in the plate, so its controls read on any finish.
+            egui::Frame::NONE.fill(egui::Color32::from_black_alpha(150)).corner_radius(5.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                eq_compare(ui, st, m, i, &ins);
+            });
+            ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Band").small());
                 for b in 1..=n {
