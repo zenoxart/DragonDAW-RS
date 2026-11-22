@@ -1772,6 +1772,27 @@ fn chrono_like_stamp() -> String {
 
 impl State {
     /// Adds a stock effect to the master and opens its editor.
+    /// Adds the first effect of plugin file `path` to the master and opens its window (scripted tests).
+    pub fn open_plugin_on_master(&mut self, path: &Path) {
+        let format = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("clap")) { dragon_engine::model::PluginFormat::Clap } else { dragon_engine::model::PluginFormat::Vst3 };
+        let infos = match dragon_engine::plugins::scan_file(format, path) {
+            Ok(i) => i,
+            Err(e) => {
+                tracing::error!("smoke plugin {}: {e}", path.display());
+                return;
+            }
+        };
+        let Some(info) = infos.iter().find(|i| !i.instrument).or(infos.first()) else { return };
+        let r = info.to_ref();
+        let m = self.session.project.mixer.master.id;
+        let iid = self.session.edit("Add plugin", |p| {
+            let iid = p.next_id();
+            p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(r), preset: String::new(), mods: Vec::new() });
+            iid
+        });
+        self.ui.effect_windows.push((m, iid));
+    }
+
     pub fn open_effect_on_master(&mut self, id: &str) {
         let Some(def) = dragon_engine::effects::find(id) else { return };
         let m = self.session.project.mixer.master.id;

@@ -1784,3 +1784,92 @@ fn a_short_sample_dragged_from_the_browser_lands_in_the_playlist() {
     let clip = clip.expect("the sample landed on the track it was dropped on");
     assert!((clip.start - 8.0).abs() < 0.3, "at the drop point: {}", clip.start);
 }
+
+// ------------------------------------------------------------------------------------------------ gestures
+
+/// The master's 3D spectrum turns with a left-drag (yaw across, tilt up / down) and a double-click resets it.
+#[test]
+fn master_spectrum_rotates_with_a_drag() {
+    let mut h = Harness::new();
+    h.idle(super::master::show, 3);
+    let r = h.rect("master.spectrum3d.rect");
+    let view = |h: &Harness| h.ctx.data(|d| d.get_temp::<(f32, f32)>(egui::Id::new("master.spectrum3d.view"))).unwrap();
+    let before = view(&h);
+    h.drag(super::master::show, r.center(), r.center() + egui::vec2(120.0, 40.0), PointerButton::Primary, Modifiers::NONE);
+    let after = view(&h);
+    assert!(after.0 > before.0 + 0.5, "yaw turned: {before:?} → {after:?}");
+    assert!(after.1 > before.1 + 0.1, "tilted: {before:?} → {after:?}");
+    // Double-click: back to the starting view.
+    let c = r.center();
+    for _ in 0..2 {
+        h.frame(super::master::show, vec![Event::PointerButton { pos: c, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], Modifiers::NONE);
+        h.frame(super::master::show, vec![Event::PointerButton { pos: c, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    }
+    h.idle(super::master::show, 1);
+    assert_eq!(view(&h), before, "double-click resets the view");
+}
+
+/// Arrow keys in the playlist: with clips selected they move the clips, without they scroll the view.
+#[test]
+fn playlist_arrow_keys_move_clips_or_scroll() {
+    let mut h = Harness::new();
+    h.st.ui.editor = crate::state::Editor::Playlist;
+    let run = |h: &mut Harness, id: &str| {
+        let ctx = h.ctx.clone();
+        crate::commands::execute(&mut h.st, id, &ctx);
+    };
+    // Nothing selected: Right scrolls a bar, Down a track.
+    h.st.ui.clips.clear();
+    let (x0, y0) = (h.st.ui.pl_x, h.st.ui.pl_y);
+    run(&mut h, "dragon.nav.right");
+    run(&mut h, "dragon.rack.down");
+    assert!(h.st.ui.pl_x > x0 && h.st.ui.pl_y > y0, "scrolled: {} {}", h.st.ui.pl_x, h.st.ui.pl_y);
+    run(&mut h, "dragon.nav.left");
+    assert!((h.st.ui.pl_x - x0).abs() < 1e-9, "back");
+    // A clip selected: Right moves it later.
+    let (cid, start) = h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| (c.id, c.start)).next().expect("the demo has clips");
+    h.st.ui.clips = vec![cid];
+    run(&mut h, "dragon.nav.right");
+    let now = h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == cid).unwrap().start;
+    assert!(now > start, "the clip moved right: {start} → {now}");
+}
+
+/// Audio repair zooms like the playlist: Ctrl + right-drag a box zooms into it, Ctrl + right-click zooms
+/// out, middle-drag pans.
+#[test]
+fn repair_area_zoom_and_pan() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("tone.wav");
+    let s: Vec<f32> = (0..48000 * 4).map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 48000.0).sin() * 0.3).collect();
+    // (Loading analyses the clip in the background: slow in debug builds.)
+    dragon_engine::samples::write_wav(&f, &s, &s, 48000, dragon_engine::samples::BitDepth::Float32, false, false).unwrap();
+    let mut h = Harness::new();
+    h.st.add_audio_clip_at(&f, None, 0.0);
+    let cid = h.st.ui.clips[0];
+    super::repair::open_with(&mut h.st, cid, super::repair::Tool::Denoise);
+    for _ in 0..1200 {
+        h.idle(super::repair::show, 1);
+        if h.st.ui.repair.data.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(h.st.ui.repair.data.is_some(), "the clip loaded");
+    h.idle(super::repair::show, 2);
+    let plot = h.rect("repair.spectrum");
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    // Box over the second quarter of the clip.
+    let a = Pos2::new(plot.left() + plot.width() * 0.25, plot.top() + 20.0);
+    let b = Pos2::new(plot.left() + plot.width() * 0.5, plot.bottom() - 20.0);
+    h.drag(super::repair::show, a, b, PointerButton::Secondary, ctrl);
+    let (t0, t1) = h.st.ui.repair.view.expect("zoomed in");
+    assert!((t0 - 1.0).abs() < 0.15 && (t1 - 2.0).abs() < 0.15, "the box became the view: {t0:.2} … {t1:.2}");
+    // Middle-drag to the left: the view moves later in time.
+    h.drag(super::repair::show, plot.center(), plot.center() - egui::vec2(plot.width() * 0.25, 0.0), PointerButton::Middle, Modifiers::NONE);
+    let (p0, _) = h.st.ui.repair.view.unwrap();
+    assert!(p0 > t0 + 0.1, "panned: {t0:.2} → {p0:.2}");
+    // Ctrl + right-click: zooms out.
+    h.click(super::repair::show, plot.center(), PointerButton::Secondary, ctrl);
+    let w = h.st.ui.repair.view.map(|v| v.1 - v.0).unwrap_or(4.0);
+    assert!(w > (t1 - t0) * 1.5, "zoomed out: width {w:.2}");
+}

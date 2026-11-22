@@ -61,6 +61,7 @@ fn main() -> eframe::Result {
                 && crashed.is_none()
                 && std::env::var_os("DRAGON_STARTUP_COMMANDS").is_none()
                 && std::env::var_os("DRAGON_OPEN_FX").is_none()
+                && std::env::var_os("DRAGON_SMOKE_PLUGIN").is_none()
                 && std::env::var_os("DRAGON_OPEN_REPAIR").is_none()
                 && std::env::var_os("DRAGON_OPEN_CLIP").is_none();
             match (open, &crashed) {
@@ -80,6 +81,11 @@ fn main() -> eframe::Result {
             }
             if let Ok(id) = std::env::var("DRAGON_OPEN_FX") {
                 st.open_effect_on_master(&id);
+            }
+            // DRAGON_SMOKE_PLUGIN=<.clap / .vst3> puts the plugin's first effect on the master and opens its
+            // own window (the CI close test: plugin editors open while the app closes).
+            if let Ok(path) = std::env::var("DRAGON_SMOKE_PLUGIN") {
+                st.open_plugin_on_master(std::path::Path::new(&path));
             }
             // DRAGON_OPEN_CLIP=<audio file> puts the file on a track and opens its clip window.
             if let Ok(path) = std::env::var("DRAGON_OPEN_CLIP") {

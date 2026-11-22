@@ -201,7 +201,10 @@ fn spectrum_3d(ui: &mut Ui, scope: &[f32], rate: f32, animate: bool) {
     if resp.double_clicked() {
         (yaw, pitch) = DEFAULT_VIEW;
     }
-    ui.data_mut(|d| d.insert_temp(view_id, (yaw, pitch)));
+    ui.data_mut(|d| {
+        d.insert_temp(view_id, (yaw, pitch));
+        d.insert_temp(egui::Id::new("master.spectrum3d.rect"), rect);
+    });
     let resp = resp.on_hover_text("Drag to rotate · double-click to reset the view");
     let _ = resp;
     let p = ui.painter_at(rect);

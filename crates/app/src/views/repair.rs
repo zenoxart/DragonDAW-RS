@@ -81,7 +81,7 @@ pub struct RepairUi {
     sel: Option<Selection>,
     drag_from: Option<(f64, f32)>,
     /// The visible time range (seconds); `None` = the whole clip.
-    view: Option<(f64, f64)>,
+    pub(crate) view: Option<(f64, f64)>,
     /// The visible pitch range of the note editor (MIDI).
     pitch_view: Option<(f32, f32)>,
     // Settings.
@@ -104,7 +104,7 @@ pub struct RepairUi {
     compare: bool,
     // The clip's audio and its pictures (for one source file).
     source: Option<PathBuf>,
-    data: Option<Arc<AudioData>>,
+    pub(crate) data: Option<Arc<AudioData>>,
     spectro: Option<egui::TextureHandle>,
     wave: Vec<(f32, f32)>,
     loading: Option<Arc<Mutex<Option<Loaded>>>>,
@@ -761,6 +761,7 @@ fn wheel(ui: &Ui, st: &mut State, data: &AudioData, r: Rect, left: f32, notes: b
 /// Playlist navigation in the repair views: Ctrl + right-drag zooms into a box (time; pitch too in
 /// the notes view), Ctrl + right-click zooms out, middle-drag pans.
 fn nav_gestures(ui: &Ui, st: &mut State, data: &AudioData, plot: Rect, notes: bool, key: &str) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::new(key), plot));
     let dur = data.duration().max(1e-3);
     let (t0, t1) = view_range(st, data);
     let t_of = |x: f32| t0 + (((x - plot.left()) / plot.width()).clamp(0.0, 1.0) as f64) * (t1 - t0);

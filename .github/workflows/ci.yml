@@ -63,6 +63,25 @@ jobs:
         run: |
           cargo build -p dragon-test-plugins --locked
           cargo test -p dragon-test-plugins --locked
+      # Close test on a real Windows desktop: the app opens the demo, plays, opens a plugin's own window
+      # and closes itself; it must exit cleanly (the "crash on close" scenario), three times.
+      - name: Close smoke test (plugin window open)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build -p dragon-daw --locked
+          Copy-Item target/debug/dragon_test_plugins.dll "$env:RUNNER_TEMP/dragon_test.clap"
+          $env:DRAGON_STARTUP_COMMANDS = "file.new_demo,transport.play"
+          $env:DRAGON_SMOKE_PLUGIN = "$env:RUNNER_TEMP/dragon_test.clap"
+          $env:DRAGON_SMOKE_CLOSE_AFTER = "8"
+          foreach ($run in 1..3) {
+            $p = Start-Process -FilePath target/debug/dragon-daw.exe -PassThru -NoNewWindow
+            if (-not $p.WaitForExit(90000)) { $p.Kill(); throw "run ${run}: the app did not close" }
+            if ($p.ExitCode -ne 0) { throw "run ${run}: exit code $($p.ExitCode)" }
+            Write-Host "run ${run}: closed cleanly"
+          }
+          $crash = Join-Path $env:LOCALAPPDATA "DragonDAW/Crash/last-crash.txt"
+          if (Test-Path $crash) { Get-Content $crash; throw "a crash report was written" }
 
   msrv:
     name: MSRV (1.89)

@@ -337,6 +337,16 @@ impl eframe::App for DragonApp {
             theme::apply(ctx);
             self.styled = true;
         }
+        // DRAGON_SMOKE_CLOSE_AFTER=<seconds>: closes the app by itself (the CI close test), without the
+        // unsaved-changes question, exactly as the window's close button would.
+        if let Some(secs) = std::env::var("DRAGON_SMOKE_CLOSE_AFTER").ok().and_then(|v| v.parse::<f64>().ok()) {
+            if ctx.input(|i| i.time) > secs && !self.quit_confirmed {
+                tracing::info!("smoke test: closing the window");
+                self.quit_confirmed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.st.session.history.is_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_quit = true;
