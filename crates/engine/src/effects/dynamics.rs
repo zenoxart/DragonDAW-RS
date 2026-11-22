@@ -1,4 +1,4 @@
-//! Dynamics: compressor (with sidechain), 4-band multiband dynamics (Pro-MB style), gate (Pro-G style), true-peak limiter,
+//! Dynamics: compressor (with sidechain), 4-band multiband dynamics, gate, true-peak limiter,
 //! de-esser and transient shaper.
 
 use super::{Effect, EffectDef, ParamInfo};
@@ -72,7 +72,7 @@ pub struct Compressor {
     steady: PeakHold,
 }
 
-/// Compressor styles after FabFilter Pro-C: detector, knee, release behaviour and feedback differ.
+/// Compressor styles: detector, knee, release behaviour and feedback differ.
 pub const COMP_STYLES: &[&str] = &["Clean", "Classic", "Opto", "Vocal", "Mastering", "Bus", "Punch", "Pumping"];
 
 struct StyleSpec {
@@ -303,7 +303,7 @@ impl Crossover {
     }
 }
 
-/// Multiband dynamics after Pro-MB: up to four bands (Linkwitz–Riley crossovers, all-pass compensated), each
+/// Multiband dynamics: up to four bands (Linkwitz–Riley crossovers, all-pass compensated), each
 /// compressing or expanding, downward or upward, with threshold, range (the most gain change), ratio, knee,
 /// attack, release, gain, solo and bypass; global mix and output.
 pub const MB_MODES: &[&str] = &["Compress", "Expand", "Upward compress", "Upward expand"];
@@ -329,7 +329,7 @@ macro_rules! mb_band {
 const MB_PB: usize = 11;
 /// Global parameters before the bands.
 const MB_G: usize = 7;
-/// Pro-MB's processing modes: crossover bands (linear-phase sum, all-pass compensated) or dynamic
+/// Processing modes: crossover bands (linear-phase sum, all-pass compensated) or dynamic
 /// phase (each band is a dynamic shelf / bell on the full signal: no phase shift at all while a band
 /// does nothing).
 pub const MB_PHASE: &[&str] = &["Crossover", "Dynamic phase"];
@@ -630,8 +630,7 @@ pub fn multiband_def() -> EffectDef {
         id: "multiband",
         name: "Quintessence (multiband dynamics)",
         category: "Dynamics",
-        description:
-            "Multiband dynamics after Pro-MB: up to four bands, each compressing or expanding (downward or upward) with threshold, range, ratio, knee, attack, release, gain, solo, bypass and per-band external sidechain.",
+        description: "Multiband dynamics: up to four bands, each compressing or expanding (downward or upward) with threshold, range, ratio, knee, attack, release, gain, solo, bypass and per-band external sidechain.",
         params: &MB_PARAMS,
         uses_sidechain: true,
         create: |rate| {
@@ -656,7 +655,7 @@ pub fn multiband_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ gate
 
-/// Gate / expander after Pro-G: threshold with hysteresis, range, ratio (gate … gentle expander), knee,
+/// Gate / expander: threshold with hysteresis, range, ratio (gate … gentle expander), knee,
 /// attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters,
 /// external sidechain, flip (ducking) and mix.
 pub const GATE_STYLES: &[&str] = &["Classic", "Clean", "Vocal", "Guitar", "Upward"];
@@ -830,7 +829,8 @@ pub fn gate_def() -> EffectDef {
         id: "gate",
         name: "Portcullis (gate)",
         category: "Dynamics",
-        description: "Gate / expander after Pro-G: threshold with hysteresis, range, ratio, knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix.",
+        description:
+            "Gate / expander: threshold with hysteresis, range, ratio, knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix.",
         params: GATE_PARAMS,
         uses_sidechain: true,
         create: |rate| {
@@ -885,7 +885,7 @@ const LIMITER_PARAMS: &[ParamInfo] = &[
     ParamInfo::toggle("unity", "Unity-gain listen", false),
 ];
 
-/// Limiter styles after FabFilter Pro-L: how fast the gain recovers, how hard the attack is smoothed and
+/// Limiter styles: how fast the gain recovers, how hard the attack is smoothed and
 /// whether a soft clipper takes the first peaks.
 pub const LIMITER_STYLES: &[&str] = &["Allround", "Transparent", "Punchy", "Dynamic", "Aggressive", "Modern", "Bus", "Safe"];
 
@@ -931,7 +931,7 @@ impl Effect for Limiter {
         for i in 0..l.len() {
             let (mut a, mut b) = (l[i] * self.gain_in, r[i] * self.gain_in);
             if clip > 0.0 {
-                // Soft clipper before the limiter (takes the sharpest peaks, Pro-L "Aggressive"/"Modern").
+                // Soft clipper before the limiter (takes the sharpest peaks, the "Aggressive" / "Modern" styles).
                 let c = |x: f32| {
                     let k = self.ceiling * (1.0 + clip);
                     if x.abs() > self.ceiling * (1.0 - clip) {
@@ -995,7 +995,7 @@ fn limiter_core(rate: f32) -> Limiter {
     }
 }
 
-/// The limiter with Pro-L style oversampling: the core runs at 1×, 2× or 4× the rate (gain changes alias
+/// The limiter with oversampling: the core runs at 1×, 2× or 4× the rate (gain changes alias
 /// less, inter-sample peaks are caught), behind half-band filters; a level / gain-reduction history for the
 /// display.
 pub struct OversampledLimiter {
@@ -1005,7 +1005,7 @@ pub struct OversampledLimiter {
     up_l: Vec<f32>,
     up_r: Vec<f32>,
     tele: [f32; 3],
-    /// Unity-gain listening (Pro-L): the output drops by the input gain, so only the limiting is heard.
+    /// Unity-gain listening: the output drops by the input gain, so only the limiting is heard.
     unity: bool,
 }
 
@@ -1282,7 +1282,7 @@ pub fn deesser_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ transient shaper
 
-/// Attack shapes (after Waves Smack Attack's manual): Needle – very sharp rise and fall; Nail – sharp rise,
+/// Attack shapes : Needle – very sharp rise and fall; Nail – sharp rise,
 /// slower sloped fall; Blunt – slower at both ends, for non-percussive sources.
 pub const TS_SHAPES: &[&str] = &["Needle", "Nail", "Blunt"];
 /// Sustain shapes: Linear; Non-linear (the curve follows the sustain amount); Soft linear (smooth ends).
@@ -1314,7 +1314,7 @@ pub fn ts_sus_shape(k: usize, x: f32, amount: f32) -> f32 {
     }
 }
 
-/// Guard modes (Smack Attack): Off, Clip (hard clip, output never above −0.1 dBFS), Limit (fast limiter to
+/// Guard modes: Off, Clip (hard clip, output never above −0.1 dBFS), Limit (fast limiter to
 /// −0.1 dBFS); Soft clip is ours.
 pub const TS_GUARDS: &[&str] = &["Off", "Clip", "Limit", "Soft clip"];
 
@@ -1486,7 +1486,7 @@ pub fn transient_def() -> EffectDef {
         id: "transient",
         name: "Talon (transient shaper)",
         category: "Dynamics",
-        description: "Transient designer after Waves Smack Attack: attack (Needle / Nail / Blunt) and sustain (Linear / Non-linear / Soft linear) sections with level, sensitivity, duration and shape, mix, output, and a guard (Off / Clip / Limit / Soft clip) after the output.",
+        description: "Transient designer: attack (Needle / Nail / Blunt) and sustain (Linear / Non-linear / Soft linear) sections with level, sensitivity, duration and shape, mix, output, and a guard (Off / Clip / Limit / Soft clip) after the output.",
         params: TS_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(TransientShaper::new(rate)),
@@ -1518,7 +1518,7 @@ mod tests {
         (0..n).map(|i| (i as f32 / 48000.0 * f * std::f32::consts::TAU).sin() * amp).collect()
     }
 
-    /// Pro-MB: idle bands sum flat; one band compressing touches only its range; solo isolates a band;
+    /// Idle bands sum flat; one band compressing touches only its range; solo isolates a band;
     /// upward compression lifts a quiet band.
     #[test]
     fn multiband_bands_modes_and_solo() {
@@ -1563,7 +1563,7 @@ mod tests {
         assert!(rms_of(&y[24000..]) > rms_of(&hi[24000..]) * 0.9, "high band untouched");
     }
 
-    /// Pro-G: closes on quiet input down to the range, opens on loud; flip ducks instead; the external
+    /// The gate closes on quiet input down to the range, opens on loud; flip ducks instead; the external
     /// sidechain keys it; look-ahead reports latency; the expander ratio cuts less than a gate.
     #[test]
     fn gate_range_flip_sidechain_and_lookahead() {
@@ -1695,7 +1695,7 @@ mod tests {
         crate::effects::create(id, 48000.0, &p).unwrap()
     }
 
-    /// Pro-C-style look-ahead: reported as latency, and the compressor is already reducing when the
+    /// Look-ahead: reported as latency, and the compressor is already reducing when the
     /// delayed hit arrives; without it the first samples of the hit pass at full level.
     #[test]
     fn compressor_lookahead_catches_the_attack() {
@@ -1764,7 +1764,7 @@ mod tests {
         }
     }
 
-    /// Smack Attack's manual: Needle and Nail rise instantly (Nail falls more slowly), Blunt rises slowly;
+    /// Attack shapes: Needle and Nail rise instantly (Nail falls more slowly), Blunt rises slowly;
     /// the guard's Clip and Limit keep the output at −0.1 dBFS, after the output control.
     #[test]
     fn transient_shapes_and_guard_follow_smack_attack() {

@@ -478,7 +478,7 @@ fn transport(ui: &mut egui::Ui, st: &mut State) {
     super::transport::show(ui, st);
 }
 
-/// FL-style tempo display: dragging the whole number changes whole BPM and keeps the decimals; dragging
+/// Tempo display: dragging the whole number changes whole BPM and keeps the decimals; dragging
 /// the decimals changes only the decimals. Each drag is one undo step.
 #[test]
 fn bpm_display_drags_whole_numbers_or_decimals() {
@@ -502,7 +502,7 @@ fn bpm_display_drags_whole_numbers_or_decimals() {
     assert!((h.st.session.project.bpm - 150.25).abs() < 1e-6, "{}", h.st.session.project.bpm);
 }
 
-/// FL-style playlist selection: Ctrl + drag box-selects across tracks, Shift + drag on a clip clones the
+/// Playlist selection: Ctrl + drag box-selects across tracks, Shift + drag on a clip clones the
 /// selection, and dragging a multi-track selection moves every clip by the same number of tracks.
 #[test]
 fn playlist_box_select_clone_and_multi_track_move() {
@@ -522,7 +522,7 @@ fn playlist_box_select_clone_and_multi_track_move() {
     let sx = h.st.ui.pl_x as f32;
     let x = |beat: f32| t.left() + (beat - sx) * zoom;
     let row_h = h.st.session.project.tracks[0].height.clamp(28.0, 200.0) * h.st.ui.pl_vzoom;
-    // Ctrl + drag a box over both clips (it starts on a clip: still a selection, FL style).
+    // Ctrl + drag a box over both clips (it starts on a clip: still a selection).
     h.drag(playlist, Pos2::new(x(0.5), t.top() + 8.0), Pos2::new(x(2.0), t.top() + row_h + 8.0), PointerButton::Primary, Modifiers::CTRL);
     assert_eq!(h.st.ui.clips.len(), 2, "both clips selected");
     let total = |h: &Harness| h.st.session.project.tracks.iter().map(|t| t.clips.len()).sum::<usize>();
@@ -563,7 +563,7 @@ fn picker_drags_several_selected_items() {
     assert!(has(0, a) && has(1, b), "one per track: {:?}", tracks.iter().map(|t| t.clips.len()).collect::<Vec<_>>());
 }
 
-/// FL shortcuts: the gestures are bound to the right commands.
+/// shortcuts: the gestures are bound to the right commands.
 #[test]
 fn shortcuts_follow_fl_studio() {
     let mut h = Harness::new();
@@ -655,7 +655,7 @@ fn shortcuts_follow_fl_studio() {
     }
 }
 
-/// Ctrl+Alt+Z undoes, pressed again it redoes (FL's toggle), Ctrl+Z keeps stepping back; copy / paste of clips.
+/// Ctrl+Alt+Z undoes, pressed again it redoes (the toggle), Ctrl+Z keeps stepping back; copy / paste of clips.
 /// The metronome toggles in every editor (in the piano roll it used to open a MIDI file dialog).
 #[test]
 fn metronome_toggles_in_the_piano_roll() {
@@ -721,7 +721,7 @@ fn undo_toggle_and_clip_clipboard() {
     assert_eq!(h.st.ui.clips.len(), n, "pasted clips are selected");
 }
 
-/// FL slice tool in the piano roll: a dragged line cuts every note it crosses, where it crosses.
+/// slice tool in the piano roll: a dragged line cuts every note it crosses, where it crosses.
 #[test]
 fn piano_roll_knife_cuts_crossed_notes() {
     let a = Note { pitch: 60, start: 0, length: PPQ * 4, velocity: 0.8, ..Default::default() };
@@ -742,7 +742,7 @@ fn piano_roll_knife_cuts_crossed_notes() {
     }
 }
 
-/// FL slice tool in the playlist: a line dragged down across two tracks cuts both clips at that beat.
+/// slice tool in the playlist: a line dragged down across two tracks cuts both clips at that beat.
 #[test]
 fn playlist_knife_cuts_across_tracks() {
     let mut h = Harness::new();
@@ -768,7 +768,7 @@ fn playlist_knife_cuts_across_tracks() {
     }
 }
 
-/// FL note and clip commands: glue, chop, invert, mute, Shift+arrows, Backspace snap.
+/// note and clip commands: glue, chop, invert, mute, Shift+arrows, Backspace snap.
 #[test]
 fn fl_note_and_clip_commands() {
     let a = Note { pitch: 60, start: 0, length: PPQ, velocity: 0.8, ..Default::default() };
@@ -811,7 +811,7 @@ fn fl_note_and_clip_commands() {
     assert_eq!(h.st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == clip)).unwrap().id, t0);
 }
 
-/// Number keys follow FL's context: mute / solo channels in the rack, 7 / 8 / 9 transpose and reverse
+/// Number keys by context: mute / solo channels in the rack, 7 / 8 / 9 transpose and reverse
 /// clips in the playlist; Ctrl+Insert / Ctrl+Delete add or remove time; the piano-roll tool window.
 #[test]
 fn fl_context_keys_and_tools() {
@@ -875,7 +875,7 @@ fn shortcuts_do_not_collide() {
     }
 }
 
-/// FL's channel-rack keys (clone, group, zip, move, route, delete) and piano-roll keys (channel stepping,
+/// the channel-rack keys (clone, group, zip, move, route, delete) and piano-roll keys (channel stepping,
 /// groups, colour selection, event lane) and playlist clip groups.
 #[test]
 fn fl_rack_piano_and_group_keys() {
@@ -1002,7 +1002,7 @@ fn fl_ctrl_i_shift_m_and_bars() {
     run(&mut h, "transport.next_bar");
 }
 
-/// Slice tool right-drag (FL: slice and delete the smaller piece): a cut at 1 beat into a 4-beat note
+/// Slice tool right-drag (: slice and delete the smaller piece): a cut at 1 beat into a 4-beat note
 /// keeps only the 3-beat part; in the playlist the same on clips.
 #[test]
 fn knife_right_drag_deletes_the_smaller_piece() {
@@ -1035,7 +1035,7 @@ fn knife_right_drag_deletes_the_smaller_piece() {
     assert_eq!(parts, vec![(0.0, 6.0)], "the 2-beat piece is gone");
 }
 
-/// FL's side-specific mouse shortcuts: Right-Shift+click slices (playlist and piano roll), Right-Shift +
+/// the side-specific mouse shortcuts: Right-Shift+click slices (playlist and piano roll), Right-Shift +
 /// right-click slices and deletes the smaller piece, Right-Alt+click mutes, Left-Shift while resizing
 /// ripples the following clips; the numeric-pad 0 does not mute channel 10.
 #[test]
@@ -1093,7 +1093,7 @@ fn fl_side_modifier_mouse_shortcuts() {
     h.drag(playlist, edge, Pos2::new(x_at(&h, 10.0) - 2.0, y), PointerButton::Primary, Modifiers::SHIFT);
     let c = clips(&h);
     assert!(c.contains(&(2.0, 8.0)) && c.contains(&(10.0, 4.0)), "ripple: {c:?}");
-    // Double right-click activates the mute tool (FL).
+    // Double right-click activates the mute tool.
     h.st.ui.test_keys.clear();
     h.st.ui.tool = crate::state::Tool::Draw;
     let empty = Pos2::new(x_at(&h, 20.0), y);
@@ -1797,8 +1797,8 @@ fn master_spectrum_rotates_with_a_drag() {
     let before = view(&h);
     h.drag(super::master::show, r.center(), r.center() + egui::vec2(120.0, 40.0), PointerButton::Primary, Modifiers::NONE);
     let after = view(&h);
-    assert!(after.0 > before.0 + 0.5, "yaw turned: {before:?} → {after:?}");
-    assert!(after.1 > before.1 + 0.1, "tilted: {before:?} → {after:?}");
+    assert!(after.0 > before.0 + 0.5, "yaw turned: {before:?} -> {after:?}");
+    assert!(after.1 > before.1 + 0.1, "tilted: {before:?} -> {after:?}");
     // Double-click: back to the starting view.
     let c = r.center();
     for _ in 0..2 {
@@ -1831,7 +1831,7 @@ fn playlist_arrow_keys_move_clips_or_scroll() {
     h.st.ui.clips = vec![cid];
     run(&mut h, "dragon.nav.right");
     let now = h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).find(|c| c.id == cid).unwrap().start;
-    assert!(now > start, "the clip moved right: {start} → {now}");
+    assert!(now > start, "the clip moved right: {start} -> {now}");
 }
 
 /// Audio repair zooms like the playlist: Ctrl + right-drag a box zooms into it, Ctrl + right-click zooms
@@ -1867,7 +1867,7 @@ fn repair_area_zoom_and_pan() {
     // Middle-drag to the left: the view moves later in time.
     h.drag(super::repair::show, plot.center(), plot.center() - egui::vec2(plot.width() * 0.25, 0.0), PointerButton::Middle, Modifiers::NONE);
     let (p0, _) = h.st.ui.repair.view.unwrap();
-    assert!(p0 > t0 + 0.1, "panned: {t0:.2} → {p0:.2}");
+    assert!(p0 > t0 + 0.1, "panned: {t0:.2} -> {p0:.2}");
     // Ctrl + right-click: zooms out.
     h.click(super::repair::show, plot.center(), PointerButton::Secondary, ctrl);
     let w = h.st.ui.repair.view.map(|v| v.1 - v.0).unwrap_or(4.0);

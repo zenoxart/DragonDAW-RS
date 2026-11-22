@@ -1,4 +1,4 @@
-//! Soft Clipper: the sound of FL Studio's Fruity Soft Clipper (clean below the threshold, a smooth
+//! Soft Clipper: the sound of the Fruity Soft Clipper (clean below the threshold, a smooth
 //! tanh shoulder above it that never passes the ceiling, post gain) with a mastering clipper's extras:
 //! input drive, shape (soft / hybrid / hard), up to 4× oversampling and a "clip only" listen.
 
@@ -170,7 +170,7 @@ pub fn soft_clipper_def() -> EffectDef {
         id: "clipper",
         name: "Obsidian (soft clipper)",
         category: "Distortion",
-        description: "Soft clipper with the sound of FL Studio's Fruity Soft Clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen.",
+        description: "Soft clipper with the sound of the Fruity Soft Clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen.",
         params: PARAMS,
         uses_sidechain: false,
         create: |_| Box::new(SoftClipper::new()),

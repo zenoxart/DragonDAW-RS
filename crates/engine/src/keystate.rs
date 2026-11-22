@@ -1,5 +1,5 @@
 //! Which side of a modifier is held, and the numeric-pad 0 – things the GUI toolkit does not report but
-//! FL Studio's shortcuts use (Right-Shift+click slices, Right-Alt+click mutes / quantizes, numpad 0 fast
+//! the shortcuts use (Right-Shift+click slices, Right-Alt+click mutes / quantizes, numpad 0 fast
 //! forward). Asked from the OS keyboard state: X11 (`XQueryKeymap`) and Windows (`GetAsyncKeyState`);
 //! elsewhere (Wayland, macOS) every query answers `None`.
 

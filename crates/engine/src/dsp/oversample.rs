@@ -1,4 +1,4 @@
-//! 2× / 4× oversampling with linear-phase half-band FIR stages (for the limiter, Pro-L style).
+//! 2× / 4× oversampling with linear-phase half-band FIR stages (for the limiter).
 
 const M: usize = 23; // taps = 2M + 1
 const TAPS: usize = 2 * M + 1;

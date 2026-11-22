@@ -43,7 +43,7 @@ pub const BPM_PRESETS: &[(f64, &str)] = &[
     (160.0, "Footwork, juke, drum & bass half-speed"),
 ];
 
-/// The FL Studio-style tempo display. Dragging up/down on the whole number changes the tempo in whole
+/// The classic tempo display. Dragging up/down on the whole number changes the tempo in whole
 /// BPM (the decimals stay); dragging on the decimals changes only the decimals (0.01 per pixel, Shift
 /// 0.001). The wheel works the same on either part, double-click types a value, right-click offers
 /// tempo examples from 70 to 160 BPM. Returns the response (changed while dragging) and the value.
@@ -214,7 +214,32 @@ pub fn knob_colored(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f
     let a = a0 + sweep * n;
     p.line_segment([c, Pos2::new(c.x + (rad - 4.0) * a.cos(), c.y + (rad - 4.0) * a.sin())], Stroke::new(2.0_f32, Color32::WHITE));
     p.text(Pos2::new(rect.center().x, rect.bottom()), egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(10.0), theme::TEXT_DIM);
+    // Screen readers: a slider with its name and value; keyboard: arrows step it when focused.
+    let shown = fmt(*value);
+    let v = *value as f64;
+    r.widget_info(|| egui::WidgetInfo { value: Some(v), current_text_value: Some(shown.clone()), ..egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, label) });
+    if keyboard_step(ui, &r, value, min, max) {
+        r.mark_changed();
+    }
     r.on_hover_text(format!("{label}: {}", fmt(*value)))
+}
+
+/// Arrow keys on a focused knob / fader: Up / Right one step (a 100th of the range), Down / Left back;
+/// Shift for fine steps. Returns whether the value changed.
+fn keyboard_step(ui: &Ui, r: &Response, value: &mut f32, min: f32, max: f32) -> bool {
+    if !r.has_focus() {
+        return false;
+    }
+    let (up, down, fine) = ui.input(|i| (i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowRight), i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowLeft), i.modifiers.shift));
+    let step = (max - min) / if fine { 1000.0 } else { 100.0 };
+    let before = *value;
+    if up {
+        *value = (*value + step).min(max);
+    }
+    if down {
+        *value = (*value - step).max(min);
+    }
+    *value != before
 }
 
 /// The effect-editor knob from the design reference: the name in capitals above, a dark knob with a
@@ -334,6 +359,11 @@ pub fn fader(ui: &mut Ui, value: &mut f32, max: f32, height: f32) -> Response {
     p.rect_filled(cap, 2.0, if r.dragged() { theme::ACCENT_2 } else { Color32::from_gray(200) });
     p.line_segment([Pos2::new(cap.left() + 2.0, y), Pos2::new(cap.right() - 2.0, y)], Stroke::new(1.0_f32, Color32::BLACK));
     let db = dragon_engine::dsp::gain_to_db(*value);
+    let v = *value as f64;
+    r.widget_info(|| egui::WidgetInfo { value: Some(v), current_text_value: Some(format!("{db:.1} dB")), ..egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Volume fader") });
+    if keyboard_step(ui, &r, value, 0.0, max) {
+        r.mark_changed();
+    }
     r.on_hover_text(format!("{db:.1} dB"))
 }
 
@@ -381,7 +411,9 @@ pub fn toggle(ui: &mut Ui, on: bool, text: &str, color: Color32) -> Response {
     // Icon glyphs need the normal size to render crisply; words use the small style.
     let rt = if text.chars().count() <= 2 { rt } else { rt.small() };
     let b = egui::Button::new(rt).fill(if on { color } else { theme::PANEL_2 }).min_size(Vec2::new(20.0, 16.0));
-    ui.add(b)
+    let r = ui.add(b);
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, text));
+    r
 }
 
 pub fn db_fmt(v: f32) -> String {
@@ -430,6 +462,7 @@ pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
         let (name, what) = t.describe();
         let on = st.ui.tool == t;
         let (r, resp) = ui.allocate_exact_size(Vec2::new(46.0, 38.0), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, format!("{name} tool")));
         let p = ui.painter();
         let fill = if on {
             theme::ACCENT
@@ -546,7 +579,9 @@ pub fn icon_toggle(ui: &mut Ui, on: bool, icon: usize, label: &str, color: Color
     let Some(img) = crate::brand::icon_image(ui.ctx(), icon, 15.0) else { return toggle(ui, on, label, color) };
     let text = RichText::new(label).small().strong().color(if on { Color32::BLACK } else { theme::TEXT_DIM });
     let img = img.tint(if on { Color32::BLACK } else { Color32::from_gray(200) });
-    ui.add(egui::Button::image_and_text(img, text).fill(if on { color } else { theme::PANEL_2 }).corner_radius(4.0))
+    let r = ui.add(egui::Button::image_and_text(img, text).fill(if on { color } else { theme::PANEL_2 }).corner_radius(4.0));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
+    r
 }
 
 #[cfg(test)]

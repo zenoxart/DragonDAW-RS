@@ -1,4 +1,4 @@
-//! Project files (`.dragon`, JSON), FL Studio-style project folders (`Samples`, `Recordings`, `Renders`, `Backup`), rotating backups, autosave and
+//! Project files (`.dragon`, JSON), classic project folders (`Samples`, `Recordings`, `Renders`, `Backup`), rotating backups, autosave and
 //! crash recovery.
 
 use crate::model::*;
@@ -39,7 +39,7 @@ fn backup_path(path: &Path, i: usize) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Subfolders of a project folder (FL Studio style): collected samples, recordings, exports and backups.
+/// Subfolders of a project folder: collected samples, recordings, exports and backups.
 pub const SAMPLES_DIR: &str = "Samples";
 pub const RECORDINGS_DIR: &str = "Recordings";
 pub const RENDERS_DIR: &str = "Renders";

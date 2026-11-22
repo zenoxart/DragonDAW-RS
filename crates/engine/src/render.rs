@@ -1340,7 +1340,7 @@ impl Renderer {
     }
 
     pub fn play(&mut self, mode: PlayMode) {
-        // Starting the song or a pattern cuts a running browser preview (FL behaviour).
+        // Starting the song or a pattern cuts a running browser preview.
         self.preview = None;
         self.transport.mode = mode;
         if !self.transport.playing {
@@ -2362,7 +2362,7 @@ fn mix_clip(c: &CClip, tempo: &TempoMap, t_start: f64, l: &mut [f32], r: &mut [f
             continue;
         }
         let (a, b) = c.data.sample_at(pos);
-        // De-click (like FL's default): 3 ms raised-cosine fades at both clip edges, so a clip that starts
+        // De-click (on by default): 3 ms raised-cosine fades at both clip edges, so a clip that starts
         // or ends mid-waveform does not jump.
         let edge = (if cut_in { t - c.start_sec } else { f64::MAX }).min(if cut_out { clip_end_sec - t } else { f64::MAX });
         let mut g = if edge < DECLICK { (0.5 - 0.5 * (std::f64::consts::PI * edge / DECLICK).cos()) as f32 } else { 1.0 };
@@ -2720,7 +2720,7 @@ mod tests {
         let s2 = render_secs(&p, 0.3).0.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!((s2 - bused).abs() < 1e-3);
         p.mixer.get_mut(bus).unwrap().solo = false;
-        // FL-style: no main route, a send into a second bus only.
+        // No main route, a send into a second bus only.
         let b2 = p.add_mixer_channel("Bus 2");
         {
             let c = p.mixer.get_mut(ch).unwrap();
@@ -2736,7 +2736,7 @@ mod tests {
         assert!(none < 1e-6, "{none}");
     }
 
-    /// A sidechain-only route (FL's "Sidechain to this track") is not heard in the target, but the
+    /// A sidechain-only route (the "Sidechain to this track") is not heard in the target, but the
     /// target's compressor reacts to it: a tone on a bus is ducked by a kick track that only sidechains.
     #[test]
     fn sidechain_only_route_ducks_without_being_heard() {
@@ -2771,7 +2771,7 @@ mod tests {
         assert!(ducked < alone * 0.6, "ducked by the kick: {ducked} vs {alone}");
     }
 
-    /// FabFilter-style modulation: a square LFO on a utility's gain makes the level jump between two
+    /// Modulation: a square LFO on a utility's gain makes the level jump between two
     /// values; an envelope follower opens a gain with the input.
     #[test]
     fn modulation_moves_effect_parameters() {
@@ -2840,7 +2840,7 @@ mod tests {
         assert!(half > dry * 1.5 && half < dry * 3.5, "mix 50 %: {}", half / dry);
     }
 
-    /// MIDI velocity as a modulation source (FabFilter's MIDI sources), with slew: a hard note pulls the
+    /// MIDI velocity as a modulation source (MIDI sources), with slew: a hard note pulls the
     /// utility's gain down; with 300 ms slew the change glides in instead of jumping.
     #[test]
     fn midi_velocity_modulates_with_slew() {

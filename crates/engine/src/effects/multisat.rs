@@ -1,4 +1,4 @@
-//! "Athanor" (multiband saturator) (the FabFilter Saturn school): up to four bands split by Linkwitz–Riley
+//! "Athanor" (multiband saturator): up to four bands split by Linkwitz–Riley
 //! crossovers, each with its own saturation style, drive, dynamics (drive follows the band's level), tone,
 //! level and mix; global mix and output. Per-band modulation comes from the effect modulation section.
 
@@ -107,7 +107,7 @@ pub struct MultibandSaturator {
     /// Band levels held through a low-frequency wave's cycle (drive does not ride the waveform).
     steady: [crate::dsp::PeakHold; BANDS],
     dc: [[(f32, f32); BANDS]; 2],
-    /// Feedback loops (Saturn): a short delay per band and channel, tuned by the feedback frequency.
+    /// Feedback loops: a short delay per band and channel, tuned by the feedback frequency.
     fb: [[Vec<f32>; BANDS]; 2],
     fb_pos: usize,
     /// Telemetry: per band its level (dB) and its current drive (dB).
@@ -240,7 +240,7 @@ pub fn multiband_saturator_def() -> EffectDef {
         id: "multisat",
         name: "Athanor (multiband saturator)",
         category: "Distortion",
-        description: "Saturn-style multiband saturation: up to four bands (Linkwitz–Riley crossovers), each with a style (clean / warm tube, tape, transformer, soft / hard clip, foldback, rectify), drive, dynamics, tone, level, mix and a resonant feedback loop.",
+        description: "Multiband saturation: up to four bands (Linkwitz–Riley crossovers), each with a style (clean / warm tube, tape, transformer, soft / hard clip, foldback, rectify), drive, dynamics, tone, level, mix and a resonant feedback loop.",
         params: all_params(),
         uses_sidechain: false,
         create: |rate| Box::new(MultibandSaturator::new(rate)),

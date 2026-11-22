@@ -21,7 +21,7 @@ const DELAY_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mod", "Modulation", 0.0, 1.0, 0.1, ""),
     ParamInfo::lin("offset", "R offset", -0.5, 0.5, 0.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.3, ""),
-    // Timeless-style additions.
+    // Extra features.
     ParamInfo::lin("cross", "Cross feedback", 0.0, 0.95, 0.0, ""),
     ParamInfo::lin("drive", "Drive (in the loop)", 0.0, 24.0, 0.0, "dB"),
     ParamInfo::lin("reso", "Filter resonance", 0.0, 1.0, 0.0, ""),
@@ -30,7 +30,7 @@ const DELAY_PARAMS: &[ParamInfo] = &[
     ParamInfo::toggle("freeze", "Freeze", false),
     ParamInfo::lin("width", "Width", 0.0, 2.0, 1.0, ""),
     ParamInfo::lin("pitch", "Pitch of the repeats", -12.0, 12.0, 0.0, "st"),
-    // Timeless-style modulation matrix: two LFOs and an envelope follower, four routing slots.
+    // Modulation matrix: two LFOs and an envelope follower, four routing slots.
     ParamInfo::choice("lfo1_sync", "LFO 1 sync", SYNC, 0.0),
     ParamInfo::log("lfo1_rate", "LFO 1 rate", 0.02, 20.0, 0.5, "Hz"),
     ParamInfo::choice("lfo1_shape", "LFO 1 shape", DMOD_SHAPES, 0.0),
@@ -69,7 +69,7 @@ fn loop_limit(x: f32) -> f32 {
     }
 }
 
-/// Two-stage allpass diffuser (smears each repeat, Timeless "diffusion").
+/// Two-stage allpass diffuser (smears each repeat, "diffusion").
 #[derive(Clone)]
 struct Diffuser {
     lines: [DelayLine; 2],
@@ -331,7 +331,7 @@ pub fn delay_def() -> EffectDef {
         name: "Echo Cavern (delay)",
         category: "Delay",
         description:
-            "Delay after Timeless: tempo-synced or free, stereo / ping-pong / tape, cross feedback, resonant filters, drive and diffusion in the loop, pitch-shifted repeats, ducking, freeze, width, and a modulation matrix (two LFOs and an envelope follower routed through four slots to time, feedback, filters, drive, pitch, width or mix).",
+            "Delay: tempo-synced or free, stereo / ping-pong / tape, cross feedback, resonant filters, drive and diffusion in the loop, pitch-shifted repeats, ducking, freeze, width, and a modulation matrix (two LFOs and an envelope follower routed through four slots to time, feedback, filters, drive, pitch, width or mix).",
         params: DELAY_PARAMS,
         uses_sidechain: false,
         create: |rate| {
@@ -745,7 +745,7 @@ mod tests {
         crate::effects::create("delay", 48000.0, &p).unwrap()
     }
 
-    /// Timeless-style features: freeze holds the loop with no decay; ducking lowers echoes under the input;
+    /// Extra features: freeze holds the loop with no decay; ducking lowers echoes under the input;
     /// pitch shifts the repeats.
     #[test]
     fn delay_freeze_duck_and_pitch() {

@@ -10,9 +10,9 @@ use redhive_contracts::ui::Severity;
 use redhive_contracts::{IconRef, TextKey};
 
 /// (id, label, menu path, section, shortcut)
-/// Shortcuts follow FL Studio's defaults: Ctrl+N saves a new version, Ctrl+R / Ctrl+Shift+R export WAV /
+/// Default shortcuts: Ctrl+N saves a new version, Ctrl+R / Ctrl+Shift+R export WAV /
 /// MP3, Ctrl+Z steps back through the undo history (500 steps; Ctrl+Y / Ctrl+Shift+Z forward, Ctrl+Alt+Z is
-/// FL's undo / redo toggle), Ctrl+B duplicates,
+/// the undo / redo toggle), Ctrl+B duplicates,
 /// Ctrl+D deselects, Alt+Q quantizes and Shift+Q quick-quantizes, Space plays / stops, Ctrl+Space pauses,
 /// Backspace toggles snap, Shift+arrows move the selection, Alt+M / Shift+M mute / unmute, Shift+I inverts,
 /// Ctrl+G glues, Ctrl+U chops, Alt+F flams, Ctrl+H stops all sound, Ctrl+P toggles precount, Alt+P the picker,
@@ -41,7 +41,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("edit.undo", "Undo (step back, again and again)", "Edit", 0, "Ctrl+Z"),
     ("edit.redo", "Redo (step forward)", "Edit", 0, "Ctrl+Y"),
     ("edit.redo_alt", "Redo (step forward)", "", 0, "Ctrl+Shift+Z"),
-    ("edit.undo_toggle", "Undo / redo last (FL toggle)", "Edit", 0, "Ctrl+Alt+Z"),
+    ("edit.undo_toggle", "Undo / redo last", "Edit", 0, "Ctrl+Alt+Z"),
     ("edit.cut", "Cut", "Edit", 1, "Ctrl+X"),
     ("edit.copy", "Copy", "Edit", 1, "Ctrl+C"),
     ("edit.paste", "Paste", "Edit", 1, "Ctrl+V"),
@@ -315,12 +315,12 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         return true;
     }
     match id {
-        // ---------------- FL keys that depend on the editor under the mouse (rack / piano roll / playlist)
+        // ---------------- keys that depend on the editor under the mouse (rack / piano roll / playlist)
         "edit.legato" if st.ui.editor == Ed::Rack => rack_route_free(st),
         "edit.mute_sel" if st.ui.editor == Ed::Rack => st.ui.rack_mixer_sel = !st.ui.rack_mixer_sel,
         "edit.move_up" | "edit.move_down" if st.ui.editor == Ed::Rack => rack_extend(st, if id == "edit.move_up" { -1 } else { 1 }),
         "zoom.in" | "zoom.out" if st.ui.editor == Ed::Rack => rack_group_step(st, if id == "zoom.in" { -1 } else { 1 }),
-        // (FL opens a MIDI file with Ctrl+M in the piano roll; here the metronome always toggles – the
+        // (opens a MIDI file with Ctrl+M in the piano roll; here the metronome always toggles – the
         // piano roll's MIDI import is File › Import › MIDI file.)
         "transport.precount" if st.ui.editor == Ed::Playlist => st.ctx.open("dragon.launcher", None),
         "edit.quick_quantize2" => {
@@ -329,7 +329,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "ctx.alt_c" if st.ui.editor == Ed::Rack => rack_clone(st),
         "ctx.alt_c" => {
-            // FL: change the colour of the selected notes (to the next colour group).
+            // change the colour of the selected notes (to the next colour group).
             notes_apply(st, "Note colour", |v| v.iter_mut().for_each(|n| n.color = (n.color + 1) % 16));
         }
         "ctx.alt_g" if st.ui.editor == Ed::Rack => {
@@ -383,7 +383,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             st.session.edit("Move tracks", |p| p.move_tracks(&ids, if id == "ctx.alt_up" { -1 } else { 1 }));
         }
         "ctx.alt_up" | "ctx.alt_down" | "ctx.alt_left" | "ctx.alt_right" if st.ui.editor == Ed::PianoRoll => {
-            // FL Alt+arrows: fine nudge – a quarter of the snap in time, a semitone in pitch.
+            // Alt+arrows: fine nudge – a quarter of the snap in time, a semitone in pitch.
             let fine = ((PPQ as f64 * st.ui.snap.max(0.0625) / 4.0) as i64).max(1);
             notes_apply(st, "Nudge notes", |v| {
                 for n in v.iter_mut() {
@@ -645,7 +645,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         "file.recover" => st.ui.recovery = Some(st.autosave.list()),
         "file.quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         "edit.undo_toggle" => {
-            // FL: Ctrl+Z undoes the last action; pressed again (with nothing done in between) it redoes it.
+            // Ctrl+Z undoes the last action; pressed again (with nothing done in between) it redoes it.
             let rev = st.session.history.revision;
             if st.ui.last_undo == Some(rev) {
                 if let Some(l) = st.session.redo() {
@@ -680,7 +680,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             st.ui.notes.clear();
         }
         "tool.slip" if st.ui.editor == crate::state::Editor::PianoRoll => {
-            // FL piano roll S: slide notes on / off for the selection.
+            // piano roll S: slide notes on / off for the selection.
             notes_apply(st, "Slide notes", |v| {
                 let on = !v.iter().all(|n| n.slide);
                 v.iter_mut().for_each(|n| n.slide = on);
@@ -738,7 +738,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             _ => st.toast("Select a time range on the ruler first", Severity::Info),
         },
         x if x.starts_with("zoom.") => zoom_command(st, &x[5..], ctx),
-        // The numeric-pad 0 is FL's fast forward (handled while held), not "mute channel 10".
+        // The numeric-pad 0 is the fast forward (handled while held), not "mute channel 10".
         "rack.mute0" if crate::views::keys::side(st, crate::views::keys::SideKey::Numpad0) => {}
         x if x.starts_with("rack.mute") || x.starts_with("rack.solo") => {
             let digit: usize = x[9..].parse().unwrap_or(1);
@@ -758,10 +758,10 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                     });
                 }
             } else if !solo && st.ui.editor == crate::state::Editor::Playlist {
-                // Outside the rack the number keys are FL's playlist keys.
+                // Outside the rack the number keys are the playlist keys.
                 match digit {
                     5 => zoom_command(st, "selection", ctx),
-                    // FL 6 zooms on the performance zone; without one, the whole song.
+                    // 6 zooms on the performance zone; without one, the whole song.
                     6 => zoom_command(st, "all", ctx),
                     7 => {
                         execute(st, "edit.transpose_clip_down", ctx);
@@ -889,7 +889,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             }
         }
         "transport.play" => {
-            // FL: Space starts, and stops (back to the start); Ctrl+Space pauses.
+            // Space starts, and stops (back to the start); Ctrl+Space pauses.
             if st.transport().playing && !st.audio.is_recording() {
                 st.stop();
             } else {
@@ -981,7 +981,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             });
         }
         "edit.unmute_sel" if st.ui.editor == Ed::PianoRoll && !st.ui.notes.is_empty() => {
-            // FL binds Shift+M twice in the piano roll: unmute the selection, or – when nothing selected is
+            // Shift+M has two jobs in the piano roll: unmute the selection, or – when nothing selected is
             // muted – select groups of notes at random.
             let notes = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|c| c.notes.clone()).unwrap_or_default();
             if st.ui.notes.iter().filter_map(|i| notes.get(*i)).any(|n| n.muted) {
@@ -1472,7 +1472,7 @@ fn rack_move(st: &mut State, dir: i32) {
     });
 }
 
-/// FL Ctrl+L in the rack: each selected channel to its own free mixer track.
+/// Ctrl+L in the rack: each selected channel to its own free mixer track.
 fn rack_route_free(st: &mut State) {
     let sel = rack_selection(st);
     st.session.edit("Route to free mixer tracks", |p| {
@@ -1492,7 +1492,7 @@ fn rack_route_free(st: &mut State) {
     });
 }
 
-/// FL's zoom keys for the playlist or piano roll (whichever was used last): PgUp / PgDn, Shift+0 centre
+/// the zoom keys for the playlist or piano roll (whichever was used last): PgUp / PgDn, Shift+0 centre
 /// on the playhead, Shift+1…3 zoom levels, Shift+4 show all, Shift+5 / 5 zoom to the selection.
 fn zoom_command(st: &mut State, what: &str, ctx: &egui::Context) {
     let piano = st.ui.editor == crate::state::Editor::PianoRoll;
@@ -1550,7 +1550,7 @@ fn zoom_command(st: &mut State, what: &str, ctx: &egui::Context) {
     }
 }
 
-/// FL's Shift+arrows: clips move by the snap (left/right) or to the neighbouring track (up/down);
+/// the Shift+arrows: clips move by the snap (left/right) or to the neighbouring track (up/down);
 /// notes move by the snap or a semitone.
 fn move_selection(st: &mut State, id: &str) {
     let step = if st.ui.snap > 0.0 { st.ui.snap } else { 0.25 };

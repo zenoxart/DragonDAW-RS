@@ -418,7 +418,7 @@ pub fn bounce_channel_with(p: &Project, cache: &SampleCache, mixer: Id, path: &P
     Ok((start, tm.seconds_to_beat(s0 + d.duration()) - start))
 }
 
-/// FL "Consolidate" (Ctrl+Alt+C): renders only the given clips (through their tracks' mixer channels, the
+/// "Consolidate" (Ctrl+Alt+C): renders only the given clips (through their tracks' mixer channels, the
 /// master chain bypassed) into one audio file. Returns the start beat of the rendered range.
 pub fn consolidate_clips(p: &Project, cache: &SampleCache, clips: &[Id], path: &Path, rate: u32, mut pool: Pool) -> Result<f64> {
     let mut q = p.clone();

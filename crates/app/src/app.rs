@@ -40,7 +40,7 @@ pub fn view_meta(key: &str) -> Option<(&'static str, ViewRole, DockSide)> {
     })
 }
 
-/// The hint at the top left: which control is being touched, where, and its value (FL Studio's hint
+/// The hint at the top left: which control is being touched, where, and its value (Studio's hint
 /// bar). Stays for a moment after the last touch, then fades.
 fn hint_bar(ui: &mut egui::Ui, st: &crate::state::State) {
     let Some((source, name, value, at)) = &st.ui.hint else { return };
@@ -142,7 +142,7 @@ impl DragonApp {
         if typing && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.st.toggle_play();
         }
-        // FL numeric-pad 0: fast forward while held (4× speed).
+        // numeric-pad 0: fast forward while held (4× speed).
         if !text_focus && views::keys::side(&self.st, views::keys::SideKey::Numpad0) && ctx.input(|i| i.focused) {
             let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
             let beats = self.st.session.project.bpm / 60.0 * dt * 4.0;
@@ -150,7 +150,7 @@ impl DragonApp {
             self.st.seek(now + beats);
             ctx.request_repaint();
         }
-        // FL's numeric-pad * and / (egui sees them as typed characters): Alt jumps between markers,
+        // the numeric-pad * and / (egui sees them as typed characters): Alt jumps between markers,
         // without Alt in song mode they step a bar.
         if !text_focus && !typing {
             let typed: Vec<(String, bool)> = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some((t.clone(), i.modifiers.alt)) } else { None }).collect());

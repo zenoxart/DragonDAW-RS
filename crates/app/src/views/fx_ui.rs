@@ -221,7 +221,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 if let Some(b) = near(origin) {
                     ui.data_mut(|d| d.insert_temp(h.key.with("eq.sel"), b));
                 } else if let Some(f) = spectrum_peak(h.tele, r, origin.x) {
-                    // Spectrum grab (Pro-Q): dragging a peak of the analyzer makes a narrow band there.
+                    // Spectrum grab: dragging a peak of the analyzer makes a narrow band there.
                     if let Some(b) = (1..=dragon_engine::effects::eq::EQ_BANDS).find(|b| h.v(&format!("b{b}_on")) < 0.5) {
                         out.extend([
                             (format!("b{b}_on"), 1.0),
@@ -242,7 +242,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
                 let ty = h.v(&format!("b{held}_type")).round() as usize;
                 let d = resp.drag_delta();
-                // Shift: fine moves (a tenth of the mouse); Ctrl: gain / Q only (frequency locked) – Pro-Q's
+                // Shift: fine moves (a tenth of the mouse); Ctrl: gain / Q only (frequency locked)
                 // modifiers. Pass filters, band pass and notch have no gain: up/down is their Q.
                 let fine = if shift { 0.1 } else { 1.0 };
                 if !ctrl {
@@ -267,7 +267,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
                 if s != 0.0 {
                     out.push((format!("b{b}_q"), (h.v(&format!("b{b}_q")) * (1.0 + s / 300.0)).clamp(0.1, 18.0)));
                 }
-                // Alt+click removes the band (FabFilter style).
+                // Alt+click removes the band (style).
                 if resp.clicked() && ui.input(|i| i.modifiers.alt) {
                     out.push((format!("b{b}_on"), 0.0));
                 }
@@ -420,7 +420,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             if hover.is_some() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
             }
-            // Wheel over a band: its Q (width), like Pro-R.
+            // Wheel over a band: its Q (width).
             if let Some(k) = hover {
                 let s = ui.input(|i| i.raw_scroll_delta.y);
                 if s != 0.0 {
@@ -454,7 +454,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
         }
         "multisat" => {
-            // Drag a crossover line (Saturn): it follows the pointer in frequency.
+            // Drag a crossover line: it follows the pointer in frequency.
             let r = plot(r);
             let n = h.v("bands").round() as usize + 1;
             let xs = ["x1", "x2", "x3"];
@@ -467,7 +467,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             if resp.dragged() && held > 0 {
                 out.push((xs[held - 1].to_string(), freq_at(r, pos.x).clamp(30.0, 16_000.0)));
             } else if resp.dragged() {
-                // A band itself (Saturn): up / down is its drive.
+                // A band itself: up / down is its drive.
                 let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
                 if r.contains(origin) {
                     let band = 1 + (0..n.saturating_sub(1)).filter(|k| fx(r, h.v(xs[*k])) < origin.x).count();
@@ -535,7 +535,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
         }
         "class_a_strip" => {
-            // The NS1-style noise-suppressor fader: drag (or wheel) the cap, double-click for 0 %.
+            // The one-fader noise suppressor: drag (or wheel) the cap, double-click for 0 %.
             let (track, _) = ns_fader(r);
             let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
             let zone = track.expand2(Vec2::new(14.0, 10.0));
@@ -579,7 +579,7 @@ fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f
             }
         }
         id => {
-            // Drawn controls (Drum Bus tiles and bars, the strip's sections, AlterBoy's sliders): drag one
+            // Drawn controls (Drum Bus tiles and bars, the strip's sections, Shapeshifter's sliders): drag one
             // up / down, wheel, double-click resets.
             let hits = hit_regions(id, r);
             if !hits.is_empty() {
@@ -709,7 +709,7 @@ fn region_drag(ui: &Ui, resp: &egui::Response, h: &Hero, pos: Pos2, hits: &[(Rec
 
 // ---------------------------------------------------------------------------------------------- EQ
 
-/// Pro-Q's band panel: a small floating bar under the selected band with its shape, slope, frequency,
+/// The band panel: a small floating bar under the selected band with its shape, slope, frequency,
 /// gain and Q as draggable values, plus solo and remove. Hidden while a band is dragged.
 fn eq_band_panel(ui: &Ui, r: Rect, h: &Hero, range: f32, out: &mut Vec<(String, f32)>) {
     use dragon_engine::effects::eq::{has_slope, SLOPES};
@@ -869,7 +869,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     } else {
         spectrum(&p, pr, h.tele);
     }
-    // Collisions with another track's EQ (Pro-Q): where both are loud, the overlap glows red.
+    // Collisions with another track's EQ: where both are loud, the overlap glows red.
     let other: Option<Vec<f32>> = p.ctx().data(|d| d.get_temp(h.key.with("collide"))).flatten();
     if let (Some(o), true) = (other, h.tele.len() >= dragon_engine::dsp::spectrum::BANDS * 2) {
         use dragon_engine::dsp::spectrum::{band_freq, BANDS};
@@ -886,7 +886,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         }
         p.add(Shape::line((0..BANDS).map(|b| Pos2::new(fx(pr, band_freq(b)), y(o[b]))).collect(), Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xf0, 0x90, 0x60, 120))));
     }
-    // Piano scale along the frequency axis (Pro-Q): C keys marked, black keys darker.
+    // Piano scale along the frequency axis: C keys marked, black keys darker.
     {
         let strip = Rect::from_min_max(Pos2::new(pr.left(), pr.bottom() - 7.0), pr.max);
         for note in 16u8..=127 {
@@ -903,7 +903,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
             }
         }
     }
-    // Each band's own shape, faint; the selected band filled in its colour (Pro-Q), then the sum.
+    // Each band's own shape, faint; the selected band filled in its colour, then the sum.
     for (k, bq, _, _) in &bands {
         let pts: Vec<Pos2> = (0..=120).map(|i| pr.left() + pr.width() * i as f32 / 120.0).map(|x| Pos2::new(x, y_of(bq.response_db(freq_at(pr, x), RATE)))).collect();
         let sel = selected == k + 1;
@@ -932,7 +932,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.circle_filled(c, rad, BAND_COLORS[*k % 7]);
         p.circle_stroke(c, rad, Stroke::new(if selected == k + 1 { 2.5_f32 } else { 1.5 }, Color32::from_white_alpha(if selected == k + 1 { 255 } else { 200 })));
         p.text(c, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(8.5), Color32::BLACK);
-        // Cuts and shelves show their slope under the node (Pro-Q).
+        // Cuts and shelves show their slope under the node.
         let kind = BiquadKind::from_index(h.v(&format!("b{}_type", k + 1)));
         if dragon_engine::effects::eq::has_slope(kind) {
             let sl = dragon_engine::effects::eq::SLOPES.get(h.v(&format!("b{}_slope", k + 1)).round() as usize).copied().unwrap_or("12 dB/oct");
@@ -945,7 +945,7 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         let b = k + 1;
         let range = h.v(&format!("b{b}_dyn"));
         if range.abs() > 0.05 {
-            // Pro-Q style: the dynamic range as a bar from the static gain, the live change as a dot.
+            // the dynamic range as a bar from the static gain, the live change as a dot.
             let g = h.v(&format!("b{b}_gain"));
             let x = c.x;
             p.line_segment([Pos2::new(x, y_of(g)), Pos2::new(x, y_of(g + range))], Stroke::new(3.0_f32, BAND_COLORS[*k % 7].gamma_multiply(0.5)));
@@ -1178,7 +1178,7 @@ fn dynamics(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     p.text(Pos2::new(m.left(), m.bottom()), egui::Align2::LEFT_BOTTOM, caption, egui::FontId::proportional(10.5), theme::TEXT);
 }
 
-/// Pro-C style scrolling history: input level (grey), output level (colour) and gain reduction
+/// Scrolling history: input level (grey), output level (colour) and gain reduction
 /// (orange, hanging from the top), on one dB scale. `static_gr` gives the curve for the gallery demo.
 fn level_history(p: &egui::Painter, g: Rect, h: &Hero, col: Color32, static_out: impl Fn(f32) -> f32) {
     const LEN: usize = 240;
@@ -1315,7 +1315,7 @@ fn decay_rect(r: Rect) -> Rect {
 
 const DR_RANGE: f32 = 2.0; // log2: ×0.25 … ×4
 
-/// Pro-R style decay-rate EQ: six bands (bell, shelves, notch) with free frequency, ×0.25 … ×4 of the
+/// Decay-rate EQ: six bands (bell, shelves, notch) with free frequency, ×0.25 … ×4 of the
 /// decay time and Q (wheel); right-click a band for its shape.
 pub(super) fn decay_curve(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let y_of = |m: f32| r.center().y - (m.max(0.01).log2() / DR_RANGE).clamp(-1.0, 1.0) * (r.height() * 0.4);
@@ -1841,13 +1841,13 @@ fn ns_fader(r: Rect) -> (Rect, Rect) {
     (track, sec)
 }
 
-/// Class-A Strip: the NS1-style suppressor fader, the preamp's drive with the transformer warming up, the EQ curve as set, and the opto
+/// Class-A Strip: the one-fader noise suppressor, the preamp's drive with the transformer warming up, the EQ curve as set, and the opto
 /// compressor's cell glowing with its gain reduction above a moving-coil GR meter.
 fn class_a_strip(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::dsp::{Biquad, BiquadKind};
     super::fx_mod::screen(p, r, 8.0);
     p.rect_stroke(r.shrink(3.0), 6.0, Stroke::new(1.0_f32, Color32::from_white_alpha(30)), egui::StrokeKind::Inside);
-    // ---- noise suppressor (NS1 style: one fader)
+    // ---- noise suppressor (one fader)
     let (track, nsr) = ns_fader(r);
     p.rect_filled(nsr, 6.0, Color32::from_black_alpha(120));
     p.text(Pos2::new(nsr.center().x, nsr.top() + 6.0), egui::Align2::CENTER_TOP, "NS", egui::FontId::proportional(11.0), Color32::from_rgb(0xff, 0xd2, 0x7a));
@@ -1956,7 +1956,7 @@ fn drum_bus(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         [a, b, c, d, e, ..] => (*a, *b, *c, *d, *e),
         _ => (0.0, 0.0, 0.0, 0.0, 0.0),
     };
-    // Orion-style meters: peak bar, RMS line and a target zone (−12 … −8 dB RMS) for gain staging.
+    // Gain-staging meters: peak bar, RMS line and a target zone (−12 … −8 dB RMS) for gain staging.
     // In and out as phials of molten metal: the peak is the liquid, the RMS a gold line, the target
     // zone (−12 … −8 dB RMS) marked on the glass.
     let glass = super::fx_mod::art(p.ctx(), "fx-glass-tube", GLASS_TUBE);
@@ -2160,7 +2160,7 @@ fn hz_label(f: f32) -> String {
     }
 }
 
-/// Multiband dynamics in the McDSP MC404 manner: one coloured column per band across a log-frequency axis,
+/// Multiband dynamics as band columns: one coloured column per band across a log-frequency axis,
 /// each with its live level, its threshold line and its gain change over the top; drag a crossover
 /// sideways, a band up / down for its threshold.
 fn multiband(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
@@ -2542,7 +2542,7 @@ fn clean_voice(p: &egui::Painter, r: Rect, h: &Hero, _col: Color32) {
     }
     // ---- the reduction of the other stages: phials filled by how much each takes (0 … 12 dB).
     let io_w = 120.0;
-    let vials = [("DE-ESS", tele[2]), ("MB1 LOW", tele[3]), ("MB1 HIGH", tele[4]), ("MB2 LOW", tele[5]), ("MB2 HIGH", tele[6]), ("SOOTHE", tele[7])];
+    let vials = [("DE-ESS", tele[2]), ("MB1 LOW", tele[3]), ("MB1 HIGH", tele[4]), ("MB2 LOW", tele[5]), ("MB2 HIGH", tele[6]), ("TAME", tele[7])];
     let area = Rect::from_min_max(Pos2::new(x + 4.0, inner.top()), Pos2::new(inner.right() - io_w - 12.0, inner.bottom()));
     let slot = area.width() / vials.len() as f32;
     let vh = body_h - 14.0;

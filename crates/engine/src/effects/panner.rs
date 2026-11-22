@@ -1,6 +1,6 @@
-//! **Ouroboros** – an auto-panner after Soundtoys PanMan and Panomatic: the sound moves across the
+//! **Ouroboros** – an auto-panner: the sound moves across the
 //! stereo field following a shape, locked to the song's bars (Sync), at a free rate (Free), or one step per
-//! hit (Trigger: every transient over the threshold sends it to its next position, gliding there – PanMan's
+//! hit (Trigger: every transient over the threshold sends it to its next position, gliding there –
 //! signature). Width, centre and phase place the motion; Smooth rounds its corners; the pan law keeps a
 //! stereo source's image (Balance) or pans its mono sum with constant power; Binaural adds the interaural
 //! delay and head shadow of the far ear for headphones.
@@ -301,7 +301,7 @@ pub fn orbit_def() -> EffectDef {
         id: "orbit",
         name: "Ouroboros (auto-panner)",
         category: "Modulation",
-        description: "Auto-panner after PanMan / Panomatic: moves the sound across the stereo field locked to the bars, at a free rate, or one step per hit (Trigger, with glide). Seven shapes incl. random, width / centre / phase, smoothing, constant-power or balance pan law, binaural mode for headphones.",
+        description: "Auto-panner: moves the sound across the stereo field locked to the bars, at a free rate, or one step per hit (Trigger, with glide). Seven shapes incl. random, width / centre / phase, smoothing, constant-power or balance pan law, binaural mode for headphones.",
         params: PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(Orbit::new(rate)),

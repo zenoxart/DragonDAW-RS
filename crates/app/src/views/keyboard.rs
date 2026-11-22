@@ -1,4 +1,4 @@
-//! Computer keyboard as a piano (FL Studio layout): Z S X D C V G B H N J M = lower octave,
+//! Computer keyboard as a piano: Z S X D C V G B H N J M = lower octave,
 //! Q 2 W 3 E R 5 T 6 Y 7 U I = upper octave, comma / period shift the octave.
 
 use crate::state::State;

@@ -65,7 +65,7 @@ pub fn duplicate_clips(p: &mut Project, ids: &[Id]) -> Vec<Id> {
 }
 
 /// Copies clips in place (same track and position) and returns the copies' ids in the order of `ids`
-/// (FL's Shift + drag: the copies are then dragged away, the originals stay).
+/// (the Shift + drag: the copies are then dragged away, the originals stay).
 pub fn copy_clips_in_place(p: &mut Project, ids: &[Id]) -> Vec<Id> {
     let mut out = Vec::new();
     for want in ids {
@@ -149,7 +149,7 @@ pub fn shuffle(p: &mut Project, track: Id, from: f64, delta: f64) {
     }
 }
 
-/// FL Ctrl+Insert: inserts `range.len()` beats of silence at `range.start` on every track (clips across
+/// Ctrl+Insert: inserts `range.len()` beats of silence at `range.start` on every track (clips across
 /// the point are split), moving markers too.
 pub fn insert_time(p: &mut Project, range: Range) {
     let tracks: Vec<Id> = p.tracks.iter().map(|t| t.id).collect();
@@ -165,7 +165,7 @@ pub fn insert_time(p: &mut Project, range: Range) {
     }
 }
 
-/// FL Ctrl+Delete: deletes `range` on every track and closes the gap, moving markers too.
+/// Ctrl+Delete: deletes `range` on every track and closes the gap, moving markers too.
 pub fn delete_time(p: &mut Project, range: Range) {
     let tracks: Vec<Id> = p.tracks.iter().map(|t| t.id).collect();
     for t in tracks {
@@ -540,7 +540,7 @@ pub fn slice_to_rack(p: &mut Project, path: &std::path::Path, data: &crate::samp
 
 // ---------------------------------------------------------------------------------------------- patterns
 
-/// A free pattern name: `base #2`, `base #3`, … (FL Studio's naming for clones and unique copies).
+/// A free pattern name: `base #2`, `base #3`, … (Studio's naming for clones and unique copies).
 fn unique_pattern_name(p: &Project, base: &str) -> String {
     let root = match base.rfind(" #") {
         Some(i) if base[i + 2..].parse::<u32>().is_ok() => &base[..i],
@@ -730,7 +730,7 @@ pub fn delete_pattern(p: &mut Project, pat: Id) -> Option<Id> {
     Some(p.patterns[k.min(p.patterns.len() - 1)].id)
 }
 
-/// Replaces the sound of a channel-rack channel with an audio file (FL Studio: drop a sample onto a channel).
+/// Replaces the sound of a channel-rack channel with an audio file (Studio: drop a sample onto a channel).
 /// A sampler keeps its settings (root note, envelope, loop, …) except the region and slices, which belong to
 /// the old file; any other instrument becomes a sampler. The channel takes the file's name when it was still
 /// named after its old sample (or the instrument type), so names given by hand are kept. Returns `false` when
@@ -969,10 +969,10 @@ mod tests {
 }
 
 // ------------------------------------------------------------------------------------------------
-// FL Studio piano-roll tools (Limit, Articulate, LFO, Claw machine, Scale levels, Score flipper,
+// Piano-roll tools (Limit, Articulate, LFO, Claw machine, Scale levels, Score flipper,
 // Randomize, Riff machine). Each works on the given notes and returns the result.
 
-/// Limit (FL Alt+K): moves notes outside `lo ..= hi` into the range by whole octaves.
+/// Limit (Alt+K): moves notes outside `lo ..= hi` into the range by whole octaves.
 pub fn limit(notes: &mut [Note], lo: u8, hi: u8) {
     let (lo, hi) = (lo.min(hi), hi.max(lo));
     for n in notes {
@@ -987,7 +987,7 @@ pub fn limit(notes: &mut [Note], lo: u8, hi: u8) {
     }
 }
 
-/// Articulate (FL Alt+L): scales note lengths (`scale`, 1 = unchanged) and optionally ends every note
+/// Articulate (Alt+L): scales note lengths (`scale`, 1 = unchanged) and optionally ends every note
 /// `gap` ticks before the next start.
 pub fn articulate(notes: &mut [Note], scale: f32, gap: Option<u32>) {
     let starts: Vec<u32> = notes.iter().map(|n| n.start).collect();
@@ -1017,7 +1017,7 @@ fn prop(n: &mut Note, p: NoteProp) -> &mut f32 {
     }
 }
 
-/// LFO (FL Alt+O): a sine of `cycles_per_bar` (bar = `bar_ticks`) shaping a property around `center`
+/// LFO (Alt+O): a sine of `cycles_per_bar` (bar = `bar_ticks`) shaping a property around `center`
 /// with depth `amount`.
 pub fn lfo(notes: &mut [Note], p: NoteProp, bar_ticks: u32, cycles_per_bar: f32, center: f32, amount: f32) {
     let (lo, hi) = if p == NoteProp::Pan { (-1.0, 1.0) } else { (0.0, 1.0) };
@@ -1027,7 +1027,7 @@ pub fn lfo(notes: &mut [Note], p: NoteProp, bar_ticks: u32, cycles_per_bar: f32,
     }
 }
 
-/// Claw machine (FL Alt+W): walks the notes in time order and keeps `keep`, then drops `skip`, repeatedly.
+/// Claw machine (Alt+W): walks the notes in time order and keeps `keep`, then drops `skip`, repeatedly.
 pub fn claw(notes: &[Note], keep: usize, skip: usize) -> Vec<Note> {
     let mut v = notes.to_vec();
     v.sort_by_key(|n| (n.start, n.pitch));
@@ -1035,7 +1035,7 @@ pub fn claw(notes: &[Note], keep: usize, skip: usize) -> Vec<Note> {
     v.into_iter().enumerate().filter(|(i, _)| i % period < keep.max(1)).map(|(_, n)| n).collect()
 }
 
-/// Scale levels (FL Alt+X): property = property × `scale` + `offset`.
+/// Scale levels (Alt+X): property = property × `scale` + `offset`.
 pub fn scale_levels(notes: &mut [Note], p: NoteProp, scale: f32, offset: f32) {
     let (lo, hi) = if p == NoteProp::Pan { (-1.0, 1.0) } else { (0.0, 1.0) };
     for n in notes {
@@ -1044,7 +1044,7 @@ pub fn scale_levels(notes: &mut [Note], p: NoteProp, scale: f32, offset: f32) {
     }
 }
 
-/// Score flipper (FL Alt+Y): mirrors pitches around their middle (vertical) and/or time (horizontal).
+/// Score flipper (Alt+Y): mirrors pitches around their middle (vertical) and/or time (horizontal).
 pub fn flip(notes: &mut [Note], vertical: bool, horizontal: bool) {
     if notes.is_empty() {
         return;
@@ -1063,7 +1063,7 @@ pub fn flip(notes: &mut [Note], vertical: bool, horizontal: bool) {
     }
 }
 
-/// Randomize (FL Alt+R): random timing (± `ticks`), velocity (± `velocity`), pitch (± `pitch` semitones,
+/// Randomize (Alt+R): random timing (± `ticks`), velocity (± `velocity`), pitch (± `pitch` semitones,
 /// kept in `scale` when given, relative to `root`).
 pub fn randomize(notes: &mut [Note], ticks: u32, velocity: f32, pitch: u8, scale: Option<(u8, &[u8])>, seed: u64) {
     let mut rng = crate::dsp::Rng::new(seed);
@@ -1082,7 +1082,7 @@ pub fn randomize(notes: &mut [Note], ticks: u32, velocity: f32, pitch: u8, scale
     }
 }
 
-/// Riff machine (FL Alt+E): a seeded riff in a scale – `bars` long on a `step` grid, `density` 0 … 1 of
+/// Riff machine (Alt+E): a seeded riff in a scale – `bars` long on a `step` grid, `density` 0 … 1 of
 /// the steps sounding, moving mostly stepwise around `root` (MIDI note).
 pub fn riff(root: u8, scale: &[u8], bars: u32, step: u32, density: f32, seed: u64) -> Vec<Note> {
     let mut rng = crate::dsp::Rng::new(seed);

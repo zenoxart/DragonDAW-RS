@@ -9,7 +9,7 @@ license.workspace = true
 default = ["device", "plugins", "lossy"]
 # Real-time audio and MIDI devices (cpal, midir). Disable for headless builds.
 device = ["dep:cpal", "dep:midir"]
-# ASIO drivers on Windows (low-latency, the interface's own driver). Building it downloads Steinberg's ASIO
+# ASIO drivers on Windows (low-latency, the interface's own driver). Building it downloads the ASIO
 # SDK and needs LLVM / libclang (bindgen); the Windows release builds turn it on.
 asio = ["device", "cpal/asio"]
 # Third-party plugin hosting (CLAP and VST3 via dynamic libraries).

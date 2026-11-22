@@ -685,7 +685,7 @@ const CV_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mb2_low", "Multiband 2 lowmids", -12.0, 0.0, -2.0, "dB"),
     ParamInfo::lin("mb2_high", "Multiband 2 highmids", -12.0, 0.0, -2.0, "dB"),
     ParamInfo::lin("saturation", "Saturation", 0.0, 100.0, 50.0, "%"),
-    ParamInfo::lin("soothe", "Soothe mix", 0.0, 100.0, 50.0, "%"),
+    ParamInfo::lin("soothe", "Resonance tamer mix", 0.0, 100.0, 50.0, "%"),
 ];
 
 pub struct CleanVoice {

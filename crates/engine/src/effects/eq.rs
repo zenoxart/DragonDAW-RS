@@ -1,5 +1,5 @@
 //! 24-band parametric EQ (7 on by default) (bell, shelves, cuts, notch, band pass per band) with output gain, after
-//! FabFilter Pro-Q: per-band stereo placement (stereo, mid, side, left, right), per-band dynamic gain
+//! Per-band stereo placement (stereo, mid, side, left, right), per-band dynamic gain
 //! (range and threshold), band solo, auto gain and a live analyzer; pass filters and shelves have
 //! slopes from 6 to 96 dB/octave.
 
@@ -148,14 +148,14 @@ impl LinearPhase {
 
 pub const EQ_BANDS: usize = 24;
 const TYPES: &[&str] = &["Bell", "Low shelf", "High shelf", "Low pass", "High pass", "Band pass", "Notch"];
-/// Where a band works (Pro-Q's stereo placement).
+/// Where a band works (stereo placement).
 pub const PLACEMENTS: &[&str] = &["Stereo", "Mid", "Side", "Left", "Right"];
-/// Pro-Q's processing modes: zero latency (minimum phase) or linear phase (no phase shift, ~64 ms
+/// Processing modes: zero latency (minimum phase) or linear phase (no phase shift, ~64 ms
 /// latency; stereo placement and dynamic bands work there too – dynamic bands re-design the kernels
 /// every block).
 /// Natural phase runs the filters at twice the rate (analog-like curves up to the top, small latency).
 pub const PHASE_MODES: &[&str] = &["Zero latency", "Linear phase", "Natural phase"];
-/// Slopes of the pass and shelf bands (dB/octave), as in Pro-Q / Parametric EQ 2. 12 dB/oct is a
+/// Slopes of the pass and shelf bands (dB/octave). 12 dB/oct is a
 /// single biquad (the old behaviour); steeper slopes cascade sections, 6 dB/oct is first order.
 pub const SLOPES: &[&str] = &["6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct", "30 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct"];
 const SLOPE_DB: [u32; 9] = [6, 12, 18, 24, 30, 36, 48, 72, 96];
@@ -165,7 +165,7 @@ pub fn has_slope(kind: BiquadKind) -> bool {
     matches!(kind, BiquadKind::LowPass | BiquadKind::HighPass | BiquadKind::LowShelf | BiquadKind::HighShelf)
 }
 
-/// One band's filter: a cascade of up to 8 sections, so pass filters and shelves get Pro-Q's slopes.
+/// One band's filter: a cascade of up to 8 sections, so pass filters and shelves get steep slopes.
 /// Bells, band pass and notch are one section.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BandFilter {
@@ -363,7 +363,7 @@ const fn flatten() -> [ParamInfo; EQ_BANDS * PER_BAND + EXTRA] {
 static PARAMS: [ParamInfo; EQ_BANDS * PER_BAND + EXTRA] = flatten();
 
 /// Gain that keeps the loudness about the same: minus the curve's average boost over 50 Hz–12 kHz,
-/// weighted towards the midrange (FabFilter-style auto gain).
+/// weighted towards the midrange (loudness-matched auto gain).
 fn auto_gain(curve: impl Fn(f32) -> f32) -> f32 {
     let (mut sum, mut wsum) = (0.0, 0.0);
     for k in 0..40 {
@@ -375,7 +375,7 @@ fn auto_gain(curve: impl Fn(f32) -> f32) -> f32 {
     -(sum / wsum).clamp(-18.0, 18.0)
 }
 
-/// Pro-Q style EQ match: from the average spectra (dB per analyzer band, see `dsp::spectrum`) of this
+/// EQ match: from the average spectra (dB per analyzer band, see `dsp::spectrum`) of this
 /// track and a reference, a set of up to `max` bell bands (freq, gain dB, Q) whose sum follows the smoothed
 /// difference (reference − own), limited to ±`limit` dB. `amount` 0 … 1 scales the result.
 pub fn match_bands(own: &[f32], reference: &[f32], max: usize, limit: f32, amount: f32, rate: f32) -> Vec<(f32, f32, f32)> {
@@ -759,7 +759,7 @@ impl Effect for ParametricEq {
         }
         let out = self.output * if self.auto_gain { db_to_gain(self.auto_gain_db()) } else { 1.0 };
         if self.solo > 0 {
-            // Listen to the soloed band's region only, like holding a band's headphones in Pro-Q.
+            // Listen to the soloed band's region only, a band solo.
             let [fl, fr] = &mut self.solo_f;
             for x in l.iter_mut() {
                 *x = fl.process(*x);
@@ -897,7 +897,7 @@ mod tests {
 
     /// Linear phase: same magnitude as the curve, the latency it reports, and no phase shift (a click
     /// comes out symmetric).
-    /// Linear phase keeps Pro-Q's stereo placement (mid / side / left / right) and dynamic bands.
+    /// Linear phase keeps the stereo placement (mid / side / left / right) and dynamic bands.
     #[test]
     fn linear_phase_placement_and_dynamics() {
         let run = |set: &[(&str, f32)], l: Vec<f32>, r: Vec<f32>| {

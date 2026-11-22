@@ -1,6 +1,6 @@
-//! Audio repair, offline, on a whole clip (or a part of it): the iZotope RX family – spectral de-noise
+//! Audio repair, offline, on a whole clip (or a part of it): a full repair toolset – spectral de-noise
 //! with a learned noise profile, de-hum, de-click, de-clip, distortion repair (peaks flattened by soft
-//! clipping), de-reverb, spectral attenuation of a time × frequency selection, gain – and Melodyne-style
+//! clipping), de-reverb, spectral attenuation of a time × frequency selection, gain – and note-based
 //! note editing: notes ("blobs") detected with their pitch curves, shifted per note and their drift /
 //! vibrato flattened.
 //!
@@ -551,7 +551,7 @@ pub fn gain(data: &AudioData, t0: f64, t1: f64, gain_db: f32) -> AudioData {
 
 // ------------------------------------------------------------------------------------------------ notes
 
-/// A detected note (Melodyne's "blob"): where it is, its centre pitch and how the pitch moves inside it.
+/// A detected note : where it is, its centre pitch and how the pitch moves inside it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteBlob {
     pub start: f64,

@@ -38,7 +38,7 @@ pub enum DragKind {
         from: f64,
         y: f32,
     },
-    /// FL's slice tool: drag a line across clips (any direction); every clip it crosses is cut where the
+    /// the slice tool: drag a line across clips (any direction); every clip it crosses is cut where the
     /// line passes its track (snapped; Alt = no snap).
     Knife {
         from: f64,
@@ -46,11 +46,11 @@ pub enum DragKind {
         /// Right-drag: the smaller piece of each cut clip is deleted.
         delete_small: bool,
     },
-    /// FL's zoom tool: a box from a screen position.
+    /// the zoom tool: a box from a screen position.
     Zoom {
         from: Pos2,
     },
-    /// FL's slip edit: moves the audio inside the clip (the clip's audio offset, seconds, at the start).
+    /// the slip edit: moves the audio inside the clip (the clip's audio offset, seconds, at the start).
     Slip {
         from: f64,
         offset: f64,
@@ -214,7 +214,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         None => {}
     }
-    // FL's side-specific modifiers: Right-Shift slices, Right-Alt mutes / quantizes, Left-Shift + right-drag pans.
+    // the side-specific modifiers: Right-Shift slices, Right-Alt mutes / quantizes, Left-Shift + right-drag pans.
     use super::keys::{side, SideKey};
     let shift_held = ui.input(|i| i.modifiers.shift);
     let alt_held = ui.input(|i| i.modifiers.alt);
@@ -238,7 +238,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let raw = ui.input(|i| i.raw_scroll_delta);
         let notch = raw.y + raw.x;
         if shift && alt && notch != 0.0 {
-            // FL Shift+Alt+wheel: nudge the selected clips by a quarter of the snap.
+            // Shift+Alt+wheel: nudge the selected clips by a quarter of the snap.
             let step = st.ui.snap.max(0.0625) / 4.0 * notch.signum() as f64;
             let ids = st.ui.clips.clone();
             st.session.edit("Nudge clips", |p| {
@@ -382,7 +382,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             let selected = st.ui.clips.contains(&c.id);
             draw_clip(st, &tgrid, r, c, &tm, rate, &pattern_names, &patterns, selected, t.muted || c.muted);
             clip_rects.push((t.id, c.id, r));
-            // Pattern clips get FL's menu triangle in the title bar (make unique, split, source pattern …).
+            // Pattern clips get the menu triangle in the title bar (make unique, split, source pattern …).
             if let ClipKind::Pattern { pattern } = c.kind {
                 if r.width() > 18.0 {
                     let icon = Rect::from_min_size(Pos2::new(r.left().max(timeline.left()) + 1.0, r.top() + 1.0), Vec2::new(12.0, 11.0));
@@ -616,7 +616,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    // Right-click and hold on empty space opens the slice tool (FL "click and hold" function).
+    // Right-click and hold on empty space opens the slice tool ("click and hold" function).
     let now_t = ui.input(|i| i.time);
     if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary) && !i.pointer.middle_down()) && !ui.input(|i| i.modifiers.ctrl) && !lsh {
         if let Some(pos) = ui.input(|i| i.pointer.interact_pos()).filter(|p| timeline.contains(*p) && clip_at(*p).is_none()) {
@@ -693,7 +693,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 };
                 let (ctrl, shift) = ui.input(|i| (i.modifiers.ctrl, i.modifiers.shift));
                 if ctrl && !shift {
-                    // FL: Ctrl + drag always selects, even when it starts on a clip.
+                    // Ctrl + drag always selects, even when it starts on a clip.
                     st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: DragKind::Select { from: beat_of(pos.x, sx), y: pos.y + st.ui.pl_y } });
                 } else {
                     if !st.ui.clips.contains(&cid) {
@@ -705,7 +705,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     }
                     let (mut cid, mut tid) = (cid, tid);
                     if shift && matches!(kind, DragKind::Move { .. }) {
-                        // FL: Shift + drag a clip drags copies of the selection; the originals stay.
+                        // Shift + drag a clip drags copies of the selection; the originals stay.
                         let ids = st.ui.clips.clone();
                         let copies = st.session.edit("Clone clips", |p| dragon_engine::edit::copy_clips_in_place(p, &ids));
                         if let Some(k) = ids.iter().position(|x| *x == cid) {
@@ -969,7 +969,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    // FL's playback tool: hold the mouse to play from there, drag to scrub, release to stop.
+    // the playback tool: hold the mouse to play from there, drag to scrub, release to stop.
     let scrub_id = egui::Id::new("pl.scrub");
     let scrubbing: bool = ui.data(|d| d.get_temp(scrub_id)).unwrap_or(false);
     if tool == Tool::Playback && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
@@ -999,7 +999,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: st.ui.pl_vzoom, y: st.ui.pl_y });
         }
     }
-    // FL: double right-click activates the mute tool.
+    // double right-click activates the mute tool.
     if resp.secondary_clicked() {
         if let Some(p) = resp.interact_pointer_pos() {
             let now = ui.input(|i| i.time);
@@ -1013,7 +1013,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
         }
     }
-    // FL: Right-Shift + click slices the clip under the pointer (Right-Shift + right-click also deletes the
+    // Right-Shift + click slices the clip under the pointer (Right-Shift + right-click also deletes the
     // smaller piece); Right-Alt + click mutes, Right-Alt + right-click quantizes the selection.
     let side_click = (rsh || ralt) && (resp.clicked() || resp.secondary_clicked());
     if side_click {
@@ -1081,7 +1081,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         } else {
                             st.ui.clips = vec![cid];
                         }
-                        // Grouped clips (FL Shift+G) are selected together.
+                        // Grouped clips (Shift+G) are selected together.
                         let groups = st.session.project.clip_groups.clone();
                         for g in groups.iter().filter(|g| g.contains(&cid)) {
                             for c in g {
@@ -1567,7 +1567,7 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
 
 /// Waveform display scale: level in dB over a 54 dB range instead of linear amplitude, so a recording at
 /// a healthy level (peaks around −12 … −18 dBFS) fills most of the clip instead of a thin line, as in
-/// the waveform views of Pro Tools / Studio One. Full scale stays at the clip edge.
+/// the waveform views of pro DAWs. Full scale stays at the clip edge.
 pub fn wave_disp(a: f32) -> f32 {
     const RANGE: f32 = 54.0;
     let m = a.abs();

@@ -150,7 +150,7 @@ impl ExportDialog {
         d
     }
 
-    /// Presets the dialog for MP3 (FL's Ctrl+Shift+R).
+    /// Presets the dialog for MP3 (the Ctrl+Shift+R).
     pub fn set_mp3(&mut self) {
         self.apply_preset(2);
     }

@@ -1,5 +1,5 @@
 //! Pitch: YIN pitch detection (shared with audio-to-MIDI), a low-latency granular pitch shifter and the
-//! "Aurum Tune" pitch-correction effect (Auto-Tune / Newtone style: snap a monophonic voice to a key).
+//! "Aurum Tune" pitch-correction effect (snap a monophonic voice to a key).
 
 use super::{Effect, EffectDef, ParamInfo};
 
@@ -165,7 +165,7 @@ impl PitchShifter {
     }
 }
 
-/// Pitch-synchronous overlap-add (TD-PSOLA) shifter – what gives Auto-Tune / Waves Tune their clean,
+/// Pitch-synchronous overlap-add (TD-PSOLA) shifter – the clean,
 /// formant-preserving sound (the "hard tune" effect at retune speed 0). Grains two periods long are
 /// cut around pitch marks one period apart (aligned to the waveform's peaks) and laid down at the new
 /// period; the voice's formants (the grain shapes) stay where they are, only the pitch moves.
@@ -373,7 +373,7 @@ pub fn nearest_in_scale(midi: f32, root: u8, scale: &[u8]) -> f32 {
 const TUNE_PARAMS: &[ParamInfo] = &[
     ParamInfo::choice("key", "Key", KEYS, 0.0),
     ParamInfo::choice("scale", "Scale", SCALE_NAMES, 0.0),
-    // 0 … 400 ms like Auto-Tune: the bottom is the instant, robotic "hard tune".
+    // 0 … 400 ms: the bottom is the instant, robotic "hard tune".
     ParamInfo::log("speed", "Retune speed", 0.1, 400.0, 20.0, "ms"),
     ParamInfo::lin("humanize", "Humanize", 0.0, 1.0, 0.0, ""),
     ParamInfo::lin("flex", "Flex-tune", 0.0, 50.0, 0.0, "ct"),

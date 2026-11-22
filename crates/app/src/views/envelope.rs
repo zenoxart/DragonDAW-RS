@@ -1,4 +1,4 @@
-//! FL Studio-style envelope editor: the DAHDSR curve as a graph with draggable points (attack peak, hold
+//! Envelope editor: the DAHDSR curve as a graph with draggable points (attack peak, hold
 //! end, decay / sustain point, release end), tension handles on the attack and decay / release segments,
 //! knobs underneath, and envelope presets (built-in shapes plus your own, saved as JSON).
 
@@ -246,7 +246,7 @@ mod tests {
         }
     }
 
-    /// FL-style envelope presets: saving one writes it to the presets folder, it comes back by name (sorted,
+    /// Envelope presets: saving one writes it to the presets folder, it comes back by name (sorted,
     /// unsafe file-name characters replaced), saving the same name again replaces it, and the built-in
     /// shapes are all distinct.
     #[test]

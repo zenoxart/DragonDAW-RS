@@ -6,7 +6,7 @@
 //! For Dolby Atmos and other object-based formats, [`export_adm`] writes the same stems as *objects* in an ADM
 //! Broadcast WAV (ITU-R BS.2076 metadata in an `axml` chunk, BS.2088 `chna` track map): every top-level channel
 //! becomes two mono objects (its left and right side) with their position, which the Dolby Atmos Renderer,
-//! DaVinci Resolve, Nuendo and other ADM-capable tools import as an object-based mix.
+//! ADM-capable tools import as an object-based mix.
 //!
 //! The stereo renderer is reused unchanged, so effects, sends and buses behave exactly as in the stereo mix;
 //! the master bus inserts are not applied to the surround mix (a stereo master chain has no meaning there).

@@ -21,7 +21,7 @@ pub fn add_lane(st: &mut State, t: Target) {
     st.ctx.open("dragon.automation", None);
 }
 
-/// FL Ctrl+I: writes the target's current value as an automation point at the playhead (the lane is made
+/// Ctrl+I: writes the target's current value as an automation point at the playhead (the lane is made
 /// when there is none). Returns false when the value is unknown.
 pub fn insert_current_value(st: &mut State, t: Target) -> bool {
     let Some(v) = current_value(&st.session.project, &t) else { return false };

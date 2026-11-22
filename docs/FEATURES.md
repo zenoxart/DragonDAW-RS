@@ -19,7 +19,7 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Built-in sounds | ✅ | Dragon Kit, synthesised on first run |
 | Audio recording of armed tracks with latency compensation | ✅ | `device.rs` (recorder thread), Transport › Record |
 | MIDI input (controllers, keyboards) and typing keyboard | ✅ | `device.rs` (`MidiInputs`), `views/keyboard.rs` |
-| Mixer with volume, pan, mute, solo, inserts, meters | ✅ | `views/mixer.rs`: FL Studio layout – insert strips with route arrows (click: route the selected insert, right-click: route to this track only, send-level knob on routed arrows), effect slots of the selected insert on the right (used slots + one empty, up to 10; bypass LED, mix, drag to reorder, replace / sidechain / remove) |
+| Mixer with volume, pan, mute, solo, inserts, meters | ✅ | `views/mixer.rs`: classic layout – insert strips with route arrows (click: route the selected insert, right-click: route to this track only, send-level knob on routed arrows), effect slots of the selected insert on the right (used slots + one empty, up to 10; bypass LED, mix, drag to reorder, replace / sidechain / remove) |
 | Click-free parameter changes | ✅ | effect parameters glide (`effects::Smoothed`), faders / pan / sends / mix ramp per block, synth cutoff / resonance / gain smoothed |
 | Stock EQ, compressor, limiter, reverb, delay | ✅ | `engine/effects`; the reverb has separate early-reflection and late-reverb levels, early size and feed, and an EQ per part (low cut, high cut, bell) |
 | Undo / redo | ✅ | `history.rs`, undo history view |
@@ -40,8 +40,8 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Clip gain, fades, split, trim, duplicate | ✅ | playlist, clip window; dB handle on every audio clip (drag up/down, Shift fine, double-click = 0 dB, selected clips move together) |
 | Drag & drop from the file manager | ✅ | audio dropped on the playlist lands on the track and grid beat under the mouse (a ghost shows where), several files on consecutive tracks, below the last track a new track; on the channel rack it loads a sampler |
 | Designed plugin panels | ✅ | every stock effect has its own panel instead of a generic knob grid (`views/fx_panel.rs`): titled sections, a skin per device family (modern rings, brushed metal, chicken-head console knobs, cream valve caps), a large main knob, faders, LED switches, segmented selectors, band pickers inside the band's section; labels fit their cells. Every effect's display is also a control (drag nodes, lines, drawn knobs and bars, or an XY pad over the two main parameters). Tests check that each panel shows every parameter and each display reacts to the mouse |
-| NS1-style noise suppressor | ✅ | first stage of the Class-A Strip: one fader (0 … 100 %), four bands each tracking its own noise floor (2 s sliding minimum, -96 … -40 dBFS) and pulled down near it; bit-transparent at 0 %, zero latency; lamp shows live suppression |
-| Auto-panner (PanMan / Panomatic style) | ✅ | "Dragon Orbit": Sync (locked to the song position), Free or Trigger (one step per hit, with glide); 7 shapes incl. random; width, centre, phase, smoothing; equal-power or balance law; binaural mode (far-ear delay and head shadow). Its display is the control: drag the stereo field, click shapes and modes |
+| One-fader noise suppressor | ✅ | first stage of the Class-A Strip: one fader (0 … 100 %), four bands each tracking its own noise floor (2 s sliding minimum, -96 … -40 dBFS) and pulled down near it; bit-transparent at 0 %, zero latency; lamp shows live suppression |
+| Auto-panner | ✅ | "Dragon Orbit": Sync (locked to the song position), Free or Trigger (one step per hit, with glide); 7 shapes incl. random; width, centre, phase, smoothing; equal-power or balance law; binaural mode (far-ear delay and head shadow). Its display is the control: drag the stereo field, click shapes and modes |
 | Mixer auto-balance | ✅ | "Auto balance" in the mixer (and Tools): one offline render measures every channel's pre-fader loudness and sets the faders for an even starting mix by role (vocals and low end forward, hats and pads back); buses, VCAs and silent channels untouched; one undo step |
 | Real-time safety | ✅ | no allocation on the audio thread (`tests/realtime.rs`), old songs freed on a GC thread, constant-cost loudness meter, insert chains spread over all cores; 200 stock plugins run in real time on a 4-core machine; knob moves reach the effects every frame and effects retune without resetting their filters (no zipper or "downsampled" sound) |
 | Audio output watchdog | ✅ | a stream error or a callback that stops for 2 s restarts the device and resumes playback at the same spot; a lost device is retried every 5 s |
@@ -82,26 +82,26 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Large effect slots, animated interactive effect / synth displays | ✅ | `views/mixer.rs`, `views/fx_ui.rs` |
 | Effect editor A/B compare, effect gallery | ✅ | `views/windows.rs`, `views/fx_gallery.rs` |
 | Design after Higgsfield references (effect suite sheet, level-up animation) | ✅ | `docs/images/design/` |
-| FL-style project folder on save (Samples, Recordings, Renders, Backup) | ✅ | `project_io::save_in_folder` |
+| classic project folder on save (Samples, Recordings, Renders, Backup) | ✅ | `project_io::save_in_folder` |
 | Mixer and Mastering as default tabs next to the playlist | ✅ | `docking::default_layout` (layout version 2) |
 | Quests, XP, levels, daily streak, celebrations | ✅ | `views/quests.rs` |
-| FL Studio shortcut set (duplicate, undo toggle, clipboard, tools, windows, export) | ✅ | `commands.rs` |
+| Full shortcut set (duplicate, undo toggle, clipboard, tools, windows, export) | ✅ | `commands.rs` |
 | BPM display: integer / decimal drag zones, double-click to type, right-click tempo presets 70–160 | ✅ | `widgets::bpm_display` |
 | Multi-select and drag of patterns / audio / automation clips from the picker | ✅ | `views/picker.rs` (`place_many`) |
 | Playlist: Ctrl+drag selection across tracks, Shift+drag clone, multi-track moves | ✅ | `views/playlist.rs` |
-| FL-style slice tool (playlist across tracks, piano roll across notes; Alt = no snap) | ✅ | `views/playlist.rs`, `views/piano_roll.rs` |
+| classic slice tool (playlist across tracks, piano roll across notes; Alt = no snap) | ✅ | `views/playlist.rs`, `views/piano_roll.rs` |
 | Sampler volume envelope editor with bend handles, over the waveform, with presets | ✅ | `views/envelope.rs` |
 | Browser waveform preview (cut when playback starts) | ✅ | `views/browser.rs`, `Renderer::play` |
 | Export tempo matches playback at every device rate | ✅ | `Renderer::set_song` (the clock follows the song's rate) |
-| Stock effects with FabFilter-style handling: EQ analyzer, band add / remove / shape menu, compressor level history, typed values, Ctrl+click reset, full screen | ✅ | `views/fx_ui.rs`, `dsp/spectrum.rs` |
+| Stock effects with pro-grade handling: EQ analyzer, band add / remove / shape menu, compressor level history, typed values, Ctrl+click reset, full screen | ✅ | `views/fx_ui.rs`, `dsp/spectrum.rs` |
 | Native plugin editors resize with the plugin and can go full screen | ✅ Linux (X11) / Windows | `plugins/window.rs`, `clap.rs`, `vst3.rs` |
 | Clean Voice, Class-A Strip, Drum Bus, Alter, tube saturator, transient designer, phase meter | ✅ | `effects/voice.rs`, `strips.rs`, `alter.rs`, `dsp/tube.rs`, `dynamics.rs`, `color.rs` |
 
-## Comparison with FL Studio's shortcuts
+## Comparison with the shortcuts
 
-Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Shortcuts are rebindable in Options; a test makes sure no two commands share a default key.
+Shortcuts are rebindable in Options; a test makes sure no two commands share a default key.
 
-| FL Studio | Dragon DAW |
+| Feature | Dragon DAW |
 |---|---|
 | Space play / stop, Ctrl+Space play / pause, R record, L pattern / song, Ctrl+M metronome, Ctrl+P precount, Ctrl+H stop sound, Ctrl+T typing keyboard | ✅ same |
 | Ctrl+Z undo / redo last, Ctrl+Alt+Z undo step by step | ✅ same (plus Ctrl+Shift+Z redo) |
@@ -112,7 +112,7 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Ctrl+Insert / Ctrl+Delete insert / delete space (the ruler selection) | ✅ same (markers follow) |
 | Channel rack 1…0 mute, Ctrl+1…0 solo the first ten channels | ✅ same (number keys follow the editor under the mouse) |
 | Piano roll: Ctrl+↑/↓ octave, Ctrl+L legato, Ctrl+G glue, Ctrl+U quick chop, Alt+Q quantize, Alt+F flam | ✅ same (Shift+Q quick quantize instead of Ctrl+Alt+Q) |
-| Piano-roll tools Alt+A arpeggiator, Alt+E riff machine, Alt+K limit, Alt+L articulate, Alt+O LFO, Alt+R randomize, Alt+S strum, Alt+U chop, Alt+W claw machine, Alt+X scale levels, Alt+Y score flipper | ✅ one tool window with a tab each (simpler than FL's: no per-tool presets) |
+| Piano-roll tools Alt+A arpeggiator, Alt+E riff machine, Alt+K limit, Alt+L articulate, Alt+O LFO, Alt+R randomize, Alt+S strum, Alt+U chop, Alt+W claw machine, Alt+X scale levels, Alt+Y score flipper | ✅ one tool window with a tab each (simpler than 's: no per-tool presets) |
 | Playlist: Shift+Q quick-quantize clip starts, Alt+T time marker, Alt+P picker panel, Shift+drag clone, Ctrl+drag select | ✅ same |
 | F4 next empty pattern, F5 playlist, F6 channel rack, F7 piano roll, F8 plugin picker, F9 mixer, F10 settings, F11 song info, F12 close windows, Alt+F8 browser | ✅ same |
 | File: Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+N save new version, Ctrl+R export WAV, Ctrl+Shift+R MP3, Ctrl+Shift+M MIDI | ✅ same |
@@ -123,42 +123,42 @@ Checked against the FL Studio manual's shortcut page (*basics_shortcuts*). Short
 | Numeric-pad 0 fast forward | ✅ held numeric-pad 0 seeks forward at 4× (read from the OS key state – X11 and Windows; not on Wayland or macOS) |
 | Numeric-pad * and / (next / previous bar in song mode; with Alt next / previous marker) | ✅ (read as typed characters, so the main-keyboard * and / work too; Alt+/ and Alt++ also jump markers) |
 | Ctrl+I: insert controller value (piano roll – the last touched parameter goes into its automation lane at the playhead) / wait for input to start recording (elsewhere – the first played note starts the armed recording) | ✅ |
-| Shift+M in the piano roll: unmute the selection, or – when nothing selected is muted – select groups of notes at random (FL binds both) | ✅ |
+| Shift+M in the piano roll: unmute the selection, or – when nothing selected is muted – select groups of notes at random | ✅ |
 
-## FL's slice tool, compared
+## the slice tool, compared
 
-| FL Studio (playlist and piano roll) | Dragon DAW |
+| Playlist and piano roll | Dragon DAW |
 |---|---|
 | C selects the slice tool | ✅ |
 | Click on a clip / note slices it at the pointer (snapped) | ✅ |
 | Drag a line (any angle) – every clip / note it crosses is cut where the line passes its track / row | ✅ |
 | Alt while slicing: no snap | ✅ |
-| Right-drag with the slice tool: slice and delete the smaller piece (FL Right-Shift+right-click in the piano roll) | ✅ |
+| Right-drag with the slice tool: slice and delete the smaller piece (Right-Shift+right-click in the piano roll) | ✅ |
 | Right-Shift+left-click with any tool slices; Right-Shift+right-click slices and deletes the smaller piece (playlist) / keeps the longer one (piano roll); Right-Shift+drag cuts a line | ✅ |
 | Right-Alt+click mutes, Right-Alt+right-click quantizes; Left-Shift+right-drag pans; Left-Shift+resize ripples the following clips; holding the right button on empty space starts the slice line; middle+right click opens the tool menu | ✅ |
 | Which Shift / Alt is held (left or right) | read from the OS key state on X11 and Windows; on Wayland and macOS both sides act as left (use the slice tool there) |
 | Double right-click activates the mute tool (playlist); Alt+Right-Shift slices with snap off | ✅ |
 | Ctrl+U quick chop / Alt+U chop tool (piano roll) | ✅ |
 
-## Comparison with the FabFilter bundle
+## Comparison with the bundle
 
-What the stock effects share with FabFilter's handling. Every listed feature is there; the one caveat: the compressor and limiter styles are modelled after FabFilter's names, not measured against the originals.
+What the stock effects share with handling. Every listed feature is there; the one caveat: the compressor and limiter styles are modelled after names, not measured against the originals.
 
-| FabFilter | Dragon DAW stock effects |
+| | Dragon DAW stock effects |
 |---|---|
-| Pro-Q: 24 bands, live pre / post analyzer, double-click to add a band, spectrum grab (drag a peak of the analyzer), drag nodes, wheel = Q, right-click shape menu, hover readout with note names, piano scale, remove a band, band solo, auto gain, one band's controls at a time | ✅ |
-| Pro-Q: dynamic EQ per band, stereo placement per band (stereo, mid, side, left, right), zero-latency, natural-phase (filters at 2× rate, ~0.5 ms) and linear-phase processing | ✅ (in linear phase too: placement through a mid/side kernel matrix, dynamic bands re-design the kernels every ≥ 512 samples) |
-| Pro-Q: EQ match against another EQ in the project, the sidechain input or an audio file (learn the spectra, fill free bands), collision display with another EQ's spectrum | ✅ |
-| Pro-C: styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain high- and low-pass, external sidechain, transfer curve with threshold drag, scrolling level / gain-reduction history, mix, auto makeup | ✅ (styles designed after Pro-C's names, not measured against it) |
-| Pro-L: true-peak limiting, styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe), 2× / 4× oversampling, scrolling level / gain-reduction display, unity-gain listening, loudness meters | ✅ (LUFS in the Mastering view) |
-| Saturn: multiband saturation – up to four bands with draggable crossovers, eight styles, drive, dynamics, tone, level, mix and a resonant feedback loop per band | ✅ "Multiband Saturator" |
-| Pro-R: decay-rate EQ, drawn as a curve with free nodes | ✅ on the reverb: six bands like Pro-R's, each bell, low / high shelf or notch (right-click), free frequency 20 Hz … 20 kHz, ×¼ … ×4 of the decay time, Q on the wheel |
+| EQ: 24 bands, live pre / post analyzer, double-click to add a band, spectrum grab (drag a peak of the analyzer), drag nodes, wheel = Q, right-click shape menu, hover readout with note names, piano scale, remove a band, band solo, auto gain, one band's controls at a time | ✅ |
+| EQ: dynamic EQ per band, stereo placement per band (stereo, mid, side, left, right), zero-latency, natural-phase (filters at 2× rate, ~0.5 ms) and linear-phase processing | ✅ (in linear phase too: placement through a mid/side kernel matrix, dynamic bands re-design the kernels every ≥ 512 samples) |
+| EQ: EQ match against another EQ in the project, the sidechain input or an audio file (learn the spectra, fill free bands), collision display with another EQ's spectrum | ✅ |
+| Compressor: styles (Clean, Classic, Opto, Vocal, Mastering, Bus, Punch, Pumping), look-ahead, hold, sidechain high- and low-pass, external sidechain, transfer curve with threshold drag, scrolling level / gain-reduction history, mix, auto makeup | ✅ (styles designed after pro-grade tools's names, not measured against it) |
+| Limiter: true-peak limiting, styles (Allround, Transparent, Punchy, Dynamic, Aggressive, Modern, Bus, Safe), 2× / 4× oversampling, scrolling level / gain-reduction display, unity-gain listening, loudness meters | ✅ (LUFS in the Mastering view) |
+| Multiband saturation – up to four bands with draggable crossovers, eight styles, drive, dynamics, tone, level, mix and a resonant feedback loop per band | ✅ "Multiband Saturator" |
+| Reverb: decay-rate EQ, drawn as a curve with free nodes | ✅ on the reverb: six bands, each bell, low / high shelf or notch (right-click), free frequency 20 Hz … 20 kHz, ×¼ … ×4 of the decay time, Q on the wheel |
 | Modulation: LFOs (five shapes, free or tempo-synced), envelope followers and an XY pad on any stock-effect parameter, with depth; the XY pad is MIDI-learnable and automatable (MIDI as a source) | ✅ plus MIDI note and MIDI velocity sources (the last note played – patterns, piano roll or live MIDI) and slew per route |
 | Pro-DS: single-vocal (relative) / allround detection, split band (dynamic high shelf) / wide band, detection band high- and low-pass, threshold, range, look-ahead 0–15 ms, stereo link, listen | ✅ De-esser |
-| Pro-MB: up to four bands, three crossovers, per band compress / expand / upward compress / upward expand, threshold, range, ratio, knee, attack, release, gain, solo, bypass; mix, output | ✅ Multiband Dynamics (per-band external sidechain; two processing modes: crossover bands with all-pass compensation, or dynamic phase – each band a dynamic shelf / bell on the full signal, untouched while idle) |
-| Timeless: tempo-synced stereo delay with feedback, cross feedback, drive in the loop, filter with resonance, diffusion, ducking, freeze, width and pitch shift in the loop | ✅ Delay, with its own modulation matrix: two LFOs (free or synced, four shapes) and an envelope follower routed through four slots to time, feedback, low / high cut, drive, pitch, width or mix |
-| Volcano: two filters (LP, HP, BP, notch, peak, shelves) at 12 / 24 / 48 dB/oct, styles (Clean, Smooth, Ram, Hack), drive, serial / parallel routing, B following A, stereo spread | ✅ Filter |
-| Pro-G: threshold with hysteresis, range, ratio (gate … expander), knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix, listen | ✅ Gate |
+| Multiband dynamics: up to four bands, three crossovers, per band compress / expand / upward compress / upward expand, threshold, range, ratio, knee, attack, release, gain, solo, bypass; mix, output | ✅ Multiband Dynamics (per-band external sidechain; two processing modes: crossover bands with all-pass compensation, or dynamic phase – each band a dynamic shelf / bell on the full signal, untouched while idle) |
+| Tempo-synced stereo delay with feedback, cross feedback, drive in the loop, filter with resonance, diffusion, ducking, freeze, width and pitch shift in the loop | ✅ Delay, with its own modulation matrix: two LFOs (free or synced, four shapes) and an envelope follower routed through four slots to time, feedback, low / high cut, drive, pitch, width or mix |
+| Dual filter: two filters (LP, HP, BP, notch, peak, shelves) at 12 / 24 / 48 dB/oct, styles (Clean, Smooth, Ram, Hack), drive, serial / parallel routing, B following A, stereo spread | ✅ Filter |
+| Gate: threshold with hysteresis, range, ratio (gate … expander), knee, attack, hold, release, look-ahead, styles (Classic, Clean, Vocal, Guitar, Upward), sidechain filters, external sidechain, flip (ducking), mix, listen | ✅ Gate |
 | Every plugin: A/B compare, presets, resizable / full screen, typed values, Ctrl+click reset, fine drag | ✅ (stock editors: fitted window, never under 480 px, full screen in a window of its own; CLAP / VST3 editors: the window takes the editor's requested size, also under window managers, and full screen lifts the size lock – tested with openbox on Xvfb) |
 
 ## The new plugins against their published references
@@ -167,33 +167,33 @@ Checked against the manufacturers' manuals and spec sheets (tests in `effects/st
 
 | Reference | Matches | Differs |
 |---|---|---|
-| Neve 1073 (preamp + EQ) | HPF 50 / 80 / 160 / 300 Hz at 18 dB/oct, low shelf 35 / 60 / 110 / 220 Hz ±16 dB, mid bell 360 Hz … 7.2 kHz ±18 dB, high shelf 12 kHz ±16 dB, transformer-coupled class-A drive | no mic / line impedance switch, no stepped 5 dB gain switch (continuous drive) |
-| Tube-Tech CL 1B | ratio 2–10, attack 0.5–300 ms, release 0.05–10 s, Fixed (1 ms / 50 ms), Fix/Man (fast release for short peaks, manual for long), Manual, gain up to 30 dB, opto cell | threshold −40…0 dBFS instead of +20…−40 dBm, no stereo link bus |
-| Cradle Orion | modules Input (target meter), Drive (3 colours, high-pass after), Harmonics (50 / 80 Hz focus), Compression (2 modes, mix), Lift, Harmonic EQ (5 bands, 1 dB steps), Parallels Sub / Low / Loud / Grit, Output | Orion's band frequencies and algorithms are not published; ours are our own |
-| Soundtoys Little AlterBoy | Pitch ±12 st, Formant, Link, modes Transpose / Quantize / Robot (Pitch sets the robot note, 0 = C5), tube Drive, Mix, Output | no MIDI control of Pitch |
-| Waves Smack Attack | attack and sustain level, sensitivity, duration, shape (Needle / Nail / Blunt; Linear / Non-linear / Soft linear), Mix, Output before Guard, Guard Off / Clip / Limit at −0.1 dBFS, listen modes | an extra Soft clip guard |
+| Class-A preamp and EQ | HPF 50 / 80 / 160 / 300 Hz at 18 dB/oct, low shelf 35 / 60 / 110 / 220 Hz ±16 dB, mid bell 360 Hz … 7.2 kHz ±18 dB, high shelf 12 kHz ±16 dB, transformer-coupled class-A drive | no mic / line impedance switch, no stepped 5 dB gain switch (continuous drive) |
+| Opto compressor | ratio 2–10, attack 0.5–300 ms, release 0.05–10 s, Fixed (1 ms / 50 ms), Fix/Man (fast release for short peaks, manual for long), Manual, gain up to 30 dB, opto cell | threshold −40…0 dBFS instead of +20…−40 dBm, no stereo link bus |
+| Drum bus | modules Input (target meter), Drive (3 colours, high-pass after), Harmonics (50 / 80 Hz focus), Compression (2 modes, mix), Lift, Harmonic EQ (5 bands, 1 dB steps), Parallels Sub / Low / Loud / Grit, Output | band frequencies and algorithms are our own |
+| Pitch and formant shifter | Pitch ±12 st, Formant, Link, modes Transpose / Quantize / Robot (Pitch sets the robot note, 0 = C5), tube Drive, Mix, Output | no MIDI control of Pitch |
+| Transient designer | attack and sustain level, sensitivity, duration, shape (Needle / Nail / Blunt; Linear / Non-linear / Soft linear), Mix, Output before Guard, Guard Off / Clip / Limit at −0.1 dBFS, listen modes | an extra Soft clip guard |
 
 ## P3 – advanced
 
 | Feature | Status | Where |
 |---|---|---|
-| Pitch correction (Auto-Tune / Newtone style) | ✅ | "Dragon Tune" effect: real-time and low latency for tracking (pitch-synchronous shifting, 2.7 ms hop), YIN detection, key + scale, retune speed, humanize, flex-tune, vibrato; after MetaTune: note stabilizer, doubler, heat map on the note keys, big note readout with a ±50 ct meter and a pitch graph over note lanes (`effects/pitch.rs`); MetaTune's negative speed and grouped instances are not there |
+| Pitch correction | ✅ | "Dragon Tune" effect: real-time and low latency for tracking (pitch-synchronous shifting, 2.7 ms hop), YIN detection, key + scale, retune speed, humanize, flex-tune, vibrato; after MetaTune: note stabilizer, doubler, heat map on the note keys, big note readout with a ±50 ct meter and a pitch graph over note lanes (`effects/pitch.rs`); MetaTune's negative speed and grouped instances are not there |
 | MP3 / Ogg Vorbis export | ✅ | LAME and libvorbis (aoTuV) encoders, export dialog and `dragon render --format mp3/ogg` |
 | Native plugin editors embedded in a host window | ✅ Linux (X11) / Windows | `plugins/window.rs`; the plugin's own window opens automatically with its effect / instrument window (generic controls as a fallback, with the reason when a GUI cannot open). VST3: `IPlugFrame`, `IRunLoop` (Linux), `IComponentHandler` (GUI edits reach the processor and the project, one undo step per knob turn), host-created `IMessage` / `IAttributeList`, content scale for HiDPI. CLAP: `set_parent`, `set_scale`, timer / fd host extensions, GUI edits from output events. Tested on Linux and Windows CI with real windows, and with 40 real third-party builds (Dragonfly Reverb, DISTRHO collection incl. the OpenGL ProM visualiser; VST3 and CLAP): all 28 with a GUI embed, the 10 without one fall back to generic controls – re-run with `DRAGON_THIRD_PARTY=<folders> cargo test -p dragon-test-plugins --test third_party -- --ignored --nocapture`. CLAP plugins shipped as folders (`Name.clap/Name.clap`) load. macOS ❌ |
 | Sidechain into plugins | ✅ | CLAP second input port, VST3 aux input bus |
 | Clip launcher / performance mode | ✅ | View › Performance (F12): tracks × patterns, launch quantised to bar / beat, stop lanes, `LiveEvent::Launch` in the renderer |
 | Audio-to-MIDI | ✅ | Tools › Convert selected clip to MIDI (melody: YIN pitch tracking; drums: onsets sorted kick / snare / hat) |
 | Stem separation | ✅ (DSP, not AI) | Tools › Separate: harmonic/percussive median filtering + centre extraction → drums, harmonic, centre stems |
-| Control surfaces (Mackie Control) | ✅ | Options › Control surface: faders, V-pots, mute / solo / arm / select, transport, banks; motor faders and LEDs |
+| Control surfaces (MCU protocol) | ✅ | Options › Control surface: faders, V-pots, mute / solo / arm / select, transport, banks; motor faders and LEDs |
 | Video track | ✅ (needs ffmpeg) | File › Import video, View › Video (frame at the playhead with timecode), soundtrack as a clip, export the video with the mix |
 | Surround 5.1 / 7.1 | ✅ (export) | Project › Surround; per-channel XY panner with spread and LFE send (2D VBAP); multichannel WAV export (`surround.rs`). Monitoring is stereo; master inserts are not applied to the surround mix |
-| Dolby Atmos (objects, ADM BWF) | ✅ | 7.1.4 bed with height panning; every top-level channel exported as two positioned objects in an ADM BWF (BS.2076 axml + BS.2088 chna) for the Dolby Atmos Renderer, Resolve, Nuendo. No in-app Atmos binaural monitoring (Dolby-licensed); files over 4 GB (BW64) not supported |
+| Dolby Atmos (objects, ADM BWF) | ✅ | 7.1.4 bed with height panning; every top-level channel exported as two positioned objects in an ADM BWF (BS.2076 axml + BS.2088 chna) for the Dolby Atmos Renderer and other ADM tools. No in-app Atmos binaural monitoring (Dolby-licensed); files over 4 GB (BW64) not supported |
 | Start screen: make a beat, record, mix, master, stem master, album master, film sound design | ✅ | `modes.rs`: each builds a fitting project and opens its views; File › Start screen…; Options › Show this at start |
 | Album master | ✅ | Mastering tab (album projects): songs one after another on their own channels through an album bus, group buses, "Match loudness" (one offline measurement, every song to the median loudness before the shared chain) – `views/album.rs` |
 | Stem master | ✅ | start screen: Drums, Melody, All vocals, SFX group buses and a mastering chain |
 | Master chain in the Mastering tab | ✅ | signal flow (IN → effects with their gain reduction → OUT with true peak; click opens, the switch bypasses) and the full slot list |
-| Audio Repair (iZotope RX style) | ✅ | double-click an audio clip › Audio repair…: spectrogram with time and time × frequency selection; de-noise (learned profile, decision-directed Wiener), de-hum (auto 50 / 60 Hz, zero-phase notches), de-click (LPC interpolation), de-clip, distortion repair (soft-clipped peaks), de-reverb (Lebart), spectral attenuate, gain; every repair renders to a new file, Ctrl+Z goes back – `repair.rs`, `views/repair.rs` |
-| Note editing (Melodyne style) | ✅ (monophonic) | Audio repair › Notes: detected notes as blobs with pitch curves, drag to move (semitones / free), pitch centre, flatten drift and vibrato. Note timing, formants and polyphonic (DNA) editing are not there |
+| Audio Repair | ✅ | double-click an audio clip › Audio repair…: spectrogram with time and time × frequency selection; de-noise (learned profile, decision-directed Wiener), de-hum (auto 50 / 60 Hz, zero-phase notches), de-click (LPC interpolation), de-clip, distortion repair (soft-clipped peaks), de-reverb (Lebart), spectral attenuate, gain; every repair renders to a new file, Ctrl+Z goes back – `repair.rs`, `views/repair.rs` |
+| Note editing  | ✅ (monophonic) | Audio repair › Notes: detected notes as blobs with pitch curves, drag to move (semitones / free), pitch centre, flatten drift and vibrato. Note timing, formants and polyphonic (DNA) editing are not there |
 | Hammerstein graph of an effect | ✅ | every effect editor › Hammerstein: kernels G1–G5, THD and the static curve from a synchronised sweep (Novak), re-measured on every change; time-varying and adaptive effects are flagged – `hammerstein.rs` |
 | Drag a cut clip into a new grouped track | ✅ | drag clips below the last track: a new track grouped with theirs, same mixer channel; grouped tracks mute / solo together |
 | Hint bar (control and value at the top left) | ✅ | stock panels and displays, plugin parameter lists, plugins' own windows, mixer faders |

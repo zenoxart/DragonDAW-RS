@@ -256,11 +256,11 @@ pub fn bitcrusher_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ filter
 
-/// Filter types (Volcano): the classic responses plus notch, peak and shelves.
+/// Filter types: the classic responses plus notch, peak and shelves.
 pub const FILTER_TYPES: &[&str] = &["Low pass", "High pass", "Band pass", "Notch", "Peak", "Low shelf", "High shelf"];
 /// Slopes: one, two or four state-variable stages (12 / 24 / 48 dB per octave for the pass types).
 pub const FILTER_SLOPES: &[&str] = &["12 dB/oct", "24 dB/oct", "48 dB/oct"];
-/// Styles: how the filter saturates around its resonance (Volcano's Clean / Smooth / Ram / Hack).
+/// Styles: how the filter saturates around its resonance (Clean / Smooth / Ram / Hack).
 pub const FILTER_STYLES: &[&str] = &["Clean", "Smooth", "Ram", "Hack"];
 
 const FILTER_PARAMS: &[ParamInfo] = &[
@@ -423,7 +423,8 @@ pub fn filter_def() -> EffectDef {
         id: "filter",
         name: "Alembic (filter)",
         category: "Filter",
-        description: "Filter after Volcano: two filters (serial or parallel), low / high / band pass, notch, peak and shelves, 12 / 24 / 48 dB slopes, styles (clean, smooth, ram, hack), drive, stereo spread, LFO and envelope follower.",
+        description:
+            "Filter: two filters (serial or parallel), low / high / band pass, notch, peak and shelves, 12 / 24 / 48 dB slopes, styles (clean, smooth, ram, hack), drive, stereo spread, LFO and envelope follower.",
         params: FILTER_PARAMS,
         uses_sidechain: false,
         create: |rate| {
@@ -649,7 +650,7 @@ pub fn imager_def() -> EffectDef {
 const DP_DEFAULT: (f32, f32, f32, f32, usize, f32, f32, f32) = (0.6, 1.0, 1.0, -0.3, 3, 0.45, 0.45, 0.5);
 
 const DP_PARAMS: &[ParamInfo] = &[
-    // Defaults voiced like the big one-knob mastering processors (Cradle's God Particle): loud and
+    // Defaults voiced like the big one-knob mastering processors: loud and
     // finished out of the box – a solid, tight low end, forward mids, open air, a clipped-then-limited
     // top end close to 0 dBTP.
     ParamInfo::lin("amount", "Amount", 0.0, 1.0, DP_DEFAULT.0, ""),
@@ -915,7 +916,7 @@ mod scope_tests {
         }
     }
 
-    /// Volcano-style filter: steeper slopes cut more an octave above the cutoff; the notch removes its
+    /// Multi-mode filter: steeper slopes cut more an octave above the cutoff; the notch removes its
     /// frequency; two filters in series make a band from a low pass and a high pass.
     #[test]
     fn filter_slopes_types_and_routing() {

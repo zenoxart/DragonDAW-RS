@@ -2,8 +2,7 @@
 //!
 //! * **Scanning** looks through the standard plugin folders (plus user folders) and reads each library's
 //!   descriptors. [`scan_isolated`] runs the scan of one file in a child process (`dragon scan-plugin`), so
-//!   a plugin that crashes while loading cannot take the DAW down – the same idea as FL Studio's
-//!   verification scan.
+//!   a plugin that crashes while loading cannot take the DAW down (a verification scan).
 //! * **Hosting** wraps a plugin instance in the engine's [`Effect`] / [`InstrumentVoice`] traits: audio in
 //!   place, notes as events, parameters as sample-accurate parameter events, latency reported to the plugin
 //!   delay compensation, state saved into the project.

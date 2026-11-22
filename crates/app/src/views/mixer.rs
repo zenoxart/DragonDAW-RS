@@ -1,4 +1,4 @@
-//! Mixer, laid out like FL Studio's: a row of insert strips (master first, then the numbered inserts) with
+//! Mixer: a row of insert strips (master first, then the numbered inserts) with
 //! peak meters, faders, pan and stereo-separation knobs, mute / solo, and a route arrow at the foot of every
 //! strip. Selecting an insert lights the arrows of the inserts it routes to; clicking an arrow toggles a route
 //! from the selected insert (right-click: "route to this track only"), and a routed arrow shows its level knob.
@@ -101,7 +101,7 @@ pub(super) fn toggle_routes(st: &mut State, srcs: &[Id], target: Id) {
     });
 }
 
-/// FL's "Sidechain to this track": each source feeds `target` as sidechain material only (not heard
+/// the "Sidechain to this track": each source feeds `target` as sidechain material only (not heard
 /// there), and the target's first sidechain-capable effect without a source listens to it.
 pub(super) fn sidechain_to(st: &mut State, srcs: &[Id], target: Id) {
     let master = st.session.project.mixer.master.id;
@@ -145,7 +145,7 @@ fn route_of(src: &MixerChannel, target: Id, master: Id) -> Route {
     }
 }
 
-/// Toggles a route from `src` to `target`, FL style: a new route is the main output when the insert has none,
+/// Toggles a route from `src` to `target`: a new route is the main output when the insert has none,
 /// otherwise a send at unity; an existing route is removed (removing the main route leaves only the sends).
 fn toggle_route(st: &mut State, src: Id, target: Id) {
     let master = st.session.project.mixer.master.id;
@@ -169,7 +169,7 @@ fn toggle_route(st: &mut State, src: Id, target: Id) {
     });
 }
 
-/// FL's "Route to this track only": the main output goes to `target`, every other route is removed –
+/// the "Route to this track only": the main output goes to `target`, every other route is removed –
 /// for every source.
 fn route_only(st: &mut State, srcs: &[Id], target: Id) {
     let master = st.session.project.mixer.master.id;
@@ -528,7 +528,7 @@ fn jacks(r: egui::Rect) -> (Pos2, Pos2) {
     (Pos2::new(r.center().x + 14.0, y), Pos2::new(r.center().x - 14.0, y))
 }
 
-/// A cable sagging between two jacks, FL style (cubic bezier with a soft shadow).
+/// A cable sagging between two jacks (cubic bezier with a soft shadow).
 fn cable(p: &egui::Painter, a: Pos2, b: Pos2, col: Color32, width: f32, floor: f32) -> [Pos2; 4] {
     let sag = ((b.x - a.x).abs() * 0.35 + 24.0).min(floor - a.y.max(b.y)).max(8.0);
     let pts = [a, a + Vec2::new((b.x - a.x) * 0.15, sag), b + Vec2::new((a.x - b.x) * 0.15, sag), b];

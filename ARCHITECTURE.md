@@ -45,7 +45,7 @@
 | `history` | Snapshot undo / redo with labels and a dirty flag |
 | `project_io` | Save (relative paths, numbered backups), load and repair, missing files, collect files, autosave with crash detection, recent projects |
 | `export` | Mix, stems, WAV / FLAC / MP3 / Ogg, loudness / peak normalisation, bounce-in-place, all with a plugin-aware pool |
-| `midi` | MIDI message parsing, CC mapping, SMF import / export, the retro-capture buffer, Mackie Control decoding and feedback messages |
+| `midi` | MIDI message parsing, CC mapping, SMF import / export, the retro-capture buffer, MCU decoding and feedback messages |
 | `analysis` | BPM (onset autocorrelation) and key (chroma + key profiles) detection, audio-to-MIDI, HPSS + centre stem separation |
 | `device` | Output stream with a command channel, input capture into a recorder thread, recorded takes with latency, shared transport, MIDI inputs |
 | `plugins` | Folder scan, isolated scan, CLAP host, VST3 host, native editor windows (`window`), `Host` as the pool's plugin factory |

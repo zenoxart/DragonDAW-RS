@@ -21,7 +21,7 @@ pub enum Tab {
 pub const TABS: [(Tab, &str, &str); 5] = [
     (Tab::Audio, "Audio", "Driver, devices, sample rate, buffer"),
     (Tab::Midi, "MIDI", "MIDI inputs"),
-    (Tab::Surface, "Control surface", "Mackie Control surfaces"),
+    (Tab::Surface, "Control surface", "MCU control surfaces"),
     (Tab::General, "General", "Autosave, undo, interface"),
     (Tab::Shortcuts, "Shortcuts", "Keyboard shortcuts"),
 ];
@@ -198,13 +198,17 @@ fn midi(ui: &mut Ui, st: &mut State) {
     }
 }
 
-/// Mackie Control surface.
+/// MCU control surface.
 fn surface(ui: &mut Ui, st: &mut State) {
-    ui.heading("Control surface (Mackie Control)");
+    ui.heading("Control surface (MCU protocol)");
     let ports = device::midi_inputs();
-    ui.label(RichText::new("X-Touch, iCON, FaderPort and other MCU-compatible surfaces: faders, V-pots (pan), mute / solo / arm / select, transport, loop and click, banks of 8 tracks; motor faders and LEDs follow the project when an output is set.").small().color(theme::TEXT_DIM));
-    let mut mi = st.settings.mackie_input.clone();
-    let mut mo = st.settings.mackie_output.clone();
+    ui.label(
+        RichText::new("MCU-compatible control surfaces: faders, V-pots (pan), mute / solo / arm / select, transport, loop and click, banks of 8 tracks; motor faders and LEDs follow the project when an output is set.")
+            .small()
+            .color(theme::TEXT_DIM),
+    );
+    let mut mi = st.settings.mcu_input.clone();
+    let mut mo = st.settings.mcu_output.clone();
     egui::ComboBox::from_label("MCU input").selected_text(mi.clone().unwrap_or("off".into())).show_ui(ui, |ui| {
         ui.selectable_value(&mut mi, None, "off");
         for p in &ports {
@@ -217,13 +221,13 @@ fn surface(ui: &mut Ui, st: &mut State) {
             ui.selectable_value(&mut mo, Some(p.clone()), p);
         }
     });
-    if mi != st.settings.mackie_input || mo != st.settings.mackie_output {
-        st.settings.mackie_input = mi;
-        st.settings.mackie_output = mo;
+    if mi != st.settings.mcu_input || mo != st.settings.mcu_output {
+        st.settings.mcu_input = mi;
+        st.settings.mcu_output = mo;
         st.open_midi();
         st.save_settings();
     }
-    if st.settings.mackie_input.is_some() {
+    if st.settings.mcu_input.is_some() {
         ui.label(format!("Bank: tracks {}–{}", st.mcu.bank + 1, st.mcu.bank + 8));
     }
 }

@@ -43,9 +43,11 @@ pub struct Settings {
     pub skipped_update: Option<String>,
     pub reduced_motion: bool,
     pub follow_playhead: bool,
-    /// Mackie Control surface: MIDI input and (optional) output for motor faders and LEDs.
-    pub mackie_input: Option<String>,
-    pub mackie_output: Option<String>,
+    /// MCU control surface: MIDI input and (optional) output for motor faders and LEDs.
+    #[serde(alias = "mackie_input")]
+    pub mcu_input: Option<String>,
+    #[serde(alias = "mackie_output")]
+    pub mcu_output: Option<String>,
 }
 
 impl Default for Settings {
@@ -68,8 +70,8 @@ impl Default for Settings {
             skipped_update: None,
             reduced_motion: false,
             follow_playhead: true,
-            mackie_input: None,
-            mackie_output: None,
+            mcu_input: None,
+            mcu_output: None,
         }
     }
 }
@@ -82,11 +84,11 @@ pub enum Tool {
     Slice,
     Erase,
     Mute,
-    /// FL "Playback" (Y): hold the mouse on the timeline to play from there; dragging scrubs.
+    /// "Playback" (Y): hold the mouse on the timeline to play from there; dragging scrubs.
     Playback,
-    /// FL "Zoom" (Z): drag a box to zoom into it, right-click zooms out.
+    /// "Zoom" (Z): drag a box to zoom into it, right-click zooms out.
     Zoom,
-    /// FL "Slip edit" (S, playlist): drag inside an audio clip to move the audio, the clip stays.
+    /// "Slip edit" (S, playlist): drag inside an audio clip to move the audio, the clip stays.
     Slip,
 }
 
@@ -212,7 +214,7 @@ pub struct UiState {
     /// Where in the file the running preview started (seconds).
     pub preview_offset: f64,
     pub clipboard: Option<Clipboard>,
-    /// History revision right after the last Ctrl+Z (FL's undo/redo toggle).
+    /// History revision right after the last Ctrl+Z (the undo/redo toggle).
     pub last_undo: Option<u64>,
     /// Running zoom animations: target (zoom, x, vertical zoom / key height, y).
     pub pl_anim: Option<crate::views::nav::ViewTarget>,
@@ -242,25 +244,25 @@ pub struct UiState {
     pub rack_sel: Vec<Id>,
     /// The rack shows only this channel group (PgUp / PgDn cycle through groups).
     pub rack_group: Option<String>,
-    /// Rack: mixer-track selectors shown (FL Alt+M).
+    /// Rack: mixer-track selectors shown (Alt+M).
     pub rack_mixer_sel: bool,
-    /// Piano roll event lane: 0 velocity, 1 pan, 2 release (FL F / Shift+F).
+    /// Piano roll event lane: 0 velocity, 1 pan, 2 release (F / Shift+F).
     pub pr_prop: usize,
-    /// Piano roll: note names on every key (FL M).
+    /// Piano roll: note names on every key (M).
     pub pr_key_names: bool,
-    /// Piano roll: new notes slide (portamento, FL O).
+    /// Piano roll: new notes slide (portamento, O).
     pub porta: bool,
-    /// Piano roll: ghost notes of the other channels (FL Alt+V).
+    /// Piano roll: ghost notes of the other channels (Alt+V).
     pub ghosts: bool,
-    /// Piano roll: scale helpers (FL Alt+B).
+    /// Piano roll: scale helpers (Alt+B).
     pub helpers: bool,
-    /// Clips can be resized from their left edge (FL Ctrl+Alt+Home).
+    /// Clips can be resized from their left edge (Ctrl+Alt+Home).
     pub resize_left: bool,
-    /// Piano roll: the song's audio drawn under the notes (FL Alt+N).
+    /// Piano roll: the song's audio drawn under the notes (Alt+N).
     pub wave_helper: bool,
-    /// The parameter touched last (FL Ctrl+I inserts its value into automation).
+    /// The parameter touched last (Ctrl+I inserts its value into automation).
     pub last_target: Option<dragon_engine::model::Target>,
-    /// FL Ctrl+I (outside the piano roll): recording waits for the first played note.
+    /// Ctrl+I (outside the piano roll): recording waits for the first played note.
     pub wait_input: bool,
     /// Record was pressed with wait-for-input on and no note has come yet.
     pub waiting_record: bool,
@@ -270,7 +272,7 @@ pub struct UiState {
     pub hold_slice: Option<(f64, egui::Pos2)>,
     /// The context tool menu (middle + right click), where it is open.
     pub tool_menu: Option<egui::Pos2>,
-    /// FL's piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
+    /// the piano-roll tool windows (Alt+A, Alt+E, Alt+K …).
     pub note_tools: crate::views::note_tools::NoteTools,
     /// The stock effect editor shown full screen (mixer insert, effect).
     pub fx_fullscreen: Option<(Id, Id)>,
@@ -421,7 +423,7 @@ pub struct State {
     pub audio_watch: (u64, Instant, Option<Instant>, bool),
 }
 
-/// Mackie Control state: bank offset, the output connection and what was last sent (feedback only on change).
+/// MCU state: bank offset, the output connection and what was last sent (feedback only on change).
 #[derive(Default)]
 pub struct Mcu {
     pub bank: usize,
@@ -741,7 +743,7 @@ impl State {
     }
 
     pub fn live_note(&mut self, on: bool, note: u8, velocity: f32) {
-        // FL "wait for input": the first note played starts the armed recording.
+        // "wait for input": the first note played starts the armed recording.
         if on && self.ui.waiting_record {
             self.ui.waiting_record = false;
             self.start_recording();
@@ -913,7 +915,7 @@ impl State {
         }
     }
 
-    /// FL's "Save new version": saves a copy next to the project as `<Name>_2`, `<Name>_3`, … and
+    /// the "Save new version": saves a copy next to the project as `<Name>_2`, `<Name>_3`, … and
     /// continues in it.
     pub fn save_new_version(&mut self) -> bool {
         let Some(cur) = self.session.path.clone() else { return self.save(true) };
@@ -977,7 +979,7 @@ impl State {
     /// (Re)opens MIDI inputs (the configured ones plus the control surface) and the control-surface output.
     pub fn open_midi(&mut self) {
         let mut names = self.settings.device.midi_inputs.clone();
-        if let (false, Some(m)) = (names.is_empty(), &self.settings.mackie_input) {
+        if let (false, Some(m)) = (names.is_empty(), &self.settings.mcu_input) {
             if !names.contains(m) {
                 names.push(m.clone());
             }
@@ -987,10 +989,10 @@ impl State {
         self.mcu.out = None;
         self.mcu.sent_faders = [-1.0; 9];
         self.mcu.sent_leds.clear();
-        if let Some(name) = self.settings.mackie_output.clone() {
+        if let Some(name) = self.settings.mcu_output.clone() {
             match dragon_engine::device::MidiOutput::open(&name) {
                 Ok(o) => self.mcu.out = Some(o),
-                Err(e) => self.ctx.log.warn("mackie", e.to_string()),
+                Err(e) => self.ctx.log.warn("mcu", e.to_string()),
             }
         }
     }
@@ -1372,8 +1374,8 @@ impl State {
         let mut mapped = false;
         for (t, port) in msgs {
             use dragon_engine::midi::MidiMessage as M;
-            if port.is_some() && port == self.settings.mackie_input {
-                if let Some(a) = dragon_engine::midi::mackie(t.message) {
+            if port.is_some() && port == self.settings.mcu_input {
+                if let Some(a) = dragon_engine::midi::mcu(t.message) {
                     mapped |= self.apply_mcu(a);
                 }
                 continue;

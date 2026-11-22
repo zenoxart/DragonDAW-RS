@@ -1,4 +1,4 @@
-//! Real-time spectrum analyzer for effect displays (FabFilter-style analyzer behind an EQ curve).
+//! Real-time spectrum analyzer for effect displays (an analyzer behind an EQ curve).
 //!
 //! Collects a mono sum, runs a Hann-windowed FFT every [`HOP`] samples and folds the bins into
 //! [`BANDS`] log-spaced bands from 20 Hz to 20 kHz, in dB, with a fast attack and a slow fall.

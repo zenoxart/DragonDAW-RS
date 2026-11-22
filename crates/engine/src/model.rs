@@ -152,7 +152,7 @@ pub struct AudioClip {
     pub speed: f64,
     /// When set, the clip is warped from this tempo to the project tempo (Stretch mode).
     pub source_bpm: Option<f64>,
-    /// Clip gain line (Pro Tools style); empty = flat.
+    /// Clip gain line; empty = flat.
     pub gain_line: Vec<GainPoint>,
     /// Take this clip came from (comping).
     pub take: Option<Id>,
@@ -186,7 +186,7 @@ pub enum ClipKind {
     Pattern {
         pattern: Id,
     },
-    /// An automation clip (FL Studio): plays the curve of an automation lane, relative to the clip's start.
+    /// An automation clip: plays the curve of an automation lane, relative to the clip's start.
     /// A lane placed as clips is only driven by them (the last value holds between clips); a lane without
     /// clips runs on the song timeline.
     Automation {
@@ -544,7 +544,7 @@ impl Instrument {
     }
 }
 
-/// A Channel-Rack channel (global, like FL Studio; patterns hold its steps and notes).
+/// A Channel-Rack channel (global; patterns hold its steps and notes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RackChannel {
     pub id: Id,
@@ -560,14 +560,14 @@ pub struct RackChannel {
     /// Mixer channel it plays into.
     pub mixer: Id,
     pub envelope: Envelope,
-    /// Voice-cut groups (FL "Cut" / "By"): 0 = none.
+    /// Voice-cut groups ("Cut" / "By"): 0 = none.
     pub cut_group: u8,
     pub cut_by: u8,
     pub cut_self: bool,
     /// Rack display group (filter).
     #[serde(default)]
     pub group: String,
-    /// Zipped (FL Alt+Z): the row is shown collapsed.
+    /// Zipped (Alt+Z): the row is shown collapsed.
     #[serde(default)]
     pub zipped: bool,
 }
@@ -606,7 +606,7 @@ pub struct Note {
     /// Colour group / MIDI channel.
     pub color: u8,
     pub selected: bool,
-    /// Note group (FL Shift+G): notes with the same non-zero group are selected together.
+    /// Note group (Shift+G): notes with the same non-zero group are selected together.
     #[serde(default)]
     pub group: u16,
 }
@@ -671,7 +671,7 @@ pub struct Insert {
     /// Name of the loaded preset (UI only).
     #[serde(default)]
     pub preset: String,
-    /// Modulation (FabFilter style): LFOs and envelope followers moving the effect's parameters.
+    /// Modulation (style): LFOs and envelope followers moving the effect's parameters.
     #[serde(default)]
     pub mods: Vec<Modulation>,
 }
@@ -739,7 +739,7 @@ pub struct MixerSend {
     pub level: f32,
     /// Taken before the fader (and pan).
     pub pre_fader: bool,
-    /// FL's "Sidechain to this track": the signal is only sidechain material for the target's effects,
+    /// the "Sidechain to this track": the signal is only sidechain material for the target's effects,
     /// not heard in its mix.
     #[serde(default)]
     pub sidechain_only: bool,
@@ -777,7 +777,7 @@ pub struct MixerChannel {
     /// Main output target; `None` = master (ignored on the master).
     pub output: Option<Id>,
     /// Whether the main output is connected at all. Off, the channel only reaches other channels through its
-    /// sends (FL Studio's "route to this track only" without a master route).
+    /// sends (Studio's "route to this track only" without a master route).
     #[serde(default = "yes")]
     pub main_out: bool,
     /// VCA master controlling this channel.
@@ -940,7 +940,7 @@ pub struct AutoPoint {
     pub tension: f32,
 }
 
-/// Console-style automation modes (Pro Tools).
+/// Console-style automation modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AutomationMode {
     Off,
@@ -1050,7 +1050,7 @@ pub struct Project {
     pub tempo_points: Vec<TempoPoint>,
     pub time_signatures: Vec<TimeSignature>,
     pub markers: Vec<Marker>,
-    /// Clip groups (FL Shift+G in the playlist): clicking one clip of a group selects the whole group.
+    /// Clip groups (Shift+G in the playlist): clicking one clip of a group selects the whole group.
     #[serde(default)]
     pub clip_groups: Vec<Vec<Id>>,
     pub loop_range: Option<Range>,
@@ -1117,7 +1117,7 @@ impl Default for Project {
 }
 
 impl Project {
-    /// A new project with one pattern, a few tracks and matching mixer channels (like a fresh FL session).
+    /// A new project with one pattern, a few tracks and matching mixer channels.
     /// A fully empty project: the master (without effects) and an empty "Pattern 1" – no playlist or
     /// mixer tracks, no instruments. Tracks and mixer channels appear as you add things.
     pub fn empty() -> Self {

@@ -1,4 +1,4 @@
-//! Navigation shared by the playlist and the piano roll (FL Studio style):
+//! Navigation shared by the playlist and the piano roll:
 //!
 //! * **Ctrl + right-drag** draws a box and zooms into it (time and height); **Ctrl + right-click** zooms out.
 //! * **Middle-drag** pans in both directions.
@@ -51,7 +51,7 @@ pub fn area_zoom(ui: &Ui, area: Rect, key: &str) -> Option<AreaZoom> {
     }
 }
 
-/// Middle-drag, or (FL) Left-Shift + right-drag when `left_shift_right` is set, pans the view.
+/// Middle-drag, or Left-Shift + right-drag when `left_shift_right` is set, pans the view.
 pub fn pan_drag(ui: &Ui, area: Rect, left_shift_right: bool) -> Vec2 {
     ui.input(|i| {
         let inside = i.pointer.press_origin().map(|p| area.contains(p)).unwrap_or(false);

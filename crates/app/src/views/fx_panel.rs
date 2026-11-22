@@ -16,7 +16,7 @@ use std::f32::consts::PI;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum KnobStyle {
-    /// Dark body, coloured value arc (modern / FabFilter school).
+    /// Dark body, coloured value arc (modern / school).
     Ring,
     /// Brushed aluminium with a black line (studio hardware).
     Metal,
@@ -150,7 +150,7 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
             skin: MODERN,
             bands: None,
             sections: {
-                // McDSP MC404 style: every band as a column of its own, the output column last.
+                // Every band as a column of its own, the output column last.
                 let mut s: Vec<Section> = (1..=4)
                     .map(|n| {
                         let b = |x: &str| format!("b{n}_{x}");
@@ -343,7 +343,7 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec("De-esser", vec![p("ds_detect", "Detection"), p("ds_band", "Band"), big("ds_thresh", "Threshold"), k("ds_range", "Range")]),
                 sec("Multiband I", vec![k("mb1_low", "Low mids"), k("mb1_high", "High mids")]),
                 sec("Multiband II", vec![k("mb2_low", "Low mids"), k("mb2_high", "High mids")]),
-                sec("Finish", vec![big("presence", "Presence"), k("saturation", "Saturation"), k("soothe", "Soothe")]),
+                sec("Finish", vec![big("presence", "Presence"), k("saturation", "Saturation"), k("soothe", "Tame")]),
             ],
         },
         "class_a_strip" => Panel {

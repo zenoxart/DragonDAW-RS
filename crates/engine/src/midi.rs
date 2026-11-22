@@ -228,10 +228,10 @@ impl RetroBuffer {
     }
 }
 
-// ---------------------------------------------------------------------------------------------- Mackie Control
+// ---------------------------------------------------------------------------------------------- MCU
 
-/// An action decoded from a Mackie Control Universal (MCU) compatible control surface (Behringer X-Touch,
-/// iCON, PreSonus FaderPort in MCU mode, …). Strips are 0–7 within the current bank.
+/// An action decoded from an MCU-compatible control surface (most DAW controllers offer an MCU mode).
+/// Strips are 0–7 within the current bank.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum McuAction {
     /// Fader position 0 … 1 (strip 8 = master).
@@ -262,7 +262,7 @@ pub enum McuAction {
 }
 
 /// Decodes one MCU message (button presses only; releases are ignored).
-pub fn mackie(m: MidiMessage) -> Option<McuAction> {
+pub fn mcu(m: MidiMessage) -> Option<McuAction> {
     use McuAction::*;
     match m {
         MidiMessage::PitchBend { channel, value } if channel <= 8 => Some(Fader { strip: channel, value: ((value as f32 + 8192.0) / 16383.0).clamp(0.0, 1.0) }),
@@ -371,14 +371,14 @@ mod tests {
     #[test]
     fn mackie_control_decoding() {
         use super::*;
-        assert_eq!(mackie(parse(&[0x90, 0x5E, 0x7F])), Some(McuAction::Play));
-        assert_eq!(mackie(parse(&[0x90, 0x5E, 0x00])), None, "release ignored");
-        assert_eq!(mackie(parse(&[0x90, 0x12, 0x7F])), Some(McuAction::Mute(2)));
-        assert_eq!(mackie(parse(&[0x90, 0x09, 0x7F])), Some(McuAction::Solo(1)));
-        assert_eq!(mackie(parse(&[0x90, 0x03, 0x7F])), Some(McuAction::Arm(3)));
-        assert_eq!(mackie(parse(&[0xB0, 0x11, 0x41])), Some(McuAction::Pan { strip: 1, delta: -1 }));
-        assert_eq!(mackie(parse(&[0xB0, 0x11, 0x03])), Some(McuAction::Pan { strip: 1, delta: 3 }));
-        match mackie(parse(&[0xE3, 0x7F, 0x7F])) {
+        assert_eq!(mcu(parse(&[0x90, 0x5E, 0x7F])), Some(McuAction::Play));
+        assert_eq!(mcu(parse(&[0x90, 0x5E, 0x00])), None, "release ignored");
+        assert_eq!(mcu(parse(&[0x90, 0x12, 0x7F])), Some(McuAction::Mute(2)));
+        assert_eq!(mcu(parse(&[0x90, 0x09, 0x7F])), Some(McuAction::Solo(1)));
+        assert_eq!(mcu(parse(&[0x90, 0x03, 0x7F])), Some(McuAction::Arm(3)));
+        assert_eq!(mcu(parse(&[0xB0, 0x11, 0x41])), Some(McuAction::Pan { strip: 1, delta: -1 }));
+        assert_eq!(mcu(parse(&[0xB0, 0x11, 0x03])), Some(McuAction::Pan { strip: 1, delta: 3 }));
+        match mcu(parse(&[0xE3, 0x7F, 0x7F])) {
             Some(McuAction::Fader { strip: 3, value }) => assert!((value - 1.0).abs() < 1e-3),
             other => panic!("{other:?}"),
         }
@@ -389,6 +389,6 @@ mod tests {
         }
         assert_eq!(mcu_fader_message(0, 1.0), [0xE0, 0x7F, 0x7F]);
         let back = parse(&mcu_fader_message(2, 0.5));
-        assert!(matches!(mackie(back), Some(McuAction::Fader { strip: 2, value }) if (value - 0.5).abs() < 1e-3));
+        assert!(matches!(mcu(back), Some(McuAction::Fader { strip: 2, value }) if (value - 0.5).abs() < 1e-3));
     }
 }

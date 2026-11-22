@@ -201,6 +201,7 @@ fn mode_switch(ui: &mut Ui, pat_mode: bool) -> Option<bool> {
         let x0 = if k == 0 { r.left() } else { r.left() + widths[0] + 2.0 };
         let h = Rect::from_min_size(Pos2::new(x0, r.top()), Vec2::new(widths[k], seg_h));
         let resp = ui.interact(h, ui.id().with(("mode_switch", k)), Sense::click()).on_hover_text(tip);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, pat == pat_mode, if pat { "Pattern mode" } else { "Song mode" }));
         let on = pat == pat_mode;
         let hot = resp.hovered();
         if on {

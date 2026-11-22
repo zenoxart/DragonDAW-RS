@@ -26,7 +26,7 @@ What the automated tests cannot hear or click. About 15 minutes; tick what works
 - [ ] Aurum Tune, retune speed 0, key of the song, on a sung line: the hard "T-Pain" effect, no
       warble or chorus. At 20–50 ms: natural correction.
 - [ ] Philosopher's Stone on a finished mix, default settings: loud, tight low end, open top; compare
-      with God Particle at the same loudness.
+      with your reference master at the same loudness.
 - [ ] Prism EQ high-pass at 96 dB/oct and 6 dB/oct: audibly different; linear-phase mode has no
       pre-ringing clicks on drums.
 

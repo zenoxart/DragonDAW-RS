@@ -1,4 +1,4 @@
-//! The picker panel on the playlist's left (like FL Studio's picker): every pattern (split ones
+//! The picker panel on the playlist's left: every pattern (split ones
 //! included), the audio files the project uses and its automation clips. Drag an entry onto a playlist
 //! track to place it; click a pattern to make it current, double-click to open it in the piano roll.
 

@@ -2,10 +2,10 @@
 //!
 //! **Audio repair** – a spectrogram you can zoom and select in (drag: a time range, Shift+drag: a time ×
 //! frequency box, Ctrl+A: everything), "Check the recording" (finds hum, clicks, clipping and background
-//! noise and fixes each with one click), and the iZotope RX tools (de-noise, de-hum, de-click, de-clip,
+//! noise and fixes each with one click), and the repair tools (de-noise, de-hum, de-click, de-clip,
 //! distortion repair, de-reverb, spectral attenuate, gain), each with Preview (listen first) and Apply.
 //!
-//! **Pitch correction** – Melodyne-style notes ("blobs") with their pitch curves: Move (drag up / down,
+//! **Pitch correction** – Notes ("blobs") with their pitch curves: Move (drag up / down,
 //! semitone snap, Alt = free), Vibrato (drag to scale a note's vibrato and drift), Split; rubber-band
 //! and Ctrl+A selection, arrow keys (semitone), Ctrl+arrows (octave), Alt+arrows (10 cents), Delete
 //! resets, its own undo (Ctrl+Z), the "correct pitch" macro, zoom in time and pitch.
@@ -51,7 +51,7 @@ const TOOLS: [(Tool, &str, &str); 8] = [
     (Tool::Gain, "Gain", "Louder or quieter (the selection, or everything)"),
 ];
 
-/// The note editor's tools (Melodyne's main, pitch modulation and note separation tools).
+/// The note editor's tools .
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum NoteTool {
     #[default]
@@ -605,7 +605,7 @@ fn toolbar(ui: &mut Ui, st: &mut State, name: &str, path: &std::path::Path) {
         ui.add_space(10.0);
         // The two modes.
         let pitch = st.ui.repair.tool == Tool::Pitch;
-        for (on, label, tip) in [(false, "Audio repair", "Noise, hum, clicks, clipping, distortion, reverb"), (true, "Pitch correction", "Notes like in Melodyne: move them, centre them, calm the vibrato")] {
+        for (on, label, tip) in [(false, "Audio repair", "Noise, hum, clicks, clipping, distortion, reverb"), (true, "Pitch correction", "Edit the notes: move them, centre them, calm the vibrato")] {
             let sel = pitch == on;
             let b = egui::Button::new(RichText::new(label).size(13.0).strong().color(if sel { Color32::BLACK } else { theme::TEXT }))
                 .fill(if sel { theme::ACCENT } else { Color32::from_white_alpha(10) })
@@ -965,7 +965,7 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
     }
     let modifiers = ui.input(|i| i.modifiers);
     let tool = st.ui.repair.note_tool;
-    // Double-click a note: split it there (Melodyne's note separation), with any tool.
+    // Double-click a note: split it there , with any tool.
     if resp.double_clicked() {
         if let (Some(k), Some(pos)) = (hit, resp.interact_pointer_pos()) {
             st.ui.repair.split(k, t_of(pos.x));

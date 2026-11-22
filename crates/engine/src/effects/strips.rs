@@ -1,6 +1,6 @@
 //! Tracking and bus processors built from classic circuits:
 //!
-//! - **Dragon Class-A Strip** – a British class-A transformer microphone preamp (the 1073 school: input
+//! - **Dragon Class-A Strip** – a Class-A transformer microphone preamp (the 1073 school: input
 //!   transformer whose core saturates on low frequencies, a single-ended class-A gain stage, output
 //!   transformer, stepped inductor-style EQ with high-pass) feeding a tube opto compressor (the CL-1B school:
 //!   electro-optical cell with program-dependent attack and two-stage, memory-laden release; fixed or manual
@@ -47,7 +47,7 @@ const STRIP_PARAMS: &[ParamInfo] = &[
 /// Band edges of the suppressor (Hz): below 250, 250 – 1.2 k, 1.2 k – 5 k, above 5 k.
 const NS_EDGES: [f32; 3] = [250.0, 1200.0, 5000.0];
 
-/// A one-fader broadband noise suppressor after Waves NS1: four bands, each tracking its own noise floor
+/// A one-fader broadband noise suppressor: four bands, each tracking its own noise floor
 /// (the minimum of its level over a sliding 2 s window, rising at most 30 dB/s, kept within -96 … -40 dBFS
 /// so that program material louder than that is never taken for noise) and pulled down when its level sits
 /// near that floor. The fader sets the margin above the floor (3 … 12 dB), the
@@ -451,7 +451,7 @@ impl Effect for ClassAStrip {
         self.ns.red = 0.0;
         for i in 0..l.len() {
             pin = pin.max(l[i].abs().max(r[i].abs()));
-            // NS1-style suppression first: the preamp's gain would otherwise lift the noise with the signal.
+            // Noise suppression first: the preamp's gain would otherwise lift the noise with the signal.
             let (x, y) = self.ns.process(l[i], r[i]);
             let mut a = self.pre[0].process(x, self.drive);
             let mut b = self.pre[1].process(y, self.drive);
@@ -503,7 +503,7 @@ pub fn class_a_strip_def() -> EffectDef {
         id: "class_a_strip",
         name: "Golem Strip (class-A channel strip)",
         category: "Channel strip",
-        description: "Recording channel: a one-fader noise suppressor (NS1 style), British class-A transformer mic preamp with stepped inductor-style EQ into a tube opto compressor (program-dependent opto attack, two-stage release with memory, fixed or manual timing). Zero latency – track through it.",
+        description: "Recording channel: a one-fader noise suppressor, Class-A transformer mic preamp with stepped inductor-style EQ into a tube opto compressor (program-dependent opto attack, two-stage release with memory, fixed or manual timing). Zero latency – track through it.",
         params: STRIP_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(ClassAStrip::new(rate)),
@@ -512,11 +512,11 @@ pub fn class_a_strip_def() -> EffectDef {
 
 // ============================================================================================ drum bus
 
-/// Drum Bus, laid out after Cradle Orion's modules (from its manual): Input with target meter, Drive
+/// Drum Bus, laid out as modules: Input with target meter, Drive
 /// (three colours, high-pass after it), Harmonics (low-end focus at 50 or 80 Hz), Compression (two modes,
 /// mix), Lift, a five-band Harmonic EQ in 1 dB steps, four Parallels (Sub, Low, Loud, Grit) and Output.
 pub const DRUM_COLOURS: &[&str] = &["A (warm)", "B (tape)", "C (crunch)"];
-/// The Harmonic EQ's fixed bands (Hz). Orion does not publish its frequencies; these are ours.
+/// The Harmonic EQ's fixed bands (Hz). Our own choice of frequencies.
 pub const HEQ_FREQS: [f32; 5] = [60.0, 180.0, 900.0, 3500.0, 10000.0];
 
 const DRUM_PARAMS: &[ParamInfo] = &[
@@ -668,7 +668,7 @@ impl DrumBus {
 impl Effect for DrumBus {
     fn set_param(&mut self, id: &str, v: f32) {
         if let Some(k) = DRUM_PARAMS.iter().position(|p| p.id == id) {
-            // The Harmonic EQ moves in 1 dB steps, like Orion's.
+            // The Harmonic EQ moves in 1 dB steps.
             self.p[k] = if id.starts_with("heq") { v.round() } else { v };
             self.update();
         }
@@ -733,7 +733,7 @@ impl Effect for DrumBus {
             }
         }
         // Harmonic EQ: each band adds saturated content of its region (gain in dB of that region).
-        // The knobs move in 1 dB steps (Orion); the applied amount glides between steps (~5 ms) so a step is
+        // The knobs move in 1 dB steps; the applied amount glides between steps (~5 ms) so a step is
         // heard as a change, not a click.
         let heq_target: [f32; 5] = std::array::from_fn(|k| db_to_gain(self.p[9 + k]) - 1.0);
         if heq_target.iter().chain(self.heq_amt.iter()).any(|g| *g > 1e-6) {
@@ -822,7 +822,7 @@ pub fn drum_bus_def() -> EffectDef {
         id: "drum_bus",
         name: "Dragonforge (drum bus)",
         category: "Drums",
-        description: "Drum bus processor after Cradle Orion: input with target meter, drive (three colours, high-pass), harmonics (50 / 80 Hz focus), compression (glue / punch, mix), lift, five-band harmonic EQ in 1 dB steps, parallel Sub / Low / Loud / Grit, output.",
+        description: "Drum bus processor: input with target meter, drive (three colours, high-pass), harmonics (50 / 80 Hz focus), compression (glue / punch, mix), lift, five-band harmonic EQ in 1 dB steps, parallel Sub / Low / Loud / Grit, output.",
         params: DRUM_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(DrumBus::new(rate)),
@@ -970,7 +970,7 @@ mod tests {
         l
     }
 
-    /// Every Orion module does something on a kick loop, and with everything at zero the bus is (nearly)
+    /// Every module does something on a kick loop, and with everything at zero the bus is (nearly)
     /// transparent apart from the drive high-pass.
     #[test]
     fn drum_bus_modules_after_orion() {

@@ -98,7 +98,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             let cid = c.id;
             let selected = st.ui.channel == Some(cid) || st.ui.rack_sel.contains(&cid);
             if c.zipped {
-                // Zipped (FL Alt+Z): one thin row with the name; click to select, Alt+U unzips.
+                // Zipped (Alt+Z): one thin row with the name; click to select, Alt+U unzips.
                 let r = ui.add(
                     egui::Button::new(RichText::new(format!("▶ {}", c.name)).small())
                         .fill(theme::rgb(c.color).gamma_multiply(if selected { 0.8 } else { 0.25 }))
@@ -144,7 +144,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     .min_size(Vec2::new(118.0, 24.0));
                 let nb = ui.add(name_btn).on_hover_text(format!("{} – {}\nclick: select · double-click: settings · right-click: menu", c.name, c.instrument.kind_name()));
                 if nb.clicked() {
-                    // FL: Ctrl+click adds the channel to the selection.
+                    // Ctrl+click adds the channel to the selection.
                     if ui.input(|i| i.modifiers.ctrl) {
                         if let Some(k) = st.ui.rack_sel.iter().position(|x| *x == cid) {
                             st.ui.rack_sel.remove(k);
@@ -204,7 +204,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     });
 }
 
-/// Pattern operations (FL Studio): clone, make unique, split by channel, split at a bar, change the source
+/// Pattern operations: clone, make unique, split by channel, split at a bar, change the source
 /// pattern of a clip, delete. With `clip` the menu belongs to a playlist clip (make unique / source pattern act
 /// on it, or on all selected pattern clips when it is selected).
 pub fn pattern_menu(ui: &mut Ui, st: &mut State, pat: Id, clip: Option<Id>) {

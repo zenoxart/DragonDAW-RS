@@ -1,4 +1,4 @@
-//! FL Studio's piano-roll tool windows in one window with a tab per tool: Arpeggiator (Alt+A), Riff
+//! the piano-roll tool windows in one window with a tab per tool: Arpeggiator (Alt+A), Riff
 //! machine (Alt+E), Limit (Alt+K), Articulate (Alt+L), LFO (Alt+O), Randomize (Alt+R), Strum (Alt+S),
 //! Chop (Alt+U), Claw machine (Alt+W), Scale levels (Alt+X) and Score flipper (Alt+Y). Each works on the
 //! selected notes (all notes of the channel when nothing is selected) and applies as one undo step.

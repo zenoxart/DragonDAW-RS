@@ -40,7 +40,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     });
     ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
     ui.separator();
-    // FL-style waveform preview of the selected file, docked at the bottom of the browser.
+    // Waveform preview of the selected file, docked at the bottom of the browser.
     egui::TopBottomPanel::bottom("browser.preview").resizable(true).min_height(100.0).default_height(110.0).height_range(100.0..=260.0).frame(egui::Frame::NONE).show_inside(ui, |ui| preview_panel(ui, st));
     let mut roots: Vec<(String, PathBuf)> = st.settings.browser_folders.iter().map(|p| (p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(p.display().to_string()), p.clone())).collect();
     roots.push(("Projects".into(), st.ctx.paths.projects.clone()));

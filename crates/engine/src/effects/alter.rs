@@ -1,7 +1,7 @@
-//! "Shapeshifter": real-time pitch and formant shifter for voices (the Little AlterBoy school). Pitch-
+//! "Shapeshifter": real-time pitch and formant shifter for voices. Pitch-
 //! synchronous overlap-add (TD-PSOLA): two-period Hann grains are taken at the voice's pitch marks and laid
 //! down at the new period (pitch), each grain resampled on the way (formant) – so pitch and formant move
-//! independently. Controls follow Little AlterBoy's manual: Pitch ±12 semitones, Formant, Link (pitch and
+//! independently. Controls: Pitch ±12 semitones, Formant, Link (pitch and
 //! formant move together, like a sample sped up), three modes – Transpose, Quantize (snaps the voice to the
 //! nearest semitone as fast as possible) and Robot (one note, set by Pitch: 0 = one octave above middle C) –
 //! tube Drive, Mix and Output.
@@ -247,7 +247,7 @@ pub fn alter_def() -> EffectDef {
         id: "alter",
         name: "Shapeshifter (pitch & formant)",
         category: "Pitch",
-        description: "Real-time voice pitch and formant shifter after Little AlterBoy: pitch ±12 semitones, formant, link, Transpose / Quantize / Robot modes, tube drive, mix and output.",
+        description: "Real-time voice pitch and formant shifter: pitch ±12 semitones, formant, link, Transpose / Quantize / Robot modes, tube drive, mix and output.",
         params: ALTER_PARAMS,
         uses_sidechain: false,
         create: |rate| Box::new(Alter::new(rate)),

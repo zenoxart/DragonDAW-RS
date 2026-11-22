@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            # ASIO: asio-sys fetches Steinberg's ASIO SDK and runs bindgen on it with the runner's LLVM.
+            # ASIO: asio-sys fetches the ASIO SDK and runs bindgen on it with the runner's LLVM.
             # (Only here: an empty LIBCLANG_PATH breaks coreaudio-sys on macOS.)
             export LIBCLANG_PATH="C:\\Program Files\\LLVM\\bin"
             # With ASIO drivers; should the ASIO SDK be unreachable, still ship a build (WASAPI only).

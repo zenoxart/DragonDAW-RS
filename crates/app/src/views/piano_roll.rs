@@ -40,20 +40,20 @@ pub enum Drag {
     Paint {
         last_tick: u32,
     },
-    /// FL's slice (knife) tool: a line from where the drag started to the pointer; every note it crosses
+    /// the slice (knife) tool: a line from where the drag started to the pointer; every note it crosses
     /// is cut where the line passes its row (snapped to the grid; Alt = no snap).
     Knife {
         from: Pos2,
-        /// Right-drag (FL Right-Shift+right-click): the smaller piece of each cut note is deleted.
+        /// Right-drag (Right-Shift+right-click): the smaller piece of each cut note is deleted.
         delete_small: bool,
     },
-    /// FL's zoom tool: drag a box to zoom into it.
+    /// the zoom tool: drag a box to zoom into it.
     Zoom {
         from: Pos2,
     },
 }
 
-/// A note and the other notes of its group (FL Shift+G groups).
+/// A note and the other notes of its group (Shift+G groups).
 fn group_of(notes: &[Note], i: usize) -> Vec<usize> {
     match notes.get(i).map(|n| n.group) {
         Some(g) if g > 0 => notes.iter().enumerate().filter(|(_, n)| n.group == g).map(|(k, _)| k).collect(),
@@ -177,7 +177,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let raw = ui.input(|i| i.raw_scroll_delta);
         let notch = raw.y + raw.x;
         if shift && alt {
-            // FL Shift+Alt+wheel: nudge the selected notes by a quarter of the snap.
+            // Shift+Alt+wheel: nudge the selected notes by a quarter of the snap.
             if notch != 0.0 && !st.ui.notes.is_empty() {
                 let step = ((PPQ as f64 * st.ui.snap.max(0.0625) / 4.0) as i64).max(1) * notch.signum() as i64;
                 let sel = st.ui.notes.clone();
@@ -213,7 +213,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let tick_of = |x: f32| ((sx + (x - grid.left()) as f64 / zoom) * PPQ as f64).max(0.0);
     let y_of = |pitch: u8| grid.top() + (127 - pitch as i32) as f32 * kh - sy;
     let pitch_of = |y: f32| (127 - ((y - grid.top() + sy) / kh).floor() as i32).clamp(0, 127) as u8;
-    // Note helpers (FL Alt+B) show the scale; off hides them.
+    // Note helpers (Alt+B) show the scale; off hides them.
     let scale: Option<&[u8]> = st.ui.scale.filter(|_| st.ui.helpers).map(|i| SCALES[i].1);
     let root = st.ui.scale_root;
 
@@ -282,7 +282,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let ex = grid.left() + ((pat_len - sx) * zoom) as f32;
     gp.rect_filled(Rect::from_x_y_ranges(ex..=grid.right().max(ex), grid.y_range()), 0.0, Color32::from_black_alpha(70));
 
-    // Waveform helper (FL Alt+N): the song's audio under this pattern's first playlist clip, faint, so notes
+    // Waveform helper (Alt+N): the song's audio under this pattern's first playlist clip, faint, so notes
     // can be lined up with a recording.
     if st.ui.wave_helper {
         let at = st
@@ -406,7 +406,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     // velocity lane
     p.rect_filled(vel, 0.0, theme::PANEL);
     let vp = p.with_clip_rect(vel);
-    // The event lane shows velocity, pan or release (FL F / Shift+F).
+    // The event lane shows velocity, pan or release (F / Shift+F).
     let prop_of = |n: &Note| match st.ui.pr_prop {
         1 => (n.pan + 1.0) * 0.5,
         2 => n.release,
@@ -439,7 +439,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    // Right-click and hold on empty space opens the slice tool (FL "click and hold" function).
+    // Right-click and hold on empty space opens the slice tool ("click and hold" function).
     let now_t = ui.input(|i| i.time);
     if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary) && !i.pointer.middle_down()) && !ui.input(|i| i.modifiers.ctrl) && !lsh {
         if let Some(pos) = ui.input(|i| i.pointer.interact_pos()).filter(|p| grid.contains(*p) && note_at(*p).is_none()) {
@@ -457,7 +457,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             ui.ctx().request_repaint();
         }
     }
-    // Slice tool (or Right-Shift), right-drag: slice and delete the smaller piece (FL Right-Shift+right-click).
+    // Slice tool (or Right-Shift), right-drag: slice and delete the smaller piece (Right-Shift+right-click).
     if (tool == Tool::Slice || rsh) && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pr_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|p| grid.contains(*p)) {
             st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: true });
@@ -506,7 +506,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     None if tool == Tool::Select || ctrl => st.ui.pr_drag = Some(Drag::Select { from: pos }),
                     None if tool == Tool::Paint => st.ui.pr_drag = Some(Drag::Paint { last_tick: u32::MAX }),
                     None if tool == Tool::Draw => {
-                        // FL style: press on empty space draws a note and keeps it on the pointer.
+                        // Press on empty space draws a note and keeps it on the pointer.
                         let start = snap_tick_floor(tick_of(pos.x)) as u32;
                         let pitch = snap_pitch(st, pitch_of(pos.y));
                         let n = Note { pitch, start, length: st.ui.last_note_len, velocity: 0.78, slide: st.ui.porta, ..Default::default() };
@@ -687,7 +687,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
 
-    // FL's playback tool: hold to play from the pointer, drag to scrub, release to stop.
+    // the playback tool: hold to play from the pointer, drag to scrub, release to stop.
     let scrub_id = egui::Id::new("pr.scrub");
     let scrubbing: bool = ui.data(|d| d.get_temp(scrub_id)).unwrap_or(false);
     if tool == Tool::Playback && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
@@ -715,7 +715,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
     super::keys::tool_menu(ui, st, &resp);
-    // FL: Right-Shift + click slices the note under the pointer (+ right-click: and deletes the smaller piece);
+    // Right-Shift + click slices the note under the pointer (+ right-click: and deletes the smaller piece);
     // Right-Alt + right-click quantizes the selection.
     let side_click = (rsh || ralt) && (resp.clicked() || resp.secondary_clicked()) && st.ui.pr_drag.is_none();
     if side_click {
@@ -816,8 +816,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
         }
     }
-    // Arrow keys nudge the selection: ←/→ by the snap grid, ↑/↓ by a semitone. Shift+arrows (FL's
-    // "move selection") and Ctrl+↑/↓ (octave) are global shortcuts, so they are left alone here.
+    // Arrow keys nudge the selection: ←/→ by the snap grid, ↑/↓ by a semitone. Shift+arrows (the // "move selection") and Ctrl+↑/↓ (octave) are global shortcuts, so they are left alone here.
     if resp.hovered() && !st.ui.notes.is_empty() && !ui.ctx().wants_keyboard_input() && !ui.input(|i| i.modifiers.shift) {
         let (l, r, u, d, shift, ctrl) = ui.input_mut(|i| {
             let ctrl = i.modifiers.ctrl;

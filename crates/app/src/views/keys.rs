@@ -1,4 +1,4 @@
-//! FL's side-specific modifiers (Right-Shift / Right-Alt / Left-Shift + mouse) and the numeric-pad 0, read
+//! the side-specific modifiers (Right-Shift / Right-Alt / Left-Shift + mouse) and the numeric-pad 0, read
 //! from the OS keyboard state (see `dragon_engine::keystate`); tests set `UiState::test_keys` instead.
 
 use crate::state::State;
@@ -9,7 +9,7 @@ pub fn side(st: &State, k: SideKey) -> bool {
     st.ui.test_keys.contains(&k) || dragon_engine::keystate::is_down(k) == Some(true)
 }
 
-/// FL: middle + right click opens the context tool menu (the tools, at the pointer).
+/// middle + right click opens the context tool menu (the tools, at the pointer).
 pub fn tool_menu(ui: &egui::Ui, st: &mut State, resp: &egui::Response) {
     if resp.hovered() && ui.input(|i| i.pointer.middle_down() && i.pointer.button_pressed(egui::PointerButton::Secondary)) {
         st.ui.tool_menu = ui.input(|i| i.pointer.interact_pos());

@@ -102,7 +102,7 @@ fn with_insert(p: &mut Project, m: Id, i: Id, f: impl FnOnce(&mut Insert)) {
     }
 }
 
-/// Pro-Q style comparison with another EQ in the project: spectrum collisions on the display, and EQ match
+/// Comparison with another EQ in the project: spectrum collisions on the display, and EQ match
 /// (learn both spectra for a while, then fill free bands so this track's tone follows the reference).
 fn eq_compare(ui: &mut Ui, st: &mut State, m: Id, i: Id, ins: &Insert) {
     use dragon_engine::dsp::spectrum::BANDS;
@@ -217,7 +217,7 @@ fn eq_compare(ui: &mut Ui, st: &mut State, m: Id, i: Id, ins: &Insert) {
     });
 }
 
-/// FabFilter-style modulation: LFOs and envelope followers, each moving one parameter by a depth.
+/// Modulation: LFOs and envelope followers, each moving one parameter by a depth.
 fn modulation(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &effects::EffectDef, ins: &Insert) {
     use dragon_engine::model::{ModSource, Modulation};
     let header = if ins.mods.is_empty() { "Modulation".to_string() } else { format!("Modulation ({})", ins.mods.len()) };
@@ -619,7 +619,7 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                 _ => String::new(),
             }
         };
-        // Pro-Q style: the EQ shows one band's controls at a time – the band last touched on the display, or the
+        // the EQ shows one band's controls at a time – the band last touched on the display, or the
         // one picked in the band strip.
         let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");
         let eq_band: Option<usize> = (def.id == "eq").then(|| {
@@ -775,7 +775,7 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
 fn param_menu(r: &egui::Response, st: &mut State, m: Id, i: Id, prm: &effects::ParamInfo, v: f32, target: Target) {
     let key = prm.id.to_string();
     r.context_menu(|ui| {
-        // Type an exact value (FabFilter style); units and a k suffix are accepted.
+        // Type an exact value (style); units and a k suffix are accepted.
         let buf_id = ui.id().with(("fx.type", &target));
         let mut buf: String = ui.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| prm.format(v));
         let te = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(110.0).hint_text("value"));
@@ -879,7 +879,7 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
         PluginSlot::Insert(m, i) => (m, Some(i)),
         PluginSlot::Channel(c) => (c, None),
     };
-    // The plugin's own GUI opens by itself whenever this window appears (FL Studio behaviour); the generic
+    // The plugin's own GUI opens by itself whenever this window appears; the generic
     // controls below are for plugins without a GUI or as a fallback.
     let seen_id = egui::Id::new(("plugin.window.seen", key));
     let pass = ui.ctx().cumulative_pass_nr();
@@ -1118,7 +1118,7 @@ fn sampler_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SamplerParams, env: E
         }
         let sx = rect.left() + s.start * rect.width();
         let ex = rect.left() + s.end * rect.width();
-        // FL style: the volume envelope drawn over the sample (as if the note is held for the whole
+        // The volume envelope drawn over the sample (as if the note is held for the whole
         // sample), and the waveform dimmed where the envelope turns it down.
         if env.enabled {
             let rate = st.audio.rate() as f32;

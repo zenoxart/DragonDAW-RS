@@ -23,7 +23,7 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("mod", "Modulation", 0.0, 1.0, 0.3, ""),
     ParamInfo::lin("width", "Width", 0.0, 1.5, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 0.25, ""),
-    // Decay-rate EQ (Pro-R): a curve of six points (Pro-R has six bands); each part of the tail decays that many times longer
+    // Decay-rate EQ: a curve of six points; each part of the tail decays that many times longer
     // (or shorter) than the decay time. Drag the points on the display.
     ParamInfo::log("dr_1", "Decay 1 time ×", 0.25, 4.0, 1.0, ""),
     ParamInfo::log("dr_2", "Decay 2 time ×", 0.25, 4.0, 1.0, ""),
@@ -38,7 +38,7 @@ const PARAMS: &[ParamInfo] = &[
     ParamInfo::log("dr_f4", "Decay 4 freq", 20.0, 20000.0, 4800.0, "Hz"),
     ParamInfo::log("dr_f5", "Decay 5 freq", 20.0, 20000.0, 12000.0, "Hz"),
     ParamInfo::log("dr_f6", "Decay 6 freq", 20.0, 20000.0, 18000.0, "Hz"),
-    // Each band's shape (Pro-R: low / high shelf, bell, notch) and width.
+    // Each band's shape (low / high shelf, bell, notch) and width.
     ParamInfo::choice("dr_t1", "Decay 1 shape", DR_SHAPES, 1.0),
     ParamInfo::choice("dr_t2", "Decay 2 shape", DR_SHAPES, 0.0),
     ParamInfo::choice("dr_t3", "Decay 3 shape", DR_SHAPES, 0.0),
@@ -119,9 +119,9 @@ impl PartEq {
 
 /// The decay-rate EQ's default band frequencies (Hz); each band can be moved (`dr_f1` … `dr_f6`).
 pub const DR_FREQS: [f32; 6] = [80.0, 300.0, 1200.0, 4800.0, 12000.0, 18000.0];
-/// Six bands, like Pro-R's six-band decay-rate EQ.
+/// Six bands.
 pub const DR_BANDS: usize = 6;
-/// Band shapes, as in Pro-R's decay-rate EQ.
+/// Band shapes of the decay-rate EQ.
 pub const DR_SHAPES: &[&str] = &["Bell", "Low shelf", "High shelf", "Notch"];
 /// The tail is split into this many fixed bands (log-spaced); each gets the curve's value at its centre.
 const DR_SPLIT: usize = 12;
@@ -514,7 +514,7 @@ mod tests {
         let flat = tail(&[]);
         let warm = tail(&[("dr_1", 4.0), ("dr_2", 2.0), ("dr_4", 0.5), ("dr_5", 0.25)]);
         assert!(warm > flat * 4.0, "{flat} → {warm}");
-        // Free nodes (Pro-R): the same ×4 bell moved from 300 Hz up to 6 kHz lengthens the top instead.
+        // Free nodes: the same ×4 bell moved from 300 Hz up to 6 kHz lengthens the top instead.
         let low_node = tail(&[("dr_2", 4.0)]);
         let moved = tail(&[("dr_2", 4.0), ("dr_f2", 6000.0)]);
         assert!(moved < low_node * 0.5 && moved < flat, "{low_node} → {moved} (flat {flat})");
