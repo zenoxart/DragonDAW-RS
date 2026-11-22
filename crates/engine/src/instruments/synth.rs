@@ -24,7 +24,9 @@ struct Voice {
     note: u8,
     freq: f64,
     target_freq: f64,
-    phases: Vec<[f64; 3]>,
+    /// Unison oscillator phases (fixed array: notes start on the audio thread without allocating).
+    phases: [[f64; 3]; 8],
+    n_uni: usize,
     vel: f32,
     gl: f32,
     gr: f32,
@@ -50,7 +52,7 @@ pub struct Synth {
 
 impl Synth {
     pub fn new(rate: f32) -> Self {
-        Synth { rate, p: SynthParams::default(), voices: Vec::new(), lfo_phase: 0.0, rng: Rng::new(1234), counter: 0, cutoff_mod: 0.0, res_mod: None, smooth: None }
+        Synth { rate, p: SynthParams::default(), voices: Vec::with_capacity(64), lfo_phase: 0.0, rng: Rng::new(1234), counter: 0, cutoff_mod: 0.0, res_mod: None, smooth: None }
     }
 
     #[inline]
@@ -90,9 +92,9 @@ impl InstrumentVoice for Synth {
             self.voices.remove(oldest);
         }
         let unison = self.p.unison.clamp(1, 8) as usize;
-        let mut phases = Vec::with_capacity(unison);
-        for _ in 0..unison {
-            phases.push([self.rng.next_f32() as f64, self.rng.next_f32() as f64, self.rng.next_f32() as f64]);
+        let mut phases = [[0.0f64; 3]; 8];
+        for ph in phases.iter_mut().take(unison) {
+            *ph = [self.rng.next_f32() as f64, self.rng.next_f32() as f64, self.rng.next_f32() as f64];
         }
         let (gl, gr) = pan_law(n.pan);
         let mut amp = EnvGen::new(self.p.amp_adsr, self.rate);
@@ -100,7 +102,7 @@ impl InstrumentVoice for Synth {
         amp.trigger();
         fenv.trigger();
         self.counter += 1;
-        self.voices.push(Voice { note: n.note, freq, target_freq: freq, phases, vel: n.velocity, gl, gr, amp, fenv, filter: [Svf::default(); 2], released: false, age: self.counter });
+        self.voices.push(Voice { note: n.note, freq, target_freq: freq, phases, n_uni: unison, vel: n.velocity, gl, gr, amp, fenv, filter: [Svf::default(); 2], released: false, age: self.counter });
     }
 
     fn note_off(&mut self, note: u8) {
@@ -143,10 +145,10 @@ impl InstrumentVoice for Synth {
                 }
                 v.freq += (v.target_freq - v.freq) * glide;
                 let f_env = v.fenv.next();
-                let n_uni = v.phases.len();
+                let n_uni = v.n_uni;
                 let mut sl = 0.0f64;
                 let mut sr = 0.0f64;
-                for (u, ph) in v.phases.iter_mut().enumerate() {
+                for (u, ph) in v.phases[..n_uni].iter_mut().enumerate() {
                     let spread = if n_uni > 1 { (u as f64 / (n_uni - 1) as f64) * 2.0 - 1.0 } else { 0.0 };
                     let uni = 2f64.powf(spread * detune_cents / 1200.0);
                     let mut s = 0.0;

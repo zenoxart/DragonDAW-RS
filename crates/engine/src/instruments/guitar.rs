@@ -261,8 +261,18 @@ impl Guitar {
         }
     }
 
-    fn open(&self) -> Vec<u8> {
-        self.p.open_strings()
+    /// A copy of the current chord without allocating (up to 8 strings).
+    fn chord_fixed(&self) -> ChordCopy {
+        let mut a = [None; 8];
+        let n = self.chord.len().min(8);
+        a[..n].copy_from_slice(&self.chord[..n]);
+        ChordCopy(a, n)
+    }
+
+    /// The open strings (a fixed array: called on the audio thread).
+    fn open(&self) -> OpenStrings {
+        let (a, n) = self.p.open_strings_fixed();
+        OpenStrings(a, n)
     }
 
     fn frets(&self) -> u8 {
@@ -437,16 +447,29 @@ impl Guitar {
 
     fn strum_dir(&mut self, notes: &[Option<u8>], vel: f32, key: u8, kind: Kind, art: Articulation, down: bool) {
         let open = self.open();
-        let mut order: Vec<usize> = (0..notes.len().min(open.len())).filter(|&i| notes[i].is_some()).collect();
-        order.sort_by_key(|&i| notes[i].unwrap_or(0));
-        match kind {
-            Kind::Light => {
-                let skip = order.len().saturating_sub(4);
-                order.drain(..skip);
+        // The strings to play, lowest note first, on the stack (the audio thread does not allocate).
+        let mut idx = [0usize; 8];
+        let mut n = 0;
+        for i in 0..notes.len().min(open.len()).min(8) {
+            if notes[i].is_some() {
+                idx[n] = i;
+                n += 1;
             }
-            Kind::Bass => order.truncate(1),
-            _ => {}
         }
+        // Stable by pitch, as before (insertion sort: few strings).
+        for a in 1..n {
+            let mut b = a;
+            while b > 0 && notes[idx[b - 1]].unwrap_or(0) > notes[idx[b]].unwrap_or(0) {
+                idx.swap(b - 1, b);
+                b -= 1;
+            }
+        }
+        let (lo, hi) = match kind {
+            Kind::Light => (n.saturating_sub(4), n),
+            Kind::Bass => (0, n.min(1)),
+            _ => (0, n),
+        };
+        let order = &mut idx[lo..hi];
         if !down {
             order.reverse();
         }
@@ -467,48 +490,65 @@ impl Guitar {
         if self.pending.is_empty() {
             return;
         }
-        let pending = std::mem::take(&mut self.pending);
+        // Copied to the stack and the list cleared in place: nothing allocates on the audio thread.
+        let mut buf = [(0u8, 0.0f32); 32];
+        let np = self.pending.len().min(32);
+        buf[..np].copy_from_slice(&self.pending[..np]);
+        self.pending.clear();
+        let pending = &buf[..np];
         let art = self.art;
         match self.p.mode {
             PlayMode::Solo => {
-                for &(note, vel) in &pending {
+                for &(note, vel) in pending {
                     self.play_solo(note, vel, art);
                 }
             }
             PlayMode::Strum => {
                 // Each note on its own string, then across the strings.
                 let open = self.open();
-                let mut notes: Vec<Option<u8>> = vec![None; open.len()];
-                let mut busy = vec![false; open.len()];
-                let mut sorted = pending.clone();
-                sorted.sort_by_key(|p| p.0);
+                let ns = open.len();
+                let mut notes = [None; 8];
+                let mut busy = [false; 8];
+                let mut sorted = buf;
+                sorted[..np].sort_unstable_by_key(|p| p.0);
+                let sorted = &sorted[..np];
                 let vel = sorted.iter().map(|p| p.1).fold(0.0, f32::max);
-                let mut leftovers = Vec::new();
-                for &(note, _) in &sorted {
-                    match string_for(&open, note, self.frets(), &busy) {
+                let mut left = [0u8; 32];
+                let mut nl = 0;
+                for &(note, _) in sorted {
+                    match string_for(&open, note, self.frets(), &busy[..ns]) {
                         Some((s, _)) if !busy[s] => {
                             busy[s] = true;
                             notes[s] = Some(note);
                         }
-                        _ => leftovers.push(note),
+                        _ => {
+                            left[nl] = note;
+                            nl += 1;
+                        }
                     }
                 }
                 if sorted.len() == 1 {
                     self.play_solo(sorted[0].0, sorted[0].1, art);
-                } else {
-                    let key = sorted[0].0;
-                    self.strum(&notes, vel, key, Kind::Normal, art);
+                } else if let Some(first) = sorted.first() {
+                    self.strum(&notes[..ns], vel, first.0, Kind::Normal, art);
                 }
-                for n in leftovers {
+                for &n in &left[..nl] {
                     self.play_solo(n, vel, art);
                 }
             }
             PlayMode::Chord | PlayMode::Pattern => {
                 let vel = pending.iter().map(|p| p.1).fold(0.0, f32::max);
-                let Some((root, k)) = detect_chord(&self.held).or_else(|| detect_chord(&pending.iter().map(|p| p.0).collect::<Vec<_>>())) else { return };
+                let mut keys = [0u8; 32];
+                for (k, p) in pending.iter().enumerate() {
+                    keys[k] = p.0;
+                }
+                let Some((root, k)) = detect_chord(&self.held).or_else(|| detect_chord(&keys[..np])) else { return };
                 let k = if self.held.len() <= 1 { self.p.single_key_chord.min(CHORDS.len() - 1) } else { k };
                 let open = self.open();
-                self.chord = voice_chord(&open, root, CHORDS[k].1, self.frets());
+                let frets = self.frets();
+                let mut chord = std::mem::take(&mut self.chord);
+                voice_chord_into(&open, root, CHORDS[k].1, frets, &mut chord);
+                self.chord = chord;
                 self.chord_key = root;
                 self.chord_vel = vel;
                 if self.p.mode == PlayMode::Chord {
@@ -518,7 +558,7 @@ impl Guitar {
                             self.choke_string(s, 0.03);
                         }
                     }
-                    let chord = self.chord.clone();
+                    let chord = self.chord_fixed();
                     self.strum(&chord, vel, root, Kind::Normal, art);
                 } else {
                     self.pattern_step = 0;
@@ -550,8 +590,11 @@ impl Guitar {
                 }
             }
         }
-        let busy: Vec<bool> = (0..open.len()).map(|i| self.strs.iter().any(|s| s.on && !s.released && s.string == i)).collect();
-        let Some((string, _)) = string_for(&open, note, self.frets(), &busy) else {
+        let mut busy = [false; 8];
+        for (i, b) in busy.iter_mut().enumerate().take(open.len()) {
+            *b = self.strs.iter().any(|s| s.on && !s.released && s.string == i);
+        }
+        let Some((string, _)) = string_for(&open, note, self.frets(), &busy[..open.len()]) else {
             // Out of the neck's range: the nearest string plays it anyway.
             let string = if note < open.iter().copied().min().unwrap_or(40) { 0 } else { open.len().saturating_sub(1) };
             let at = self.clock;
@@ -570,7 +613,7 @@ impl Guitar {
         while self.next_step_at <= self.clock {
             let (_, steps, beats) = PATTERNS[self.p.pattern.min(PATTERNS.len() - 1)];
             let c = steps.as_bytes()[self.pattern_step % steps.len()] as char;
-            let chord = self.chord.clone();
+            let chord = self.chord_fixed();
             let vel = self.chord_vel;
             let key = self.chord_key;
             let art = self.art;
@@ -610,6 +653,28 @@ impl Guitar {
     }
 }
 
+/// A chord copied to the stack; derefs to the slice.
+#[derive(Clone, Copy)]
+struct ChordCopy([Option<u8>; 8], usize);
+
+impl std::ops::Deref for ChordCopy {
+    type Target = [Option<u8>];
+    fn deref(&self) -> &[Option<u8>] {
+        &self.0[..self.1]
+    }
+}
+
+/// The open strings of the tuning, without a heap allocation; derefs to the slice.
+#[derive(Clone, Copy)]
+struct OpenStrings([u8; 8], usize);
+
+impl std::ops::Deref for OpenStrings {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0[..self.1]
+    }
+}
+
 impl InstrumentVoice for Guitar {
     fn note_on(&mut self, n: NoteOn) {
         // Key switches: articulations.
@@ -619,7 +684,7 @@ impl InstrumentVoice for Guitar {
         }
         // F#0 / G0: strum the current chord down / up again.
         if n.note == 18 || n.note == 19 {
-            let chord = self.chord.clone();
+            let chord = self.chord_fixed();
             let (vel, key, art) = (n.velocity, self.chord_key, self.art);
             self.strum_dir(&chord, vel, key, Kind::Normal, art, n.note == 18);
             return;

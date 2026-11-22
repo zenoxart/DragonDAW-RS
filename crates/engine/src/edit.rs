@@ -230,7 +230,7 @@ pub fn comp_promote(p: &mut Project, track: Id, take: Id, range: Range) -> bool 
     }
     // Copy the overlapping parts of the take's clips into a scratch track, trim them to the range.
     let scratch_id = p.next_id();
-    let mut scratch = p.track(track).cloned().unwrap();
+    let Some(mut scratch) = p.track(track).cloned() else { return false };
     scratch.id = scratch_id;
     scratch.clips = take_clips.into_iter().filter(|c| c.end() > range.start && c.start < range.end).collect();
     for c in &mut scratch.clips {
@@ -525,7 +525,7 @@ pub fn slice_to_rack(p: &mut Project, path: &std::path::Path, data: &crate::samp
     let pat = p.add_pattern();
     let secs = data.duration();
     let beats = secs * p.bpm / 60.0;
-    let pattern = p.pattern_mut(pat).unwrap();
+    let Some(pattern) = p.pattern_mut(pat) else { return (ch, pat) };
     pattern.name = format!("{name} slices");
     pattern.steps = ((beats * 4.0).ceil() as u32).clamp(4, 256);
     let mut notes = Vec::new();

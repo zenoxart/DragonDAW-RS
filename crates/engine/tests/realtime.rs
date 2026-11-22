@@ -126,6 +126,75 @@ fn render_does_not_allocate_while_playing() {
     assert_eq!(n, 0, "the audio thread allocated / freed {n} times in 200 blocks");
 }
 
+/// Instruments (every stock kind) playing patterns from the playlist, a launched clip-launcher lane, a
+/// monitored input and the per-insert meters: still no allocation per block.
+#[test]
+fn instruments_launcher_and_monitoring_do_not_allocate() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = busy_project(dir.path(), 2, 3);
+    let tone = dir.path().join("t.wav");
+    let pads: Vec<Pad> = (0..4).map(|k| Pad { note: 48 + k, layers: vec![PadLayer { path: tone.clone(), velocity_low: 0.0, velocity_high: 1.0 }], ..Default::default() }).collect();
+    let kinds = vec![
+        Instrument::Sampler(SamplerParams { path: tone.clone(), ..Default::default() }),
+        Instrument::DrumPads(pads),
+        Instrument::Synth(Default::default()),
+        Instrument::Wavetable(Box::default()),
+        Instrument::Guitar(Box::default()),
+        Instrument::Piano(Box::default()),
+        Instrument::Guitar(Box::new(dragon_engine::gtr::GuitarParams { mode: dragon_engine::gtr::PlayMode::Strum, ..Default::default() })),
+        Instrument::Guitar(Box::new(dragon_engine::gtr::GuitarParams { mode: dragon_engine::gtr::PlayMode::Chord, ..Default::default() })),
+        Instrument::Guitar(Box::new(dragon_engine::gtr::GuitarParams { mode: dragon_engine::gtr::PlayMode::Pattern, ..Default::default() })),
+    ];
+    let pat = p.add_pattern();
+    let launch_pat = p.add_pattern();
+    for (k, ins) in kinds.into_iter().enumerate() {
+        let ch = p.add_channel(&format!("I{k}"), ins);
+        for pid in [pat, launch_pat] {
+            let pt = p.patterns.iter_mut().find(|x| x.id == pid).unwrap();
+            let notes =
+                (0..16).map(|n| Note { pitch: 48 + (n * 5 % 24) as u8 + k as u8, start: n * PPQ / 2, length: PPQ / 3, velocity: 0.8, pan: 0.0, release: 0.5, slide: false, muted: false, ..Default::default() }).collect();
+            pt.channels.entry(ch).or_default().notes = notes;
+        }
+    }
+    let tid = p.tracks[0].id;
+    let cid = p.next_id();
+    let t = p.tracks.iter_mut().find(|t| t.id == tid).unwrap();
+    t.clips.push(Clip { id: cid, name: "pat".into(), start: 0.0, length: 64.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+    // A monitored, armed input track.
+    t.armed = true;
+    t.input = Some(InputSource { left: 0, right: Some(1) });
+    t.monitor = MonitorMode::Input;
+    let cache = SampleCache::default();
+    let mut pool = Pool::new();
+    let mut r = offline_renderer(&p, &cache, 48000.0, &mut pool);
+    r.play(PlayMode::Song);
+    let (mut l, mut rr) = (vec![0.0f32; 4096], vec![0.0f32; 4096]);
+    let input = (vec![0.01f32; 4096], vec![-0.01f32; 4096]);
+    r.push_live(dragon_engine::render::LiveEvent::Launch { lane: 1, pattern: Some(launch_pat), quantize: 0.0 });
+    for _ in 0..80 {
+        r.render(&mut l[..1024], &mut rr[..1024], &[&input.0[..1024], &input.1[..1024]]);
+    }
+    TRACE_ON.store(std::env::var_os("DRAGON_ALLOC_TRACE").is_some(), Ordering::Relaxed);
+    ALLOCS.store(0, Ordering::Relaxed);
+    WATCH.with(|w| w.set(true));
+    for k in 0..200 {
+        let n = [64, 256, 1024, 512][k % 4];
+        r.render(&mut l[..n], &mut rr[..n], &[&input.0[..n], &input.1[..n]]);
+    }
+    WATCH.with(|w| w.set(false));
+    let n = ALLOCS.load(Ordering::Relaxed);
+    for t in TRACES.lock().unwrap().iter() {
+        let frames: Vec<&str> = t
+            .lines()
+            .filter(|l| l.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .filter(|l| !l.contains("realtime::") && !l.contains("std::") && !l.contains("alloc::") && !l.contains("core::"))
+            .take(6)
+            .collect();
+        println!("--- allocation at:\n{}", frames.join("\n"));
+    }
+    assert_eq!(n, 0, "the audio thread allocated / freed {n} times in 200 blocks");
+}
+
 #[test]
 fn two_hundred_stock_effects_run_in_real_time() {
     let _turn = TIMING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

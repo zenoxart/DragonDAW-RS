@@ -513,7 +513,13 @@ pub fn plugin_picker(ui: &mut Ui, id: &str, items: &[PickItem]) -> Option<usize>
             if it.group != last_group {
                 last_group = it.group;
                 ui.add_space(2.0);
-                ui.label(RichText::new(it.group).small().strong().color(theme::ACCENT_2));
+                ui.horizontal(|ui| {
+                    let k = if it.group.starts_with("Third") { crate::brand::icon::PLUGIN } else { crate::brand::icon::STAR };
+                    if let Some(img) = crate::brand::icon_image(ui.ctx(), k, 13.0) {
+                        ui.add(img);
+                    }
+                    ui.label(RichText::new(it.group).small().strong().color(theme::ACCENT_2));
+                });
             }
             let w = ui.available_width();
             let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 22.0), egui::Sense::click());
@@ -533,6 +539,14 @@ pub fn plugin_picker(ui: &mut Ui, id: &str, items: &[PickItem]) -> Option<usize>
         ui.data_mut(|d| d.remove::<String>(qid));
     }
     picked
+}
+
+/// A toggle with a Higgsfield icon before its label (the plain [`toggle`] if the icon set is missing).
+pub fn icon_toggle(ui: &mut Ui, on: bool, icon: usize, label: &str, color: Color32) -> egui::Response {
+    let Some(img) = crate::brand::icon_image(ui.ctx(), icon, 15.0) else { return toggle(ui, on, label, color) };
+    let text = RichText::new(label).small().strong().color(if on { Color32::BLACK } else { theme::TEXT_DIM });
+    let img = img.tint(if on { Color32::BLACK } else { Color32::from_gray(200) });
+    ui.add(egui::Button::image_and_text(img, text).fill(if on { color } else { theme::PANEL_2 }).corner_radius(4.0))
 }
 
 #[cfg(test)]

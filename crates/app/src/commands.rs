@@ -590,7 +590,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             if st.session.path.is_none() && !st.save(true) {
                 return true;
             }
-            let path = st.session.path.clone().unwrap();
+            let Some(path) = st.session.path.clone() else { return true };
             let mut p = st.session.project.clone();
             match dragon_engine::project_io::collect_files(&mut p, &path) {
                 Ok(n) => {

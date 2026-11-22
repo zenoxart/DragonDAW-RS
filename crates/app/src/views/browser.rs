@@ -27,7 +27,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let filter_id = egui::Id::new("browser.filter");
     let mut filter: String = ui.data_mut(|d| d.get_temp(filter_id).unwrap_or_default());
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("🔍 search").desired_width(ui.available_width() - 60.0));
+        if let Some(img) = crate::brand::icon_image(ui.ctx(), crate::brand::icon::SEARCH, 16.0) {
+            ui.add(img);
+        }
+        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("search").desired_width(ui.available_width() - 60.0));
         if ui.button("+ folder").clicked() {
             if let Some(d) = rfd::FileDialog::new().pick_folder() {
                 st.settings.browser_folders.push(d);
@@ -55,7 +58,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         let mut remove = None;
         for (i, (name, path)) in roots.iter().enumerate() {
-            let r = egui::CollapsingHeader::new(RichText::new(format!("📁 {name}")).strong()).id_salt(path).default_open(i == 0).show(ui, |ui| folder(ui, st, path, &filter.to_lowercase(), 0));
+            let r = egui::CollapsingHeader::new(RichText::new(name.to_string()).strong()).icon(folder_icon).id_salt(path).default_open(i == 0).show(ui, |ui| folder(ui, st, path, &filter.to_lowercase(), 0));
             if i < st.settings.browser_folders.len() {
                 r.header_response.context_menu(|ui| {
                     if ui.button("Remove from browser").clicked() {
@@ -86,7 +89,7 @@ fn folder(ui: &mut Ui, st: &mut State, dir: &Path, filter: &str, depth: usize) {
         let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
         if p.is_dir() {
             if depth < 6 {
-                egui::CollapsingHeader::new(format!("📁 {name}")).id_salt(&p).show(ui, |ui| folder(ui, st, &p, filter, depth + 1));
+                egui::CollapsingHeader::new(name.to_string()).icon(folder_icon).id_salt(&p).show(ui, |ui| folder(ui, st, &p, filter, depth + 1));
             }
             continue;
         }
@@ -96,7 +99,23 @@ fn folder(ui: &mut Ui, st: &mut State, dir: &Path, filter: &str, depth: usize) {
         }
         let id = egui::Id::new(("browse", &p));
         let r = ui.dnd_drag_source(id, p.clone(), |ui| {
-            ui.label(format!("{k} {name}"));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let tile = match k {
+                    "🐉" => crate::brand::icon::PROJECT_FILE,
+                    "🎹" => crate::brand::icon::MIDI_FILE,
+                    _ => crate::brand::icon::AUDIO_FILE,
+                };
+                match crate::brand::icon_image(ui.ctx(), tile, 15.0) {
+                    Some(img) => {
+                        ui.add(img);
+                        ui.label(&name);
+                    }
+                    None => {
+                        ui.label(format!("{k} {name}"));
+                    }
+                }
+            });
         });
         let resp = r.response.interact(egui::Sense::click());
         if st.ui.browser_sel.as_deref() == Some(p.as_path()) {
@@ -202,4 +221,16 @@ fn preview_panel(ui: &mut Ui, st: &mut State) {
         st.preview(&path);
     }
     ui.data_mut(|d| d.insert_temp(egui::Id::new("browser.preview.rect"), resp.rect));
+}
+
+/// The folder rows' icon: the Higgsfield folder, open or closed with the row (a plain arrow as fallback).
+fn folder_icon(ui: &mut Ui, openness: f32, resp: &egui::Response) {
+    let r = egui::Rect::from_center_size(resp.rect.center(), egui::Vec2::splat(16.0));
+    let k = if openness > 0.5 { crate::brand::icon::FOLDER_OPEN } else { crate::brand::icon::FOLDER };
+    if !crate::brand::paint_icon(ui.painter(), r, k, egui::Color32::WHITE) {
+        let c = r.center();
+        let pts =
+            if openness > 0.5 { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
+        ui.painter().add(egui::Shape::convex_polygon(pts, crate::theme::TEXT_DIM, egui::Stroke::NONE));
+    }
 }

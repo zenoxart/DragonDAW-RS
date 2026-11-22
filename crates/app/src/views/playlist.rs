@@ -752,7 +752,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                             let n = p.tracks.len() as i64;
                             if moves.iter().all(|(ti, _)| (0..n).contains(&(*ti as i64 + delta))) {
                                 for (ti, cid) in moves {
-                                    let k = p.tracks[ti].clips.iter().position(|c| c.id == cid).unwrap();
+                                    let Some(k) = p.tracks[ti].clips.iter().position(|c| c.id == cid) else { continue };
                                     let c = p.tracks[ti].clips.remove(k);
                                     p.tracks[(ti as i64 + delta) as usize].clips.push(c);
                                 }
@@ -1543,12 +1543,8 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
             st.ui.playlist_zoom = ((ui.available_width() + 400.0) / len as f32).clamp(3.0, 400.0);
             st.ui.pl_x = 0.0;
         }
-        let marker = match crate::brand::icon_atlas(ui.ctx()) {
-            Some(tex) => {
-                let k = crate::brand::icon::MARKER;
-                let uv = Rect::from_min_size(Pos2::new((k % 6) as f32 * 96.0 / 576.0, (k / 6) as f32 * 96.0 / 480.0), Vec2::new(96.0 / 576.0, 96.0 / 480.0));
-                ui.add(egui::Button::image_and_text(egui::Image::new((tex.id(), Vec2::splat(16.0))).uv(uv), RichText::new("Marker").small().color(theme::ACCENT_2)))
-            }
+        let marker = match crate::brand::icon_image(ui.ctx(), crate::brand::icon::MARKER, 16.0) {
+            Some(img) => ui.add(egui::Button::image_and_text(img, RichText::new("Marker").small().color(theme::ACCENT_2))),
             None => ui.small_button(RichText::new("Marker").color(theme::ACCENT_2)),
         };
         if marker.on_hover_text("Add a time marker at the playhead (Alt+T)").clicked() {

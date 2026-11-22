@@ -166,10 +166,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 nb.context_menu(|ui| channel_menu(ui, st, c));
                 // Steps or notes indicator.
                 let pc = pattern.channels.get(&cid);
-                let has_notes = pc.map(|x| !x.notes.is_empty()).unwrap_or(false);
-                if has_notes {
+                let notes = pc.map(|x| x.notes.as_slice()).filter(|n| !n.is_empty());
+                if let Some(notes) = notes {
                     let (rect, r) = ui.allocate_exact_size(Vec2::new(steps as f32 * 22.0, 24.0), Sense::click());
-                    mini_roll(ui.painter(), rect, &pc.unwrap().notes, pattern.length_beats());
+                    mini_roll(ui.painter(), rect, notes, pattern.length_beats());
                     if r.double_clicked() || r.clicked() {
                         st.ui.piano_channel = Some(cid);
                         st.ui.channel = Some(cid);

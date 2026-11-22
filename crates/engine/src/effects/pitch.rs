@@ -314,8 +314,12 @@ impl Psola {
         let y = self.acc[idx];
         self.acc[idx] = 0.0;
         self.e += 1;
-        // Glide the delay towards the period's (a skipped or repeated sample every 16 samples at most).
-        if self.w.is_multiple_of(16) {
+        // Glide the delay towards the period's: a skipped or repeated sample, every 16 samples at most and
+        // only where it cannot be heard – between notes (unvoiced) or near silence – unless the delay is
+        // far too short for the voice (it went down a lot), when grains would be cut.
+        let quiet = !self.voiced || y.abs() < 2e-3;
+        let far = (self.w - self.e) as f32 + 0.5 * p < want as f32;
+        if self.w.is_multiple_of(16) && (quiet || far) {
             let cur = self.w - self.e;
             if want + 24 < cur {
                 let i2 = (self.e as usize) & mask;
@@ -636,6 +640,34 @@ mod tests {
     }
 
     /// Retune speed 0 makes a gliding voice stair-step onto the notes (the hard-tune effect).
+    /// While a note is sung the delay is not touched (no skipped / repeated samples inside it): the
+    /// output stays a clean, click-free tone.
+    #[test]
+    fn delay_changes_wait_for_quiet_moments() {
+        let mut s = Psola::new();
+        s.set_period(Some(48000.0 / 300.0));
+        let x = sine(300.0, 1.0);
+        let mut y = Vec::new();
+        let mut d_mid = 0.0;
+        for (i, v) in x.iter().enumerate() {
+            // Mid-note the detector reports a lower voice: the wanted delay grows.
+            if i == 12000 {
+                s.set_period(Some(48000.0 / 250.0));
+                d_mid = s.delay();
+            }
+            y.push(s.process(*v, 1.0));
+        }
+        assert_eq!(s.delay(), d_mid, "the delay moved while the note was sung");
+        // No sample-to-sample jump beyond what a 300 Hz sine at this level can make.
+        let max_step = y[14000..47000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(max_step < 0.5 * 2.0 * std::f32::consts::PI * 300.0 / 48000.0 * 1.6, "a click: {max_step}");
+        // Once the voice stops, the delay follows.
+        for _ in 0..4800 {
+            s.process(0.0, 1.0);
+        }
+        assert_ne!(s.delay(), d_mid, "the delay adjusts in the silence");
+    }
+
     #[test]
     fn hard_tune_snaps_a_glide() {
         let mut e = PitchCorrect::new(48000.0);

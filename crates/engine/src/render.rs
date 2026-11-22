@@ -1192,6 +1192,9 @@ impl StripSlot {
 }
 
 pub struct Renderer {
+    /// Reused per block (no allocation on the audio thread): the events of a segment, the launches due.
+    sched_buf: Vec<(usize, SEvent)>,
+    due_buf: Vec<(Id, Option<Id>, f64)>,
     /// Peak of the monitored inputs in the current render call, and how long the feedback guard has seen
     /// a hot input with a full-scale output (seconds).
     monitor_peak: f32,
@@ -1275,6 +1278,8 @@ impl Renderer {
     pub fn new(song: Arc<Song>) -> Self {
         let rate = song.rate;
         Renderer {
+            sched_buf: Vec::with_capacity(8192),
+            due_buf: Vec::with_capacity(64),
             monitor_peak: 0.0,
             feedback_hot: 0.0,
             mod_runs: HashMap::new(),
@@ -1486,10 +1491,9 @@ impl Renderer {
                 }
                 LiveEvent::StopAllLaunches { quantize } => {
                     let at = quantize_up(self.transport.beat.max(0.0), quantize);
-                    let lanes: Vec<Id> = self.launches.iter().filter(|l| l.end.is_infinite()).map(|l| l.lane).collect();
                     self.queued.clear();
-                    for lane in lanes {
-                        self.queued.push((lane, None, at));
+                    for l in self.launches.iter().filter(|l| l.end.is_infinite()) {
+                        self.queued.push((l.lane, None, at));
                     }
                 }
             }
@@ -2120,7 +2124,8 @@ impl Renderer {
         let a = events.partition_point(|e| e.beat < sb0);
         let b = events.partition_point(|e| e.beat < sb1);
         let t_seg0 = song.tempo.beat_to_seconds(sb0.max(0.0));
-        let mut sched: Vec<(usize, SEvent)> = Vec::with_capacity(b - a);
+        let mut sched = std::mem::take(&mut self.sched_buf);
+        sched.clear();
         let to_frame = |beat: f64| f0 + (((song.tempo.beat_to_seconds(beat) - t_seg0) * self.rate as f64).round().max(0.0) as usize).min(f1 - f0 - 1);
         for e in &events[a..b] {
             if sb0 < 0.0 {
@@ -2130,9 +2135,11 @@ impl Renderer {
         }
         if sb0 >= 0.0 && self.transport.mode == PlayMode::Song {
             // Clip launcher: activate queued launches whose boundary falls in this segment.
-            let due: Vec<(Id, Option<Id>, f64)> = self.queued.iter().filter(|q| q.2 < sb1).copied().collect();
+            let mut due = std::mem::take(&mut self.due_buf);
+            due.clear();
+            due.extend(self.queued.iter().filter(|q| q.2 < sb1).copied());
             self.queued.retain(|q| q.2 >= sb1);
-            for (lane, pattern, at) in due {
+            for &(lane, pattern, at) in &due {
                 for l in self.launches.iter_mut().filter(|l| l.lane == lane && l.end.is_infinite()) {
                     l.end = at;
                 }
@@ -2167,9 +2174,12 @@ impl Renderer {
                 }
             }
             self.launches.retain(|l| l.end >= sb1);
-            sched.sort_by_key(|e| e.0);
+            // Stable and in place (sort_by_key on a slice allocates a merge buffer).
+            insertion_sort_by_frame(&mut sched);
+            self.due_buf = due;
         }
         self.render_instruments_until(song, f0, f1, &sched);
+        self.sched_buf = sched;
     }
 
     /// Renders every channel's instrument over `[f0, f1)`, applying `events` (frame, event) in order.
@@ -2262,6 +2272,17 @@ impl Renderer {
                 out_r[k] += s;
                 self.click_left -= 1;
             }
+        }
+    }
+}
+
+/// Stable sort by frame without allocating (the events of one segment are few and nearly sorted).
+fn insertion_sort_by_frame(v: &mut [(usize, SEvent)]) {
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 && v[j - 1].0 > v[j].0 {
+            v.swap(j - 1, j);
+            j -= 1;
         }
     }
 }

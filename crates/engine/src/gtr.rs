@@ -185,22 +185,27 @@ pub const CHORDS: [(&str, &[u8]); 12] = [
 
 /// Recognises a chord from the keys held: (root note, chord index). One key = a major chord.
 pub fn detect_chord(notes: &[u8]) -> Option<(u8, usize)> {
+    // Pitch classes as a 12-bit set (no allocation: this runs on the audio thread when keys change).
     let bass = *notes.iter().min()?;
-    let mut pcs: Vec<u8> = notes.iter().map(|n| n % 12).collect();
-    pcs.sort_unstable();
-    pcs.dedup();
-    if pcs.len() == 1 {
+    let mut held = 0u16;
+    for n in notes {
+        held |= 1 << (n % 12);
+    }
+    let count = held.count_ones() as usize;
+    if count == 1 {
         return Some((bass, 0));
     }
     // Try every held pitch class as the root, the bass first; the best full match wins.
-    let mut roots: Vec<u8> = vec![bass % 12];
-    roots.extend(pcs.iter().copied().filter(|p| *p != bass % 12));
     let mut best: Option<(usize, u8, usize)> = None;
+    let roots = std::iter::once(bass % 12).chain((0..12u8).filter(|p| *p != bass % 12 && held & (1 << p) != 0));
     for root in roots {
         for (k, (_, iv)) in CHORDS.iter().enumerate() {
-            let set: Vec<u8> = iv.iter().map(|i| (root + i) % 12).collect();
-            if pcs.iter().all(|p| set.contains(p)) {
-                let missing = set.len() - pcs.len();
+            let mut set = 0u16;
+            for i in iv.iter() {
+                set |= 1 << ((root + i) % 12);
+            }
+            if held & !set == 0 {
+                let missing = set.count_ones() as usize - count;
                 let score = missing * 4 + usize::from(root != bass % 12) + k / 4;
                 if best.is_none_or(|b| score < b.0) {
                     best = Some((score, root, k));
@@ -217,6 +222,62 @@ pub fn detect_chord(notes: &[u8]) -> Option<(u8, usize)> {
 /// Voices a chord on the strings like a guitarist would: one note per string within a four-fret
 /// hand position, the root in the bass, open strings where they fit. `None` = the string is not played.
 pub fn voice_chord(tuning: &[u8], root: u8, intervals: &[u8], frets: u8) -> Vec<Option<u8>> {
+    let mut out = Vec::with_capacity(tuning.len());
+    voice_chord_into(tuning, root, intervals, frets, &mut out);
+    out
+}
+
+/// [`voice_chord`] into `out` (cleared first) without allocating while `out` has room for the strings –
+/// for the audio thread. Up to 8 strings.
+pub fn voice_chord_into(tuning: &[u8], root: u8, intervals: &[u8], frets: u8, out: &mut Vec<Option<u8>>) {
+    let n = tuning.len().min(8);
+    let tuning = &tuning[..n];
+    let mut pcs = 0u16;
+    for i in intervals {
+        pcs |= 1 << ((root + i) % 12);
+    }
+    // Strings by pitch, lowest first (re-entrant tunings such as ukulele are not sorted).
+    let mut order = [0usize; 8];
+    for (k, o) in order.iter_mut().enumerate().take(n) {
+        *o = k;
+    }
+    order[..n].sort_unstable_by_key(|&i| (tuning[i], i));
+    let mut best: Option<(i32, [Option<u8>; 8])> = None;
+    for w in 0..=frets.saturating_sub(4).min(12) {
+        let mut v = [None; 8];
+        for (s, &open) in tuning.iter().enumerate() {
+            let first = if w <= 3 { Some(0u8) } else { None };
+            v[s] = first.into_iter().chain((w.max(1)..=w + 3).filter(|f| *f <= frets)).find(|f| pcs & (1 << ((open + f) % 12)) != 0).map(|f| open + f);
+        }
+        // The bass (lowest sounding string) must be the root: mute strings below the lowest root.
+        let Some(lr) = order[..n].iter().position(|&i| v[i].is_some_and(|x| x % 12 == root % 12)) else { continue };
+        for &i in &order[..lr] {
+            v[i] = None;
+        }
+        let sounding = v[..n].iter().flatten().count() as i32;
+        let mut got = 0u16;
+        for x in v[..n].iter().flatten() {
+            got |= 1 << (x % 12);
+        }
+        let has_all = (pcs & got).count_ones() as i32;
+        // Prefer full chords, then positions near the nut with ringing open strings (how most
+        // players reach for a chord), then the bass on a low string.
+        let opens = (0..n).filter(|&i| v[i] == Some(tuning[i])).count() as i32;
+        let score = has_all * 100 + sounding * 10 + opens * 3 - w as i32 * 6 - lr as i32 * 12;
+        if best.is_none_or(|b| score > b.0) {
+            best = Some((score, v));
+        }
+    }
+    out.clear();
+    match best {
+        Some((_, v)) => out.extend_from_slice(&v[..n]),
+        None => out.extend(std::iter::repeat_n(None, n)),
+    }
+}
+
+/// The original voicing (allocating), kept to check [`voice_chord_into`] against.
+#[cfg(test)]
+fn voice_chord_old(tuning: &[u8], root: u8, intervals: &[u8], frets: u8) -> Vec<Option<u8>> {
     let pcs: Vec<u8> = intervals.iter().map(|i| (root + i) % 12).collect();
     let mut best: Option<(i32, Vec<Option<u8>>)> = None;
     for w in 0..=frets.saturating_sub(4).min(12) {
@@ -265,10 +326,9 @@ pub fn voice_chord(tuning: &[u8], root: u8, intervals: &[u8], frets: u8) -> Vec<
 /// that could play it lowest. Returns (string, fret).
 pub fn string_for(tuning: &[u8], note: u8, frets: u8, busy: &[bool]) -> Option<(usize, u8)> {
     let fits = |i: usize| note >= tuning[i] && note - tuning[i] <= frets;
-    let mut opts: Vec<usize> = (0..tuning.len()).filter(|&i| fits(i)).collect();
-    // Prefer low frets (the way a player stays near the nut), free strings first.
-    opts.sort_by_key(|&i| (busy.get(i).copied().unwrap_or(false), (note - tuning[i]) as i32 / 5, (note - tuning[i]) as i32));
-    opts.first().map(|&i| (i, note - tuning[i]))
+    // Prefer low frets (the way a player stays near the nut), free strings first; the first of equals
+    // (as a stable sort would) – no allocation, it runs on the audio thread.
+    (0..tuning.len()).filter(|&i| fits(i)).min_by_key(|&i| (busy.get(i).copied().unwrap_or(false), (note - tuning[i]) as i32 / 5, (note - tuning[i]) as i32)).map(|i| (i, note - tuning[i]))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -439,6 +499,16 @@ impl GuitarParams {
     pub fn open_strings(&self) -> Vec<u8> {
         self.tuning.iter().map(|n| n + self.capo).collect()
     }
+
+    /// The open strings without allocating (for the audio thread): up to 8 strings and how many.
+    pub fn open_strings_fixed(&self) -> ([u8; 8], usize) {
+        let mut a = [0u8; 8];
+        let n = self.tuning.len().min(8);
+        for (k, t) in self.tuning.iter().take(8).enumerate() {
+            a[k] = t + self.capo;
+        }
+        (a, n)
+    }
 }
 
 /// Named tunings for the editor.
@@ -457,6 +527,22 @@ pub const TUNINGS: [(&str, &[u8]); 10] = [
 
 #[cfg(test)]
 mod tests {
+
+    /// The allocation-free voicing gives the same chords as the original, for every tuning, root and
+    /// chord type.
+    #[test]
+    fn voicing_without_allocation_matches_the_original() {
+        for (_, tuning) in TUNINGS.iter() {
+            for root in 36..60u8 {
+                for (_, iv) in CHORDS.iter() {
+                    for frets in [12u8, 19, 24] {
+                        assert_eq!(voice_chord(tuning, root, iv, frets), voice_chord_old(tuning, root, iv, frets), "{tuning:?} root {root} {iv:?}");
+                    }
+                }
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

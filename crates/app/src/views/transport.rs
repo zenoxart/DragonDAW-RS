@@ -23,15 +23,24 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         ui.separator();
         let big = |s: &str| RichText::new(s).size(18.0);
-        let play = ui.add(egui::Button::new(big(if ts.playing { "⏸" } else { "▶" }).color(if ts.playing { theme::OK } else { Color32::WHITE })).min_size(Vec2::new(36.0, 30.0)));
+        // Transport buttons with the Higgsfield icons (the glyphs if the icon set is missing).
+        let icon_btn = |ui: &mut Ui, k: usize, glyph: &str, col: Color32, lit: bool| -> egui::Response {
+            match crate::brand::icon_image(ui.ctx(), k, 20.0) {
+                Some(img) => {
+                    ui.add(egui::Button::image(img.tint(if lit { Color32::WHITE } else { Color32::from_gray(185) })).fill(if lit { col.gamma_multiply(0.35) } else { theme::PANEL_2 }).min_size(Vec2::new(36.0, 30.0)))
+                }
+                None => ui.add(egui::Button::new(big(glyph).color(col)).min_size(Vec2::new(36.0, 30.0))),
+            }
+        };
+        let play = if ts.playing { icon_btn(ui, crate::brand::icon::PAUSE, "⏸", theme::OK, true) } else { icon_btn(ui, crate::brand::icon::PLAY, "▶", Color32::WHITE, false) };
         crate::tutorial::anchor(ui.ctx(), "transport.play", play.rect);
         if play.on_hover_text("Play / pause (Space)").clicked() {
             st.toggle_play();
         }
-        if ui.add(egui::Button::new(big("⏹")).min_size(Vec2::new(36.0, 30.0))).on_hover_text("Stop (Ctrl+Space)").clicked() {
+        if icon_btn(ui, crate::brand::icon::STOP, "⏹", Color32::WHITE, false).on_hover_text("Stop (Ctrl+Space)").clicked() {
             st.stop();
         }
-        let rec_b = ui.add(egui::Button::new(big("⏺").color(if rec { theme::REC } else { theme::TEXT_DIM })).min_size(Vec2::new(36.0, 30.0)));
+        let rec_b = icon_btn(ui, crate::brand::icon::RECORD, "⏺", theme::REC, rec);
         crate::tutorial::anchor(ui.ctx(), "transport.record", rec_b.rect);
         if rec_b.on_hover_text("Record (R): armed tracks record audio, otherwise notes are recorded into the pattern").clicked() {
             st.ctx.run("dragon.transport.record", serde_json::Value::Null);
@@ -66,19 +75,19 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let p = &st.session.project;
         let (met, lp, punch) = (p.metronome.enabled, p.loop_enabled, p.punch_enabled);
         let count_in = p.metronome.count_in_bars;
-        let click = widgets::toggle(ui, met, "♩ CLICK", theme::ACCENT_2).on_hover_text("Metronome on / off (Ctrl+M)");
+        let click = widgets::icon_toggle(ui, met, crate::brand::icon::METRONOME, "CLICK", theme::ACCENT_2).on_hover_text("Metronome on / off (Ctrl+M)");
         if click.clicked() {
             st.ctx.run("dragon.transport.metronome", serde_json::Value::Null);
         }
-        let count = widgets::toggle(ui, count_in > 0, "COUNT", theme::ACCENT_2).on_hover_text("Count-in before recording (1 bar)");
+        let count = widgets::icon_toggle(ui, count_in > 0, crate::brand::icon::COUNT_IN, "COUNT", theme::ACCENT_2).on_hover_text("Count-in before recording (1 bar)");
         crate::tutorial::anchor(ui.ctx(), "transport.click", click.rect.union(count.rect));
         if count.clicked() {
             st.session.edit("Count-in", |p| p.metronome.count_in_bars = if count_in > 0 { 0 } else { 1 });
         }
-        if widgets::toggle(ui, lp, "⟲ LOOP", theme::PLAYHEAD).on_hover_text("Loop (Ctrl+L)").clicked() {
+        if widgets::icon_toggle(ui, lp, crate::brand::icon::LOOP, "LOOP", theme::PLAYHEAD).on_hover_text("Loop (Ctrl+L)").clicked() {
             st.ctx.run("dragon.transport.loop", serde_json::Value::Null);
         }
-        if widgets::toggle(ui, punch, "PUNCH", theme::REC).on_hover_text("Punch in/out range").clicked() {
+        if widgets::icon_toggle(ui, punch, crate::brand::icon::PUNCH, "PUNCH", theme::REC).on_hover_text("Punch in/out range").clicked() {
             st.ctx.run("dragon.transport.punch", serde_json::Value::Null);
         }
         if widgets::toggle(ui, st.ui.typing_keyboard, "⌨", theme::OK).on_hover_text("Typing keyboard to piano (Ctrl+T)").clicked() {

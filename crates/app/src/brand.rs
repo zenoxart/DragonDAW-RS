@@ -39,8 +39,9 @@ fn texture(ctx: &Context, name: &'static str, bytes: &[u8]) -> Option<TextureHan
 
 const ICON_ATLAS_PNG: &[u8] = include_bytes!("../assets/icons/atlas.png");
 
-/// The app's icon set (made with Higgsfield): 30 glowing gold icons, 96 px each, 6 per row – the 18
-/// track icons in `track_icons::ICONS` order, then the playlist tools, marker, pattern and song.
+/// The app's icon set (made with Higgsfield): 48 glowing gold icons, 96 px each, 6 per row – the 18
+/// track icons in `track_icons::ICONS` order, the playlist tools, marker, pattern and song, then the
+/// transport and browser icons ([`icon`]).
 pub fn icon_atlas(ctx: &Context) -> Option<TextureHandle> {
     let id = egui::Id::new(("brand", "icon-atlas"));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
@@ -61,6 +62,39 @@ pub mod icon {
     pub const MARKER: usize = 27;
     pub const PATTERN: usize = 28;
     pub const SONG: usize = 29;
+    pub const PLAY: usize = 30;
+    pub const STOP: usize = 31;
+    pub const RECORD: usize = 32;
+    pub const PAUSE: usize = 33;
+    pub const LOOP: usize = 34;
+    pub const METRONOME: usize = 35;
+    pub const COUNT_IN: usize = 36;
+    pub const PUNCH: usize = 37;
+    pub const FOLDER: usize = 38;
+    pub const FOLDER_OPEN: usize = 39;
+    pub const AUDIO_FILE: usize = 40;
+    pub const PROJECT_FILE: usize = 41;
+    pub const PLUGIN: usize = 42;
+    pub const PRESET: usize = 43;
+    /// Stock (Dragon's own) items.
+    pub const STAR: usize = 44;
+    pub const MIDI_FILE: usize = 46;
+    pub const SEARCH: usize = 47;
+    /// Tiles in the atlas (6 per row).
+    pub const COUNT: usize = 48;
+}
+
+/// UV rectangle of atlas tile `k` (for `egui::Image::uv`).
+pub fn icon_uv(k: usize) -> egui::Rect {
+    let rows = icon::COUNT.div_ceil(6) as f32;
+    let (cx, cy) = ((k % 6) as f32, (k / 6) as f32);
+    egui::Rect::from_min_max(egui::pos2((cx * 96.0 + 0.5) / 576.0, (cy * 96.0 + 0.5) / (rows * 96.0)), egui::pos2(((cx + 1.0) * 96.0 - 0.5) / 576.0, ((cy + 1.0) * 96.0 - 0.5) / (rows * 96.0)))
+}
+
+/// An `egui::Image` of atlas tile `k` at `size` points (for buttons).
+pub fn icon_image(ctx: &Context, k: usize, size: f32) -> Option<egui::Image<'static>> {
+    let tex = icon_atlas(ctx)?;
+    Some(egui::Image::new((tex.id(), egui::Vec2::splat(size))).uv(icon_uv(k)))
 }
 
 /// Draws atlas tile `k` into `r` (square, centred), tinted by `tint` (white = its own gold).
@@ -68,11 +102,8 @@ pub fn paint_icon(p: &egui::Painter, r: egui::Rect, k: usize, tint: egui::Color3
     let Some(tex) = icon_atlas(p.ctx()) else { return false };
     let s = r.width().min(r.height());
     let sq = egui::Rect::from_center_size(r.center(), egui::Vec2::splat(s));
-    let (cx, cy) = ((k % 6) as f32, (k / 6) as f32);
     // A half-texel inset keeps neighbours from bleeding in.
-    let (u0, v0) = ((cx * 96.0 + 0.5) / 576.0, (cy * 96.0 + 0.5) / 480.0);
-    let (u1, v1) = (((cx + 1.0) * 96.0 - 0.5) / 576.0, ((cy + 1.0) * 96.0 - 0.5) / 480.0);
-    p.image(tex.id(), sq, egui::Rect::from_min_max(egui::pos2(u0, v0), egui::pos2(u1, v1)), tint);
+    p.image(tex.id(), sq, icon_uv(k), tint);
     true
 }
 

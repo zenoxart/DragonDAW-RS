@@ -1370,6 +1370,9 @@ fn presets_row(ui: &mut Ui, st: &mut State, pl: &PluginRef, inst: &Result<dragon
     let cur: Option<usize> = ui.data(|d| d.get_temp(cur_id));
     let mut pick: Option<usize> = None;
     ui.horizontal(|ui| {
+        if let Some(img) = crate::brand::icon_image(ui.ctx(), crate::brand::icon::PRESET, 16.0) {
+            ui.add(img);
+        }
         ui.label(RichText::new("Preset").small().color(theme::TEXT_DIM));
         let text = cur.and_then(|k| list.get(k)).map(|p| p.name.clone()).unwrap_or_else(|| if list.is_empty() { "(no presets found)".into() } else { format!("{} presets", list.len()) });
         egui::ComboBox::from_id_salt(("plugin.preset.combo", key)).width(220.0).selected_text(text).height(420.0).show_ui(ui, |ui| {

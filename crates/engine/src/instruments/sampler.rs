@@ -34,7 +34,7 @@ const MAX_VOICES: usize = 32;
 
 impl Sampler {
     pub fn new(rate: f32) -> Self {
-        Sampler { rate, params: SamplerParams::default(), data: None, voices: Vec::new(), envelope: Envelope::default(), last_rate: 1.0 }
+        Sampler { rate, params: SamplerParams::default(), data: None, voices: Vec::with_capacity(MAX_VOICES + 1), envelope: Envelope::default(), last_rate: 1.0 }
     }
 
     /// Sets the amplitude envelope of the owning channel.

@@ -932,6 +932,13 @@ fn eq(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         p.circle_filled(c, rad, BAND_COLORS[*k % 7]);
         p.circle_stroke(c, rad, Stroke::new(if selected == k + 1 { 2.5_f32 } else { 1.5 }, Color32::from_white_alpha(if selected == k + 1 { 255 } else { 200 })));
         p.text(c, egui::Align2::CENTER_CENTER, format!("{}", k + 1), egui::FontId::proportional(8.5), Color32::BLACK);
+        // Cuts and shelves show their slope under the node (Pro-Q).
+        let kind = BiquadKind::from_index(h.v(&format!("b{}_type", k + 1)));
+        if dragon_engine::effects::eq::has_slope(kind) {
+            let sl = dragon_engine::effects::eq::SLOPES.get(h.v(&format!("b{}_slope", k + 1)).round() as usize).copied().unwrap_or("12 dB/oct");
+            let below = if c.y < pr.bottom() - 26.0 { 16.0 } else { -16.0 };
+            p.text(c + Vec2::new(0.0, below), egui::Align2::CENTER_CENTER, sl.replace("/oct", ""), egui::FontId::proportional(9.5), BAND_COLORS[*k % 7]);
+        }
         if solo == k + 1 {
             p.circle_stroke(c, 11.0, Stroke::new(2.0_f32, Color32::WHITE));
         }

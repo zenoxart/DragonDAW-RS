@@ -24,9 +24,12 @@ pub struct DrumPads {
     hits: Vec<Hit>,
 }
 
+/// Hits playing at once (the oldest stops beyond this).
+const MAX_HITS: usize = 64;
+
 impl DrumPads {
     pub fn new(rate: f32) -> Self {
-        DrumPads { rate, pads: Vec::new(), layers: Vec::new(), hits: Vec::new() }
+        DrumPads { rate, pads: Vec::new(), layers: Vec::new(), hits: Vec::with_capacity(MAX_HITS + 1) }
     }
 }
 
@@ -73,7 +76,7 @@ impl InstrumentVoice for DrumPads {
         let g = pad.gain * n.velocity;
         let step = note_ratio(pad.pitch + n.detune) * data.rate as f64 / self.rate as f64;
         self.hits.push(Hit { pad: pi, data, pos: 0.0, step, gl: g * pl * std::f32::consts::FRAC_1_SQRT_2, gr: g * pr * std::f32::consts::FRAC_1_SQRT_2, fade: 1.0, fade_step: 0.0 });
-        if self.hits.len() > 64 {
+        if self.hits.len() > MAX_HITS {
             self.hits.remove(0);
         }
     }
