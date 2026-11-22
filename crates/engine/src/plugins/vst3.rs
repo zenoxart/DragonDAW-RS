@@ -454,14 +454,16 @@ fn stream(data: Vec<u8>) -> ComWrapper<Stream> {
 }
 
 /// State layout in the project: `u32 component_len | component | controller`.
-fn pack(component: &[u8], controller: &[u8]) -> Vec<u8> {
+/// Packs component and controller state the way the project stores VST3 state.
+pub fn pack(component: &[u8], controller: &[u8]) -> Vec<u8> {
     let mut v = (component.len() as u32).to_le_bytes().to_vec();
     v.extend_from_slice(component);
     v.extend_from_slice(controller);
     v
 }
 
-fn unpack(state: &[u8]) -> (Vec<u8>, Vec<u8>) {
+/// The component and controller state of a packed VST3 state.
+pub fn unpack(state: &[u8]) -> (Vec<u8>, Vec<u8>) {
     if state.len() < 4 {
         return (Vec::new(), Vec::new());
     }
@@ -767,6 +769,29 @@ impl Vst3Plugin {
         }
     }
 
+    fn set_state(&mut self, data: &[u8]) -> bool {
+        let (comp, ctrl) = unpack(data);
+        if comp.is_empty() {
+            return false;
+        }
+        // SAFETY: state calls into our own stream objects, on the UI thread (as the SDK host does).
+        unsafe {
+            let s = stream(comp.clone());
+            if self.component.setState(s.as_com_ref::<IBStream>().unwrap().as_ptr()) != kResultOk {
+                return false;
+            }
+            if let Some(c) = &self.controller {
+                let s2 = stream(comp);
+                c.setComponentState(s2.as_com_ref::<IBStream>().unwrap().as_ptr());
+                if self.separate_controller && !ctrl.is_empty() {
+                    let s3 = stream(ctrl);
+                    c.setState(s3.as_com_ref::<IBStream>().unwrap().as_ptr());
+                }
+            }
+        }
+        true
+    }
+
     /// Opens the plugin's editor embedded in its own native window, or closes it.
     fn set_editor(&mut self, open: bool) -> bool {
         if !open {
@@ -1057,6 +1082,9 @@ impl Effect for Vst3Plugin {
     fn save_state(&mut self) -> Option<Vec<u8>> {
         self.state()
     }
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        self.set_state(data)
+    }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
     }
@@ -1114,6 +1142,9 @@ impl InstrumentVoice for Vst3Plugin {
     }
     fn save_state(&mut self) -> Option<Vec<u8>> {
         self.state()
+    }
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        self.set_state(data)
     }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)

@@ -41,6 +41,7 @@ pub mod mixpool;
 pub mod model;
 pub mod pno;
 pub mod pno_library;
+pub mod presets;
 pub mod project_io;
 pub mod reference;
 pub mod render;

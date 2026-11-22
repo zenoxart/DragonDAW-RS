@@ -42,7 +42,7 @@ pub fn tracks_into(p: &Project, mixer: Id) -> Vec<Id> {
 
 /// A track shown as a recording track: armed, or made as one ("Recording 2", "Vocals rec").
 fn is_recording_track(t: &dragon_engine::model::Track) -> bool {
-    t.armed || t.name.starts_with("Recording") || t.name.ends_with(" rec")
+    t.armed || t.audio || t.name.starts_with("Recording") || t.name.ends_with(" rec")
 }
 
 fn channels(st: &State) -> u16 {
@@ -93,7 +93,7 @@ fn set_input(st: &mut State, tid: Id, src: InputSource) {
 }
 
 /// The input picker of track `tid`.
-fn input_combo(ui: &mut Ui, st: &mut State, tid: Id, cur: InputSource, width: f32, small: bool) {
+pub fn input_combo(ui: &mut Ui, st: &mut State, tid: Id, cur: InputSource, width: f32, small: bool) {
     let n = channels(st);
     let text = RichText::new(input_label(cur));
     let text = if small { text.small() } else { text };

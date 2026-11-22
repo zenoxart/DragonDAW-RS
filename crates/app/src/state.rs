@@ -826,6 +826,7 @@ impl State {
                 let id = p.next_id();
                 let name = t.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 if let Some(tr) = p.track_mut(t.track) {
+                    tr.audio = true;
                     tr.clips.push(Clip {
                         id,
                         name,

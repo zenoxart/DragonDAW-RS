@@ -221,6 +221,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.to_midi_drums", "Convert selected clip to MIDI (drums)", "Tools", 2, ""),
     ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
     ("help.tour", "Take the tour", "Help", 0, ""),
+    ("track.freeze", "Freeze / unfreeze the selected track's channel", "Tools", 0, ""),
     ("help.audio_tour", "Set up audio (driver, buffer)", "Help", 0, ""),
     ("help.record_tour", "How to record (tutorial)", "Help", 0, ""),
     ("help.quests", "Dragon Quests", "Help", 0, ""),
@@ -1192,6 +1193,13 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 }
             });
         }
+        "track.freeze" => {
+            let Some(tid) = st.ui.track.or_else(|| st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| st.ui.clips.contains(&c.id))).map(|t| t.id)) else {
+                st.toast("Select a track to freeze", Severity::Info);
+                return true;
+            };
+            freeze_toggle(st, tid);
+        }
         "tools.bounce" => {
             let track = st.session.project.tracks.iter().find(|t| t.clips.iter().any(|c| st.ui.clips.contains(&c.id))).map(|t| (t.id, t.name.clone()));
             let Some((tid, name)) = track else {
@@ -1598,4 +1606,31 @@ fn notes_apply(st: &mut State, label: &str, f: impl FnOnce(&mut [Note])) {
         }
         sel.to_vec()
     });
+}
+
+/// Freezes the mixer channel of track `tid` (renders it, its instruments and effects then rest), or
+/// unfreezes it when it is frozen.
+pub fn freeze_toggle(st: &mut State, tid: Id) {
+    let Some(t) = st.session.project.track(tid) else { return };
+    let mixer = t.mixer;
+    let mname = st.session.project.mixer.get(mixer).map(|m| m.name.clone()).unwrap_or_default();
+    if t.frozen.is_some() {
+        st.session.edit("Unfreeze", |p| dragon_engine::edit::unfreeze_channel(p, mixer));
+        st.toast(format!("{mname} unfrozen – editable again"), Severity::Info);
+        return;
+    }
+    let dir = st.recordings_dir().join("Freeze");
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = dir.join(format!("{} {stamp}.wav", crate::state::sanitize(&mname)));
+    let pool = dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::Host));
+    match dragon_engine::export::bounce_channel_with(&st.session.project, &st.session.cache, mixer, &path, st.audio.rate(), pool, 2.0) {
+        Ok((start, len)) => {
+            let ok = st.session.edit("Freeze", |p| dragon_engine::edit::freeze_channel(p, mixer, &path, start, len));
+            if ok {
+                st.toast(format!("{mname} frozen: its instruments and effects rest until you unfreeze (❄ in the track header)"), Severity::Success);
+            }
+        }
+        Err(e) => st.toast(format!("Freeze failed: {e}"), Severity::Error),
+    }
 }

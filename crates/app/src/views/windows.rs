@@ -949,6 +949,7 @@ fn plugin_params(ui: &mut Ui, st: &mut State, pl: PluginRef, slot: PluginSlot) {
     if let (false, Some(e)) = (gui_open, &error) {
         ui.label(RichText::new(format!("Plugin window unavailable: {e}. Use the generic controls below.")).small().color(theme::WARN));
     }
+    presets_row(ui, st, &pl, &inst, slot, key);
     let generic = egui::CollapsingHeader::new(format!("Generic controls ({})", params.len())).id_salt(("plugin.generic", key)).default_open(!gui_open && error.is_some()).open(if appeared {
         Some(!gui_open && error.is_some())
     } else {
@@ -1350,4 +1351,106 @@ fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
             }
         }
     });
+}
+
+/// The preset bar of a third-party plugin: the preset list (its `.vstpreset` files, or Dragon presets),
+/// previous / next, and Save preset.
+fn presets_row(ui: &mut Ui, st: &mut State, pl: &PluginRef, inst: &Result<dragon_engine::render::SharedEffect, dragon_engine::render::SharedInstrument>, slot: PluginSlot, key: (Id, Option<Id>)) {
+    let dragon_dir = st.ctx.paths.local.join("Presets");
+    let list_id = egui::Id::new(("plugin.presets", key));
+    let cur_id = egui::Id::new(("plugin.preset.cur", key));
+    let list: Vec<dragon_engine::presets::Preset> = match ui.data(|d| d.get_temp(list_id)) {
+        Some(l) => l,
+        None => {
+            let l = dragon_engine::presets::find(pl, &dragon_dir);
+            ui.data_mut(|d| d.insert_temp(list_id, l.clone()));
+            l
+        }
+    };
+    let cur: Option<usize> = ui.data(|d| d.get_temp(cur_id));
+    let mut pick: Option<usize> = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Preset").small().color(theme::TEXT_DIM));
+        let text = cur.and_then(|k| list.get(k)).map(|p| p.name.clone()).unwrap_or_else(|| if list.is_empty() { "(no presets found)".into() } else { format!("{} presets", list.len()) });
+        egui::ComboBox::from_id_salt(("plugin.preset.combo", key)).width(220.0).selected_text(text).height(420.0).show_ui(ui, |ui| {
+            let mut group = String::new();
+            for (k, p) in list.iter().enumerate() {
+                if p.group != group {
+                    group = p.group.clone();
+                    if !group.is_empty() {
+                        ui.label(RichText::new(&group).small().strong().color(theme::ACCENT_2));
+                    }
+                }
+                if ui.selectable_label(cur == Some(k), &p.name).on_hover_text(p.path.display().to_string()).clicked() {
+                    pick = Some(k);
+                }
+            }
+        });
+        if ui.add_enabled(!list.is_empty(), egui::Button::new("◀")).on_hover_text("Previous preset").clicked() {
+            pick = Some(cur.map(|c| (c + list.len() - 1) % list.len()).unwrap_or(list.len() - 1));
+        }
+        if ui.add_enabled(!list.is_empty(), egui::Button::new("▶")).on_hover_text("Next preset").clicked() {
+            pick = Some(cur.map(|c| (c + 1) % list.len()).unwrap_or(0));
+        }
+        ui.menu_button("Save preset…", |ui| {
+            let name_id = egui::Id::new(("plugin.preset.name", key));
+            let mut name: String = ui.data(|d| d.get_temp(name_id)).unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(180.0));
+            ui.data_mut(|d| d.insert_temp(name_id, name.clone()));
+            let where_ = if pl.format == dragon_engine::model::PluginFormat::Vst3 { "Saved as a .vstpreset in your VST3 Presets folder – other DAWs see it too" } else { "Saved as a Dragon preset" };
+            if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save")).on_hover_text(where_).clicked() {
+                let state = match inst {
+                    Ok(e) => e.lock().unwrap_or_else(std::sync::PoisonError::into_inner).save_state(),
+                    Err(i) => i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).save_state(),
+                };
+                match state.ok_or_else(|| "the plugin did not give its state".to_string()).and_then(|s| dragon_engine::presets::save(pl, name.trim(), &s, &dragon_dir)) {
+                    Ok(f) => {
+                        st.toast(format!("Preset saved: {}", f.display()), redhive_contracts::ui::Severity::Success);
+                        ui.data_mut(|d| {
+                            d.remove::<Vec<dragon_engine::presets::Preset>>(list_id);
+                            d.remove::<String>(name_id);
+                        });
+                    }
+                    Err(e) => st.toast(format!("Could not save the preset: {e}"), redhive_contracts::ui::Severity::Error),
+                }
+                ui.close_menu();
+            }
+        });
+        if ui.small_button("⟳").on_hover_text("Look for presets again").clicked() {
+            ui.data_mut(|d| d.remove::<Vec<dragon_engine::presets::Preset>>(list_id));
+        }
+    });
+    let Some(k) = pick else { return };
+    let Some(p) = list.get(k) else { return };
+    match dragon_engine::presets::load(pl, &p.path) {
+        Ok(state) => {
+            let ok = match inst {
+                Ok(e) => e.lock().unwrap_or_else(std::sync::PoisonError::into_inner).load_state(&state),
+                Err(i) => i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).load_state(&state),
+            };
+            if ok {
+                ui.data_mut(|d| d.insert_temp(cur_id, k));
+                // The project keeps the loaded state (one undo step).
+                let name = p.name.clone();
+                st.session.edit("Load preset", |pr| match slot {
+                    PluginSlot::Insert(m, i) => {
+                        if let Some(r) = pr.mixer.get_mut(m).and_then(|m| m.inserts.iter_mut().find(|x| x.id == i)) {
+                            r.preset = name.clone();
+                            if let Some(pl) = r.plugin.as_mut() {
+                                pl.state = state.clone();
+                            }
+                        }
+                    }
+                    PluginSlot::Channel(c) => {
+                        if let Some(Instrument::Plugin(r)) = pr.channel_mut(c).map(|c| &mut c.instrument) {
+                            r.state = state.clone();
+                        }
+                    }
+                });
+            } else {
+                st.toast("The plugin did not accept the preset", redhive_contracts::ui::Severity::Warning);
+            }
+        }
+        Err(e) => st.toast(format!("Preset not loaded: {e}"), redhive_contracts::ui::Severity::Warning),
+    }
 }

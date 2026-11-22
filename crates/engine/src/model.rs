@@ -272,6 +272,23 @@ pub struct Track {
     pub group: Option<Id>,
     /// Pinned to the top of the playlist (Track Pin).
     pub pinned: bool,
+    /// An audio track (made to record, or holding recordings): the playlist shows its input and
+    /// monitoring.
+    #[serde(default)]
+    pub audio: bool,
+    /// Frozen: the clips were rendered to audio (the originals are kept here for Unfreeze).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<Frozen>,
+}
+
+/// What a freeze put aside: the track's own clips, and (on the first track of the channel) the mixer
+/// channel's inserts that were switched off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Frozen {
+    pub clips: Vec<Clip>,
+    #[serde(default)]
+    pub inserts_on: Vec<Id>,
+    pub file: std::path::PathBuf,
 }
 
 // ---------------------------------------------------------------------------------------------------- channel rack
@@ -1186,6 +1203,8 @@ impl Project {
             show_takes: false,
             group: None,
             pinned: false,
+            audio: false,
+            frozen: None,
         });
         id
     }
@@ -1205,6 +1224,7 @@ impl Project {
         };
         if let Some(t) = self.tracks.last_mut() {
             t.armed = true;
+            t.audio = true;
             t.input = Some(input);
             t.monitor = MonitorMode::Auto;
             t.mixer = mixer;

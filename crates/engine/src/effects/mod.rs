@@ -144,6 +144,11 @@ pub trait Effect: Send {
     fn save_state(&mut self) -> Option<Vec<u8>> {
         None
     }
+    /// Loads a state saved by [`save_state`](Self::save_state) (a preset) into the running plugin;
+    /// returns whether it took it.
+    fn load_state(&mut self, _data: &[u8]) -> bool {
+        false
+    }
     /// Opens (`true`) or closes the plugin's own editor window; returns whether it is open.
     fn editor(&mut self, _open: bool) -> bool {
         false
@@ -391,6 +396,9 @@ impl Effect for Smoothed {
     }
     fn save_state(&mut self) -> Option<Vec<u8>> {
         self.inner.save_state()
+    }
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        self.inner.load_state(data)
     }
     fn editor(&mut self, open: bool) -> bool {
         self.inner.editor(open)

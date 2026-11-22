@@ -390,6 +390,34 @@ pub fn bounce_track_with(p: &Project, cache: &SampleCache, track: Id, path: &Pat
     Ok(start)
 }
 
+/// Freeze render: mixer channel `mixer` soloed (its inserts printed, the master chain bypassed), over
+/// the clips of every track that plays into it, plus a tail. Returns (start beat, length in beats).
+pub fn bounce_channel_with(p: &Project, cache: &SampleCache, mixer: Id, path: &Path, rate: u32, mut pool: Pool, tail: f64) -> Result<(f64, f64)> {
+    let mut q = p.clone();
+    for c in q.mixer.channels.iter_mut() {
+        c.solo = c.id == mixer;
+        // Pre-fader: the frozen audio still plays through the channel's fader and pan.
+        if c.id == mixer {
+            c.volume = 1.0;
+            c.pan = 0.0;
+        }
+    }
+    q.mixer.master.inserts.clear();
+    q.mixer.master.volume = 1.0;
+    let clips = p.tracks.iter().filter(|t| t.mixer == mixer).flat_map(|t| t.clips.iter());
+    let (start, end) = clips.fold((f64::MAX, 0.0f64), |(a, b), c| (a.min(c.start), b.max(c.end())));
+    if end <= start {
+        return Err(EngineError::Project("nothing plays on this channel".into()));
+    }
+    let start = start.max(0.0);
+    let opts = ExportOptions { format: ExportFormat::Wav(BitDepth::Float32), rate, render_rate: rate, range: ExportRange::Range(Range::new(start, end)), tail, dither: false, ..Default::default() };
+    let d = render_mix(&q, cache, &opts, &mut pool, &mut |_| {});
+    write(path, &d, &opts)?;
+    let tm = crate::time::TempoMap::from_project(p);
+    let s0 = tm.beat_to_seconds(start);
+    Ok((start, tm.seconds_to_beat(s0 + d.duration()) - start))
+}
+
 /// FL "Consolidate" (Ctrl+Alt+C): renders only the given clips (through their tracks' mixer channels, the
 /// master chain bypassed) into one audio file. Returns the start beat of the rendered range.
 pub fn consolidate_clips(p: &Project, cache: &SampleCache, clips: &[Id], path: &Path, rate: u32, mut pool: Pool) -> Result<f64> {
@@ -416,6 +444,40 @@ pub fn consolidate_clips(p: &Project, cache: &SampleCache, clips: &[Id], path: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Freeze renders the channel, the track plays the render with the effects off, Unfreeze restores.
+    #[test]
+    fn freeze_and_unfreeze_a_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = project_with_tone(dir.path());
+        let t = p.tracks.iter().find(|t| !t.clips.is_empty()).unwrap().clone();
+        let mixer = t.mixer;
+        let iid = p.next_id();
+        if let Some(m) = p.mixer.get_mut(mixer) {
+            m.inserts.push(crate::model::Insert { id: iid, effect: "compressor".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        }
+        let before = p.clone();
+        let cache = SampleCache::default();
+        let f = dir.path().join("frozen.wav");
+        let (start, len) = bounce_channel_with(&p, &cache, mixer, &f, 48000, Pool::new(), 0.5).unwrap();
+        assert!(f.exists() && len > 0.0);
+        assert!(crate::edit::freeze_channel(&mut p, mixer, &f, start, len));
+        let ft = p.track(t.id).unwrap();
+        assert_eq!(ft.clips.len(), 1);
+        assert!(matches!(&ft.clips[0].kind, ClipKind::Audio(a) if a.source == f));
+        assert!(p.mixer.get(mixer).unwrap().inserts.iter().all(|i| !i.enabled), "effects off while frozen");
+        assert!(!crate::edit::freeze_channel(&mut p, mixer, &f, start, len), "no double freeze");
+        // The frozen project sounds like the original (the render is the channel's output).
+        let opts =
+            ExportOptions { format: ExportFormat::Wav(BitDepth::Float32), rate: 48000, render_rate: 48000, range: ExportRange::Range(Range::new(start, start + 2.0)), tail: 0.0, dither: false, ..Default::default() };
+        let a = render_mix(&before, &cache, &opts, &mut Pool::new(), &mut |_| {});
+        let b = render_mix(&p, &cache, &opts, &mut Pool::new(), &mut |_| {});
+        let rms = |d: &AudioData| (d.l.iter().map(|x| x * x).sum::<f32>() / d.l.len().max(1) as f32).sqrt();
+        assert!((rms(&a) - rms(&b)).abs() < rms(&a) * 0.1 + 1e-4, "{} vs {}", rms(&a), rms(&b));
+        assert!(crate::edit::unfreeze_channel(&mut p, mixer));
+        assert_eq!(p.tracks, before.tracks, "clips back");
+        assert!(p.mixer.get(mixer).unwrap().inserts.iter().all(|i| i.enabled), "effects back on");
+    }
 
     fn project_with_tone(dir: &Path) -> Project {
         let f = dir.join("tone.wav");

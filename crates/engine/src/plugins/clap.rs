@@ -563,6 +563,19 @@ impl ClapPlugin {
         }
     }
 
+    fn set_state(&mut self, data: &[u8]) -> bool {
+        // SAFETY: state extension call, on the main thread.
+        unsafe {
+            let ext = (*self.plugin).get_extension.map(|g| g(self.plugin, CLAP_EXT_STATE.as_ptr())).unwrap_or(std::ptr::null()) as *const clap_plugin_state;
+            if ext.is_null() {
+                return false;
+            }
+            let mut ctx: (Vec<u8>, usize) = (data.to_vec(), 0);
+            let stream = clap_istream { ctx: &mut ctx as *mut _ as *mut c_void, read: Some(istream_read) };
+            (*ext).load.map(|l| l(self.plugin, &stream)).unwrap_or(false)
+        }
+    }
+
     fn set_editor(&mut self, open: bool) -> bool {
         if self.gui.is_null() {
             if open {
@@ -828,6 +841,9 @@ impl Effect for ClapPlugin {
     fn save_state(&mut self) -> Option<Vec<u8>> {
         self.state()
     }
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        self.set_state(data)
+    }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)
     }
@@ -888,6 +904,9 @@ impl InstrumentVoice for ClapPlugin {
     }
     fn save_state(&mut self) -> Option<Vec<u8>> {
         self.state()
+    }
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        self.set_state(data)
     }
     fn editor(&mut self, open: bool) -> bool {
         self.set_editor(open)

@@ -57,6 +57,11 @@ pub trait InstrumentVoice: Send {
     fn save_state(&mut self) -> Option<Vec<u8>> {
         None
     }
+    /// Loads a state saved by [`save_state`](Self::save_state) (a preset) into the running plugin;
+    /// returns whether it took it.
+    fn load_state(&mut self, _data: &[u8]) -> bool {
+        false
+    }
     fn editor(&mut self, _open: bool) -> bool {
         false
     }

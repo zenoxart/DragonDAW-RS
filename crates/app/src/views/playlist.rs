@@ -472,9 +472,16 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let corner = Rect::from_min_max(rect.min, Pos2::new(timeline.left(), timeline.top()));
     let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(corner.shrink(4.0)));
     cui.horizontal(|ui| {
-        if ui.button("+ Track").clicked() {
-            st.ctx.run("dragon.add.track", serde_json::Value::Null);
-        }
+        ui.menu_button("+ Track ⏷", |ui| {
+            if ui.button("Track").on_hover_text("An empty track for patterns, audio and automation clips").clicked() {
+                st.ctx.run("dragon.add.track", serde_json::Value::Null);
+                ui.close_menu();
+            }
+            if ui.button(RichText::new("🎤 Audio track (records)").color(theme::REC)).on_hover_text("A track with an input and its own mixer channel, armed to record your mic or instrument").clicked() {
+                st.ctx.run("dragon.add.recording", serde_json::Value::Null);
+                ui.close_menu();
+            }
+        });
         ui.label(RichText::new(format!("{} tracks", tracks.len())).small().color(theme::TEXT_DIM));
     });
 
@@ -1376,8 +1383,16 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
     let compact = r.height() < 26.0;
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(Vec2::new(8.0, if compact { 2.0 } else { 3.0 }))));
     child.horizontal(|ui| {
+        // The track's kind: an audio track (it has an input, or audio clips) shows a microphone.
+        if is_audio_track(t) {
+            let (ir, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+            if !crate::brand::paint_icon(ui.painter(), ir, 11, Color32::WHITE) {
+                ui.painter().text(ir.center(), egui::Align2::CENTER_CENTER, "🎤", egui::FontId::proportional(11.0), theme::ACCENT_2);
+            }
+            ui.interact(ir, egui::Id::new(("pl.kind", tid)), Sense::hover()).on_hover_text("Audio track – records from its input into audio clips");
+        }
         let mut name = t.name.clone();
-        let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(78.0).frame(false).font(egui::TextStyle::Small));
+        let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(if is_audio_track(t) { 44.0 } else { 60.0 }).frame(false).font(egui::TextStyle::Small));
         if resp.changed() {
             st.session.gesture("Rename track", |p| {
                 // The track's own mixer channel follows the name while they still match.
@@ -1424,10 +1439,35 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
                 });
             }
         }
+        let frozen = t.frozen.is_some();
+        let tip = if frozen {
+            "Frozen – rendered to audio, its instruments and effects rest. Click to unfreeze (edit again)."
+        } else {
+            "Freeze: render this track's mixer channel to audio so its instruments and effects use no CPU"
+        };
+        if widgets::toggle(ui, frozen, "❄", Color32::from_rgb(0x8a, 0xd4, 0xff)).on_hover_text(tip).clicked() {
+            crate::commands::freeze_toggle(st, tid);
+        }
         if widgets::toggle(ui, t.armed, "⚫", theme::REC).on_hover_text("Arm for recording").clicked() {
             st.session.edit("Arm track", |p| p.track_mut(tid).iter_mut().for_each(|t| t.armed = !t.armed));
         }
     });
+    if r.height() >= 44.0 && t.input.is_some() && (t.audio || t.armed) {
+        // Audio tracks: input and monitoring right in the header.
+        child.horizontal(|ui| {
+            if let Some(src) = t.input {
+                super::recording::input_combo(ui, st, tid, src, 70.0, true);
+            }
+            let (label, next, tip) = match t.monitor {
+                MonitorMode::Auto => ("🎧 auto", MonitorMode::Input, "Monitoring: hear the input while armed (click: always)"),
+                MonitorMode::Input => ("🎧 on", MonitorMode::Off, "Monitoring: always hear the input (click: off)"),
+                MonitorMode::Off => ("🎧 off", MonitorMode::Auto, "Monitoring off (click: while armed)"),
+            };
+            if widgets::toggle(ui, t.monitor != MonitorMode::Off, label, theme::ACCENT_2).on_hover_text(tip).clicked() {
+                st.session.edit("Monitoring", |p| p.track_mut(tid).iter_mut().for_each(|t| t.monitor = next));
+            }
+        });
+    }
     if r.height() >= 44.0 {
         child.horizontal(|ui| {
             let mixer = st.session.project.mixer.get(t.mixer).map(|m| m.name.clone()).unwrap_or_default();
@@ -1540,4 +1580,9 @@ pub fn wave_disp(a: f32) -> f32 {
     }
     let v = (1.0 + 20.0 * m.log10() / RANGE).clamp(0.0, 1.0);
     v.copysign(a)
+}
+
+/// An audio track: made to record (or armed), or holding only audio clips.
+pub fn is_audio_track(t: &Track) -> bool {
+    t.audio || t.armed || (!t.clips.is_empty() && t.clips.iter().all(|c| matches!(c.kind, ClipKind::Audio(_))))
 }

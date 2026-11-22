@@ -123,6 +123,8 @@ pub fn clips_to_grouped_track(p: &mut Project, from: Id, ids: &[Id]) -> Option<I
         show_takes: false,
         group: Some(group),
         pinned: false,
+        audio: src.audio,
+        frozen: None,
     };
     let src = &mut p.tracks[fi];
     let mut k = 0;
@@ -1228,4 +1230,57 @@ mod balance_tests {
         let got = auto_balance(&p, &[(pad, -70.0 + 10.5)]);
         assert!((crate::dsp::gain_to_db(got[0].1) - 6.0).abs() < 0.01);
     }
+}
+
+/// The tracks that play into mixer channel `mixer`.
+pub fn tracks_into(p: &Project, mixer: Id) -> Vec<Id> {
+    p.tracks.iter().filter(|t| t.mixer == mixer).map(|t| t.id).collect()
+}
+
+/// Freeze: mixer channel `mixer` was rendered to `file` (from beat `start`, `length` beats). Its tracks'
+/// clips are put aside and the first track plays the render; the channel's switched-on inserts are
+/// switched off (they are in the render) – instruments and effects cost no CPU until Unfreeze.
+pub fn freeze_channel(p: &mut Project, mixer: Id, file: &std::path::Path, start: f64, length: f64) -> bool {
+    let tracks = tracks_into(p, mixer);
+    if tracks.is_empty() || tracks.iter().any(|t| p.track(*t).is_some_and(|t| t.frozen.is_some())) {
+        return false;
+    }
+    let inserts_on: Vec<Id> = p.mixer.get(mixer).map(|m| m.inserts.iter().filter(|i| i.enabled).map(|i| i.id).collect()).unwrap_or_default();
+    if let Some(m) = p.mixer.get_mut(mixer) {
+        for i in m.inserts.iter_mut() {
+            i.enabled = false;
+        }
+    }
+    let id = p.next_id();
+    for (k, tid) in tracks.iter().enumerate() {
+        let Some(t) = p.track_mut(*tid) else { continue };
+        let clips = std::mem::take(&mut t.clips);
+        t.frozen = Some(Frozen { clips, inserts_on: if k == 0 { inserts_on.clone() } else { Vec::new() }, file: file.to_path_buf() });
+        if k == 0 {
+            let name = format!("{} (frozen)", t.name);
+            t.clips.push(Clip { id, name, start, length: length.max(0.01), muted: false, color: t.color, kind: ClipKind::Audio(AudioClip { source: file.to_path_buf(), ..Default::default() }) });
+        }
+    }
+    true
+}
+
+/// Unfreeze: the tracks get their clips back and the channel's inserts are switched on again.
+pub fn unfreeze_channel(p: &mut Project, mixer: Id) -> bool {
+    let tracks = tracks_into(p, mixer);
+    let mut on = Vec::new();
+    let mut any = false;
+    for tid in tracks {
+        let Some(t) = p.track_mut(tid) else { continue };
+        if let Some(f) = t.frozen.take() {
+            t.clips = f.clips;
+            on.extend(f.inserts_on);
+            any = true;
+        }
+    }
+    if let Some(m) = p.mixer.get_mut(mixer) {
+        for i in m.inserts.iter_mut().filter(|i| on.contains(&i.id)) {
+            i.enabled = true;
+        }
+    }
+    any
 }
