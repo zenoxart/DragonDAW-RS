@@ -1015,6 +1015,7 @@ dependencies = [
 name = "dragon-daw"
 version = "2.0.0"
 dependencies = [
+ "ab_glyph",
  "dragon-engine",
  "eframe",
  "egui",

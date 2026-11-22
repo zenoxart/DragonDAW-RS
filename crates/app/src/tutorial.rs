@@ -42,35 +42,7 @@ pub const STEPS: &[Step] = &[
         target: None,
         open: None,
         title: "Welcome to Dragon DAW",
-        text: "A two-minute tour of the parts you will use most. Every step points at the real thing – try it as you go, or just click Next. You can leave any time.",
-        try_it: None,
-    },
-    Step {
-        target: Some("options.audio_driver"),
-        open: Some("dragon.options"),
-        title: "Set up your audio: the driver",
-        text: "First, sound. Options (F10) › Audio. On Windows choose ASIO when you have an audio interface – your interface's own ASIO driver gives the lowest delay. No interface? WASAPI works with every device (laptop speakers, headphones, USB headsets). Avoid generic ASIO wrappers when your interface has its own driver.",
-        try_it: Some(("A sound device is running", |st| st.audio.health().is_some())),
-    },
-    Step {
-        target: Some("options.audio_output"),
-        open: Some("dragon.options"),
-        title: "Output and input",
-        text: "Output: where you listen – your interface (or headphones). Input: where your mic or guitar is plugged in – usually the same interface. With ASIO both must be the same interface. Only one program can use ASIO at a time, so close other audio apps.",
-        try_it: None,
-    },
-    Step {
-        target: Some("options.audio_rate"),
-        open: Some("dragon.options"),
-        title: "Sample rate",
-        text: "44100 or 48000 Hz suit almost everything (48000 for video). Pick one your interface supports; higher rates cost CPU and rarely help.",
-        try_it: None,
-    },
-    Step {
-        target: Some("options.audio_buffer"),
-        open: Some("dragon.options"),
-        title: "Buffer size: delay vs. stability",
-        text: "Smaller buffers mean less delay: 128 frames ≈ 3 ms, good for recording and playing live. Crackles or dropouts? Go up to 256 or 512 – best for mixing big projects. The line below shows what really runs (ASIO can override it in its own control panel). Use headphones when you monitor a mic, or the speakers feed back into it.",
+        text: "The basics: a short tour of the parts you will use most (Audio set-up and Recording are their own chapters). Every step points at the real thing – try it as you go, or just click Next. You can leave any time.",
         try_it: None,
     },
     Step {
@@ -128,6 +100,38 @@ pub const STEPS: &[Step] = &[
 ];
 
 /// The recording tour: from the interface to a clean take.
+/// Chapter "Audio set-up": the driver, devices, rate and buffer in Options › Audio.
+pub const AUDIO_STEPS: &[Step] = &[
+    Step {
+        target: Some("options.audio_driver"),
+        open: Some("dragon.options"),
+        title: "The audio driver",
+        text: "Options (F10) › Audio. On Windows choose ASIO when you have an audio interface – your interface's own ASIO driver gives the lowest delay. No interface? WASAPI works with every device (laptop speakers, headphones, USB headsets). Avoid generic ASIO wrappers when your interface has its own driver.",
+        try_it: Some(("A sound device is running", |st| st.audio.health().is_some())),
+    },
+    Step {
+        target: Some("options.audio_output"),
+        open: Some("dragon.options"),
+        title: "Output and input",
+        text: "Output: where you listen – your interface (or headphones). Input: where your mic or guitar is plugged in – usually the same interface. With ASIO both must be the same interface. Only one program can use ASIO at a time, so close other audio apps.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.audio_rate"),
+        open: Some("dragon.options"),
+        title: "Sample rate",
+        text: "44100 or 48000 Hz suit almost everything (48000 for video). Pick one your interface supports; higher rates cost CPU and rarely help.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.audio_buffer"),
+        open: Some("dragon.options"),
+        title: "Buffer size: delay vs. stability",
+        text: "Smaller buffers mean less delay: 128 frames ≈ 3 ms, good for recording and playing live. Crackles or dropouts? Go up to 256 or 512 – best for mixing big projects. The line below shows what really runs (ASIO can override it in its own control panel). Use headphones when you monitor a mic, or the speakers feed back into it.",
+        try_it: None,
+    },
+];
+
 pub const RECORD_STEPS: &[Step] = &[
     Step {
         target: None,
@@ -202,12 +206,24 @@ pub enum TourKind {
     Basics,
     /// How to record (Help › How to record, the mixer's recording panel).
     Recording,
+    /// Setting up the audio driver (Help › Set up audio).
+    Audio,
+}
+
+impl TourKind {
+    /// The chapters, in the order the start screen offers them: (kind, title, minutes).
+    pub const CHAPTERS: [(TourKind, &'static str, u32); 3] = [(TourKind::Basics, "Basics", 2), (TourKind::Audio, "Audio set-up", 1), (TourKind::Recording, "Recording", 2)];
+
+    pub fn title(self) -> &'static str {
+        Self::CHAPTERS.iter().find(|c| c.0 == self).map(|c| c.1).unwrap_or("Tour")
+    }
 }
 
 fn steps(kind: TourKind) -> &'static [Step] {
     match kind {
         TourKind::Basics => STEPS,
         TourKind::Recording => RECORD_STEPS,
+        TourKind::Audio => AUDIO_STEPS,
     }
 }
 
@@ -223,6 +239,11 @@ pub struct Tour {
 
 pub fn start(st: &mut State) {
     st.ui.tour = Tour { step: Some(0), opened: None, kind: TourKind::Basics };
+}
+
+/// Starts a chapter of the tour.
+pub fn start_chapter(st: &mut State, kind: TourKind) {
+    st.ui.tour = Tour { step: Some(0), opened: None, kind };
 }
 
 /// Starts the recording tour.
@@ -301,12 +322,13 @@ pub fn show(ctx: &Context, st: &mut State) {
         None => screen.center() - Vec2::new(card_w, card_h) / 2.0,
     };
     let mut go: Option<isize> = None;
+    let mut chain: Option<TourKind> = None;
     let mut skip = false;
     egui::Area::new(Id::new("tour.card")).order(egui::Order::Tooltip).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::NONE.fill(Color32::from_rgb(0x20, 0x16, 0x14)).stroke(Stroke::new(1.5_f32, theme::ACCENT)).corner_radius(10.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
             ui.set_width(card_w - 28.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{} / {}", k + 1, all.len())).small().color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("{} · {} / {}", st.ui.tour.kind.title(), k + 1, all.len())).small().color(theme::TEXT_DIM));
                 // Progress dots.
                 for j in 0..all.len() {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(7.0), egui::Sense::hover());
@@ -334,6 +356,17 @@ pub fn show(ctx: &Context, st: &mut State) {
                     if ui.add(next).clicked() {
                         go = Some(1);
                     }
+                    // The last card of a chapter offers the next chapter.
+                    if last {
+                        let kinds = TourKind::CHAPTERS;
+                        if let Some(i) = kinds.iter().position(|c| c.0 == st.ui.tour.kind) {
+                            if let Some((nk, title, mins)) = kinds.get(i + 1) {
+                                if ui.button(format!("Next chapter: {title} ({mins} min)")).clicked() {
+                                    chain = Some(*nk);
+                                }
+                            }
+                        }
+                    }
                     if k > 0 && ui.button("‹ Back").clicked() {
                         go = Some(-1);
                     }
@@ -344,7 +377,10 @@ pub fn show(ctx: &Context, st: &mut State) {
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         skip = true;
     }
-    if skip {
+    if let Some(nk) = chain {
+        finish(st, true);
+        start_chapter(st, nk);
+    } else if skip {
         finish(st, false);
     } else if let Some(d) = go {
         let n = k as isize + d;
@@ -401,7 +437,7 @@ mod tests {
 
     #[test]
     fn every_step_has_words_and_a_real_view() {
-        for s in STEPS.iter().chain(RECORD_STEPS) {
+        for s in STEPS.iter().chain(RECORD_STEPS).chain(AUDIO_STEPS) {
             assert!(!s.title.is_empty() && s.text.len() > 20);
             if let Some(v) = s.open {
                 // It points at the view, or at something inside it ("dragon.mixer" → "mixer.add_rec").

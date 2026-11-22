@@ -835,7 +835,7 @@ fn spectrogram_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
                 .map(|c| {
                     let t = (c as f64 + 0.5) / n as f64 * dur;
                     let v = if hi { wave[c].1 } else { wave[c].0 };
-                    Pos2::new(x_of(t), mid - v * amp)
+                    Pos2::new(x_of(t), mid - super::playlist::wave_disp(v) * amp)
                 })
                 .collect()
         };

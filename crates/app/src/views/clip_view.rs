@@ -119,7 +119,7 @@ fn wave(ui: &mut Ui, st: &State, d: &AudioData, a: &AudioClip, span: (f64, f64),
         };
         let x = r.left() + 6.0 + c as f32 + 0.5;
         let col = if inside { theme::ACCENT_2 } else { Color32::from_white_alpha(45) };
-        p.line_segment([Pos2::new(x, mid - (hi * shape).clamp(-1.0, 1.0) * amp), Pos2::new(x, mid - (lo * shape).clamp(-1.0, 1.0) * amp)], Stroke::new(1.0_f32, col));
+        p.line_segment([Pos2::new(x, mid - super::playlist::wave_disp(hi * shape) * amp), Pos2::new(x, mid - super::playlist::wave_disp(lo * shape) * amp)], Stroke::new(1.0_f32, col));
     }
     // Fade curves.
     let fade_line = |from: f64, to: f64, rising: bool| {

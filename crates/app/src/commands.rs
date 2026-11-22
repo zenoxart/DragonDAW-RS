@@ -221,6 +221,7 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.to_midi_drums", "Convert selected clip to MIDI (drums)", "Tools", 2, ""),
     ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
     ("help.tour", "Take the tour", "Help", 0, ""),
+    ("help.audio_tour", "Set up audio (driver, buffer)", "Help", 0, ""),
     ("help.record_tour", "How to record (tutorial)", "Help", 0, ""),
     ("help.quests", "Dragon Quests", "Help", 0, ""),
     ("help.updates", "Check for updates…", "Help", 0, ""),
@@ -1297,6 +1298,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "help.tour" => crate::tutorial::start(st),
         "help.record_tour" => crate::tutorial::start_recording(st),
+        "help.audio_tour" => crate::tutorial::start_chapter(st, crate::tutorial::TourKind::Audio),
         "help.quests" => st.quests.window_open = true,
         "help.updates" => crate::update::start_check(st, true),
         _ => return false,

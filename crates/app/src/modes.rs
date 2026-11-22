@@ -292,36 +292,39 @@ pub fn show(ctx: &egui::Context, st: &mut State) -> bool {
             });
         });
         ui.add_space(16.0);
-        // The tour: a big, obvious first step for new users (it pulses gently until hovered).
+        // The tour: a big, obvious first step for new users – three short chapters, Basics first.
         {
-            let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 76.0), egui::Sense::click());
-            let hot = resp.hovered();
+            let (r, _) = ui.allocate_exact_size(Vec2::new(w, 92.0), egui::Sense::hover());
             let t = ui.input(|i| i.time) as f32;
-            let pulse = if hot { 1.0 } else { 0.55 + 0.45 * (t * 2.4).sin().abs() };
-            let p = ui.painter();
-            p.rect_filled(r, 14.0, if hot { Color32::from_rgb(0x4a, 0x26, 0x12) } else { Color32::from_rgb(0x30, 0x1c, 0x12) });
+            let pulse = 0.55 + 0.45 * (t * 2.4).sin().abs();
+            let p = ui.painter().clone();
+            p.rect_filled(r, 14.0, Color32::from_rgb(0x30, 0x1c, 0x12));
             p.rect_stroke(r, 14.0, Stroke::new(2.0 + pulse, theme::ACCENT_2.gamma_multiply(0.5 + 0.5 * pulse)), egui::StrokeKind::Inside);
-            let c = Pos2::new(r.left() + 46.0, r.center().y);
-            p.circle_filled(c, 26.0, theme::ACCENT_2);
-            p.add(egui::Shape::convex_polygon(vec![c + Vec2::new(-8.0, -12.0), c + Vec2::new(13.0, 0.0), c + Vec2::new(-8.0, 12.0)], Color32::BLACK, Stroke::NONE));
-            p.text(Pos2::new(r.left() + 88.0, r.center().y - 12.0), egui::Align2::LEFT_CENTER, "New here? Take the 2-minute tour", egui::FontId::proportional(22.0), Color32::WHITE);
+            p.text(Pos2::new(r.left() + 22.0, r.top() + 22.0), egui::Align2::LEFT_CENTER, "New here? Take the tour", egui::FontId::proportional(22.0), Color32::WHITE);
             p.text(
-                Pos2::new(r.left() + 88.0, r.center().y + 14.0),
+                Pos2::new(r.left() + 22.0, r.top() + 44.0),
                 egui::Align2::LEFT_CENTER,
-                "A guided click-through of the playlist, mixer, recording and plugins. Help › Take the tour brings it back any time.",
+                "Short guided chapters that point at the real controls – Help › Take the tour brings them back any time.",
                 egui::FontId::proportional(12.5),
                 theme::TEXT_DIM,
             );
-            p.text(Pos2::new(r.right() - 22.0, r.center().y), egui::Align2::RIGHT_CENTER, "Start tour ▶", egui::FontId::proportional(16.0), theme::ACCENT_2);
-            if hot {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            } else {
-                ui.ctx().request_repaint();
+            let mut x = r.left() + 22.0;
+            for (k, (kind, title, mins)) in crate::tutorial::TourKind::CHAPTERS.into_iter().enumerate() {
+                let label = format!("▶  {}. {title}  ·  {mins} min", k + 1);
+                let first = k == 0;
+                let b = egui::Button::new(RichText::new(label).size(14.0).strong().color(if first { Color32::BLACK } else { Color32::WHITE }))
+                    .fill(if first { theme::ACCENT_2 } else { Color32::from_white_alpha(18) })
+                    .corner_radius(8.0)
+                    .min_size(Vec2::new(0.0, 28.0));
+                let br = Rect::from_min_size(Pos2::new(x, r.bottom() - 38.0), Vec2::new(200.0, 28.0));
+                let resp = ui.put(br, b);
+                x += 210.0;
+                if resp.clicked() {
+                    open = false;
+                    crate::tutorial::start_chapter(st, kind);
+                }
             }
-            if resp.clicked() {
-                open = false;
-                crate::tutorial::start(st);
-            }
+            ui.ctx().request_repaint();
         }
         ui.add_space(16.0);
         let mut chosen = None;

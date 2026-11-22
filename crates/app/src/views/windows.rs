@@ -1110,7 +1110,10 @@ fn sampler_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SamplerParams, env: E
             let b1 = ((x + 1) * n / rect.width() as usize).max(b0 + 1).min(n);
             let (lo, hi) = w[b0.min(n - 1)..b1].iter().fold((0.0f32, 0.0f32), |(l, h), (a, b)| (l.min(*a), h.max(*b)));
             let xx = rect.left() + x as f32;
-            p.line_segment([egui::pos2(xx, rect.center().y - hi * rect.height() * 0.48), egui::pos2(xx, rect.center().y - lo * rect.height() * 0.48)], egui::Stroke::new(1.0_f32, theme::ACCENT_2));
+            p.line_segment(
+                [egui::pos2(xx, rect.center().y - super::playlist::wave_disp(hi) * rect.height() * 0.48), egui::pos2(xx, rect.center().y - super::playlist::wave_disp(lo) * rect.height() * 0.48)],
+                egui::Stroke::new(1.0_f32, theme::ACCENT_2),
+            );
         }
         let sx = rect.left() + s.start * rect.width();
         let ex = rect.left() + s.end * rect.width();

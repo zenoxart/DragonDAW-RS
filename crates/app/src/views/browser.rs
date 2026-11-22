@@ -176,7 +176,7 @@ fn preview_panel(ui: &mut Ui, st: &mut State) {
                     let b0 = (((x - rect.left()) / rect.width()) * n as f32) as usize;
                     let b1 = ((((x + 1.0 - rect.left()) / rect.width()) * n as f32) as usize).max(b0 + 1).min(n);
                     let (lo, hi) = w[b0.min(n - 1)..b1].iter().fold((0.0f32, 0.0f32), |(l, h), (a, b)| (l.min(*a), h.max(*b)));
-                    p.line_segment([egui::pos2(x, mid - hi.min(1.0) * half), egui::pos2(x, mid - lo.max(-1.0) * half)], egui::Stroke::new(1.0_f32, theme::ACCENT_2));
+                    p.line_segment([egui::pos2(x, mid - super::playlist::wave_disp(hi) * half), egui::pos2(x, mid - super::playlist::wave_disp(lo) * half)], egui::Stroke::new(1.0_f32, theme::ACCENT_2));
                     x += 1.0;
                 }
                 p.line_segment([egui::pos2(rect.left(), mid), egui::pos2(rect.right(), mid)], egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(20)));

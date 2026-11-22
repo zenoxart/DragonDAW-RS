@@ -175,6 +175,19 @@ pub struct StreamHealth {
     pub failed: std::sync::atomic::AtomicBool,
     /// Frames of the last callback: the buffer the driver really runs (ASIO may override the request).
     pub frames: std::sync::atomic::AtomicU32,
+    /// Output latency the driver reports (callback → speaker), µs; 0 = not reported.
+    pub out_lat_us: std::sync::atomic::AtomicU32,
+    /// Input latency the driver reports (microphone → callback), µs; 0 = not reported.
+    pub in_lat_us: std::sync::atomic::AtomicU32,
+    /// Input frames still waiting in the FIFO after each output callback took its block.
+    pub fifo: std::sync::atomic::AtomicU32,
+}
+
+fn note_out_latency(h: &StreamHealth, info: &cpal::OutputCallbackInfo) {
+    let t = info.timestamp();
+    if let Some(d) = t.playback.duration_since(&t.callback) {
+        h.out_lat_us.store(d.as_micros().min(1_000_000) as u32, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// The running audio engine.
@@ -246,13 +259,14 @@ impl AudioEngine {
             Some(n) => h.input_devices().ok().and_then(|mut d| d.find(|x| x.name().ok().as_deref() == Some(n))),
             None => h.default_input_device(),
         };
+        let health = Arc::new(StreamHealth::default());
         let input_buf: Arc<Mutex<Vec<VecDeque<f32>>>> = Arc::new(Mutex::new(Vec::new()));
         let mut input_channels = 0;
         let mut in_stream = None;
         let mut input_name = None;
         let mut input_error = None;
         match in_dev {
-            Some(dev) => match open_input(&dev, rate, buffer, &input_buf) {
+            Some(dev) => match open_input(&dev, rate, buffer, &input_buf, health.clone()) {
                 Ok((stream, ich)) => {
                     in_stream = Some(stream);
                     input_channels = ich;
@@ -280,7 +294,6 @@ impl AudioEngine {
         let (gc_tx, gc_rx) = crossbeam_channel::bounded::<Arc<Song>>(64);
         let collector = std::thread::Builder::new().name("dragon-gc".into()).spawn(move || for _ in gc_rx {}).map_err(|e| EngineError::Device(e.to_string()))?;
         // Health: the callback counts its calls; the error callback flags a dead stream.
-        let health = Arc::new(StreamHealth::default());
         let hb = health.clone();
         let meters = renderer.meters.clone();
         let transport = Arc::new(Mutex::new(SharedTransport { state: renderer.transport, at: Instant::now() }));
@@ -324,6 +337,9 @@ impl AudioEngine {
                     while chq.len() > n * 4 {
                         chq.pop_front();
                     }
+                }
+                if let Some(c) = q.first() {
+                    hb.fifo.store(c.len() as u32, std::sync::atomic::Ordering::Relaxed);
                 }
             } else {
                 for v in &mut inputs {
@@ -374,10 +390,12 @@ impl AudioEngine {
             tracing::error!("output stream: {e}");
             dead.failed.store(true, std::sync::atomic::Ordering::Relaxed);
         };
+        let lat = health.clone();
         let stream = match def.sample_format() {
             cpal::SampleFormat::F32 => out_dev.build_output_stream(
                 &config,
-                move |data: &mut [f32], _: &_| {
+                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    note_out_latency(&lat, info);
                     let n = data.len() / ch;
                     let (pl, pr) = process(n);
                     // SAFETY: `process` returns pointers into its own buffers of at least n frames that stay
@@ -398,7 +416,8 @@ impl AudioEngine {
             ),
             cpal::SampleFormat::I16 => out_dev.build_output_stream(
                 &config,
-                move |data: &mut [i16], _: &_| {
+                move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                    note_out_latency(&lat, info);
                     let n = data.len() / ch;
                     let (pl, pr) = process(n);
                     // SAFETY: see above.
@@ -418,7 +437,8 @@ impl AudioEngine {
             ),
             cpal::SampleFormat::I32 => out_dev.build_output_stream(
                 &config,
-                move |data: &mut [i32], _: &_| {
+                move |data: &mut [i32], info: &cpal::OutputCallbackInfo| {
+                    note_out_latency(&lat, info);
                     let n = data.len() / ch;
                     let (pl, pr) = process(n);
                     // SAFETY: see above.
@@ -480,6 +500,24 @@ impl AudioEngine {
         }
     }
 
+    /// The round trip a recording is shifted back by, in seconds: the latencies the driver reports for
+    /// output and input (one real buffer each when it reports none – ASIO may run another buffer than
+    /// the one requested) plus the input frames waiting in the FIFO.
+    pub fn record_latency(&self) -> f64 {
+        use std::sync::atomic::Ordering::Relaxed;
+        let rate = self.rate.max(1) as f64;
+        let buf = self.buffer_frames() as f64 / rate;
+        let out = match self.health.out_lat_us.load(Relaxed) {
+            0 => buf,
+            us => us as f64 * 1e-6,
+        };
+        let inp = match self.health.in_lat_us.load(Relaxed) {
+            0 => buf,
+            us => us as f64 * 1e-6,
+        };
+        out + inp + self.health.fifo.load(Relaxed) as f64 / rate
+    }
+
     /// Output latency of one buffer, in milliseconds (what DAWs show for the buffer size: 128 frames at
     /// 44.1 kHz ≈ 2.9 ms).
     pub fn buffer_ms(&self) -> f64 {
@@ -532,7 +570,7 @@ impl AudioEngine {
         // Give the audio thread one buffer to apply the pause before closing the files.
         std::thread::sleep(std::time::Duration::from_millis((self.buffer as u64 * 2000 / self.rate as u64).clamp(5, 200)));
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let latency = self.latency_frames as f64 / self.rate as f64 + self.record_offset;
+        let latency = self.record_latency() + self.record_offset;
         let _ = self.rec_tx.send(RecMsg::Finish { latency, reply: tx });
         rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_default()
     }
@@ -543,7 +581,7 @@ type InputBuf = Arc<Mutex<Vec<VecDeque<f32>>>>;
 /// Opens `dev` for recording. Tries the engine's rate and buffer first, then the driver's buffer, then
 /// the device's own rate (resampled to the engine's) – WASAPI shared mode and many interfaces refuse a
 /// rate or a fixed buffer that differs from their own. Returns the stream and its channel count.
-fn open_input(dev: &cpal::Device, rate: u32, buffer: cpal::BufferSize, buf: &InputBuf) -> std::result::Result<(cpal::Stream, u16), String> {
+fn open_input(dev: &cpal::Device, rate: u32, buffer: cpal::BufferSize, buf: &InputBuf, health: Arc<StreamHealth>) -> std::result::Result<(cpal::Stream, u16), String> {
     let def = dev.default_input_config().map_err(|e| e.to_string())?;
     let ich = def.channels().max(1);
     let format = def.sample_format();
@@ -560,7 +598,19 @@ fn open_input(dev: &cpal::Device, rate: u32, buffer: cpal::BufferSize, buf: &Inp
             ($t:ty, $conv:expr) => {{
                 let ib = buf.clone();
                 let mut rs = Resample::new(ich as usize, in_rate, rate);
-                dev.build_input_stream(&cfg, move |d: &[$t], _: &_| push_input(&ib, d, ich as usize, $conv, &mut rs), |e| tracing::warn!("input stream: {e}"), None)
+                let h = health.clone();
+                dev.build_input_stream(
+                    &cfg,
+                    move |d: &[$t], info: &cpal::InputCallbackInfo| {
+                        let t = info.timestamp();
+                        if let Some(l) = t.callback.duration_since(&t.capture) {
+                            h.in_lat_us.store(l.as_micros().min(1_000_000) as u32, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        push_input(&ib, d, ich as usize, $conv, &mut rs)
+                    },
+                    |e| tracing::warn!("input stream: {e}"),
+                    None,
+                )
             }};
         }
         let stream = match format {

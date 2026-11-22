@@ -320,7 +320,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         let t = off + (beat - cs) * 60.0 / bpm;
                         let k = (t * rate / crate::state::WAVE_BUCKET as f64) as usize;
                         if let Some((lo, hi)) = w.get(k) {
-                            gp.line_segment([Pos2::new(x, mid - hi * amp), Pos2::new(x, mid - lo * amp)], Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(120, 200, 255, 40)));
+                            gp.line_segment(
+                                [Pos2::new(x, mid - super::playlist::wave_disp(*hi) * amp), Pos2::new(x, mid - super::playlist::wave_disp(*lo) * amp)],
+                                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(120, 200, 255, 40)),
+                            );
                         }
                     }
                     x += 1.0;
@@ -879,6 +882,11 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 }
             }
         });
+        if ui.button("Import MIDI…").on_hover_text("Open a MIDI file (.mid) – its notes come in as a new pattern (Ctrl+M is the metronome)").clicked() {
+            if let Some(f) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
+                st.import_midi(&f);
+            }
+        }
         widgets::tool_buttons(ui, st);
         ui.separator();
         let cur = widgets::SNAPS.iter().find(|s| (s.1 - st.ui.snap).abs() < 1e-9).map(|s| s.0).unwrap_or("custom");
