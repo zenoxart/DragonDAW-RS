@@ -21,13 +21,16 @@ use redhive_contracts::{IconRef, TextKey};
 /// next empty pattern, F5–F11 the windows, Alt+F8 the browser, F12 closes the floating windows, and the
 /// editor tools are P (draw), B (paint), D (delete), T (mute), C (slice) and E (select).
 const TABLE: &[(&str, &str, &str, i32, &str)] = &[
-    ("file.new", "New project", "File", 0, ""),
+    ("file.new", "New project (default template)", "File", 0, ""),
+    ("file.new_empty", "New empty project", "File", 0, ""),
+    ("file.templates", "New from template… / templates", "File", 0, ""),
     ("file.new_demo", "New project with demo beat", "File", 0, ""),
     ("file.start", "Start screen…", "File", 0, ""),
     ("file.open", "Open…", "File", 0, "Ctrl+O"),
     ("file.save", "Save", "File", 1, "Ctrl+S"),
     ("file.save_as", "Save as…", "File", 1, "Ctrl+Shift+S"),
     ("file.save_new_version", "Save new version", "File", 1, "Ctrl+N"),
+    ("file.save_template", "Save as template…", "File", 1, ""),
     ("file.collect", "Collect all files into project folder", "File", 1, ""),
     ("file.import_audio", "Import audio…", "File/Import", 2, ""),
     ("file.import_midi", "Import MIDI file…", "File/Import", 2, ""),
@@ -577,7 +580,9 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 Err(e) => st.toast(format!("Consolidate failed: {e}"), Severity::Error),
             }
         }
-        "file.new" => st.new_project(),
+        "file.new" => crate::templates::new_default(st),
+        "file.new_empty" => st.new_project(),
+        "file.templates" | "file.save_template" => st.templates_open = true,
         "file.new_demo" => st.new_demo_project(),
         "file.start" => st.ui.start_screen = true,
         "file.open" => st.open_dialog(),

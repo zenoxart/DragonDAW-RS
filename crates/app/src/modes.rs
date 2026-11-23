@@ -378,6 +378,10 @@ pub fn show(ctx: &egui::Context, st: &mut State) -> bool {
             if ui.button(RichText::new("Just an empty project").size(13.0)).clicked() {
                 open = false;
             }
+            if ui.button(RichText::new("From a template…").size(13.0)).on_hover_text("Mixing and beat templates with group buses, your own templates, and the default for File › New").clicked() {
+                open = false;
+                st.templates_open = true;
+            }
             let mut show = st.settings.show_start;
             if ui.checkbox(&mut show, "Show this at start").changed() {
                 st.settings.show_start = show;

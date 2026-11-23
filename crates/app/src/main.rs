@@ -17,6 +17,7 @@ mod modes;
 mod session;
 mod splash;
 mod state;
+mod templates;
 mod theme;
 mod tutorial;
 mod update;

@@ -389,6 +389,7 @@ impl eframe::App for DragonApp {
         views::fx_gallery::show(ctx, &mut self.st);
         views::note_tools::show(ctx, &mut self.st);
         views::balance::window(ctx, &mut self.st);
+        crate::templates::window(ctx, &mut self.st);
         views::overlays::palette(ctx, &mut self.st);
         views::overlays::toasts(ctx, &mut self.st);
         views::overlays::recovery(ctx, &mut self.st);

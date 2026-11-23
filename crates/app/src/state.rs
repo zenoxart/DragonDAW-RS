@@ -35,6 +35,8 @@ pub struct Settings {
     pub show_splash: bool,
     /// Shows the start screen ("What do you want to do?") when the app opens.
     pub show_start: bool,
+    /// The template File › New starts from (`builtin:…` or a template file); empty = an empty project.
+    pub default_template: String,
     /// Plays the Dragon startup sound when the app opens.
     pub startup_sound: bool,
     /// Compact playlist tracks: one thin row each (name, mute, solo, arm).
@@ -69,6 +71,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             show_splash: true,
             show_start: true,
+            default_template: String::new(),
             startup_sound: true,
             compact_tracks: false,
             compact_mixer: false,
@@ -475,6 +478,8 @@ pub struct State {
     pub balance_job: Option<AutoBalanceJob>,
     /// The last auto-balance (its report window).
     pub balance_report: Option<BalanceReport>,
+    /// The templates window is open.
+    pub templates_open: bool,
     /// Album loudness matching running in the background.
     pub album_job: Option<BalanceJob>,
     /// Audio watchdog: the callback count last seen, when it last moved, the last restart, and whether the
@@ -610,6 +615,7 @@ impl State {
             audio_watch: (0, Instant::now(), None, false),
             balance_job: None,
             balance_report: None,
+            templates_open: false,
             album_job: None,
         };
         st.open_midi();
