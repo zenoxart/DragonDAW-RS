@@ -63,6 +63,10 @@ fn group_buses(p: &mut Project) -> Vec<(&'static str, Id)> {
     let mut out = Vec::new();
     for (name, icon, effect, set) in GROUPS {
         let b = crate::modes::bus(p, &format!("{name} bus"), icon);
+        if let Some(c) = p.mixer.get_mut(b) {
+            c.dock = dragon_engine::model::Dock::Left;
+            c.volume = 1.0;
+        }
         insert(p, b, effect, set);
         out.push((name, b));
     }

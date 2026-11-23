@@ -2022,3 +2022,40 @@ fn drum_pads_play_from_controller_pads_and_keys_and_take_dropped_samples() {
     super::windows::assign_pad(&mut h.st, drums, 5, "/x/clap.wav".into());
     assert_eq!(pad(&h, 5).name, "clap");
 }
+
+/// Mixer: the template's group buses are docked left (right after the master), a channel docked right
+/// comes last, and sticky strips (the master; a channel made sticky) stay where they are while the
+/// others scroll.
+#[test]
+fn mixer_dock_and_sticky_channels() {
+    let mut h = Harness::new();
+    crate::templates::new_from(&mut h.st, "builtin:mixing");
+    let extra: Vec<Id> = h.st.session.edit("more", |p| (0..14).map(|k| p.add_mixer_channel(&format!("Ch {k}"))).collect());
+    let right = extra[3];
+    h.st.session.edit("dock", |p| {
+        let c = p.mixer.get_mut(right).unwrap();
+        c.dock = Dock::Right;
+        c.sticky = Some(true);
+    });
+    h.idle(super::mixer::show, 3);
+    let rects = |h: &Harness| -> Vec<(Id, Rect)> { h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).unwrap() };
+    let p = &h.st.session.project;
+    let x = |h: &Harness, id: Id| rects(h).iter().find(|r| r.0 == id).map(|r| r.1.left()).unwrap();
+    let master = p.mixer.master.id;
+    let bus = p.mixer.channels.iter().find(|c| c.name == "Vocals bus").unwrap().id;
+    let track = p.mixer.channels.iter().find(|c| c.name == "Vocals").unwrap().id;
+    assert!(x(&h, master) < x(&h, bus) && x(&h, bus) < x(&h, track), "master, then the docked buses, then the rest");
+    let r_right = x(&h, right);
+    assert_eq!(rects(&h).last().map(|r| r.0), Some(right), "docked right and sticky: drawn last, at the right");
+    assert!(r_right > x(&h, track) + 300.0, "at the right edge of the strips");
+    // Scroll the strips: the master and the right-docked sticky channel stay, the others move.
+    let (m0, t0) = (x(&h, master), x(&h, track));
+    let over = rects(&h).iter().find(|r| r.0 == track).unwrap().1.center();
+    for _ in 0..4 {
+        h.frame(super::mixer::show, vec![Event::PointerMoved(over), Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(-400.0, 0.0), modifiers: Modifiers::NONE }], Modifiers::NONE);
+    }
+    h.idle(super::mixer::show, 2);
+    assert!(x(&h, track) < t0 - 50.0, "the scrolling strips moved: {t0} -> {}", x(&h, track));
+    assert_eq!(x(&h, master), m0, "the master stays");
+    assert_eq!(x(&h, right), r_right, "the sticky right channel stays");
+}

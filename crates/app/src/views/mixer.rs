@@ -200,28 +200,56 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let strips_w = (avail.x - PANEL_W - 10.0).max(160.0);
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(Vec2::new(strips_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
-            egui::ScrollArea::horizontal().id_salt("mixer.strips").auto_shrink([false, false]).show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    let mut rects = Vec::with_capacity(all.len());
-                    for (k, m) in all.iter().enumerate() {
-                        rects.push((m.id, strip(ui, st, m, k, &selected, &all, &meters, avail.y - 22.0)));
-                        if k == 0 {
-                            ui.add_space(6.0);
-                        }
-                    }
-                    cables(ui, st, &all, &rects, &meters);
-                    // Where each strip is (tests and tooling).
-                    ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.rects"), rects.clone()));
-                    // A click on empty mixer space (or Escape) deselects: the cables disappear.
-                    let area = ui.clip_rect();
-                    let empty_click = ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| area.contains(p) && !rects.iter().any(|r| r.1.contains(p))));
-                    let escape = ui.ui_contains_pointer() && ui.input(|i| i.key_pressed(egui::Key::Escape));
-                    if empty_click || escape {
-                        st.ui.mixer_sel.clear();
-                    }
+            // Display order: docked left, the rest, docked right (the master first). Sticky strips stay at
+            // their side while the others scroll between them.
+            let (left, middle, right) = layout_order(&all);
+            let h = avail.y - 22.0;
+            let strip_w = |k: usize| strip_width(st.settings.compact_mixer, k == 0) + 10.0;
+            let right_w: f32 = right.iter().map(|&k| strip_w(k)).sum();
+            let mut rects = Vec::with_capacity(all.len());
+            let outer = ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for &k in &left {
+                    let r = strip(ui, st, &all[k], k, &selected, &all, &meters, h);
+                    sticky_mark(ui, r);
+                    rects.push((all[k].id, r));
+                }
+                if !left.is_empty() {
+                    edge(ui, h);
+                }
+                let mid_w = (ui.available_width() - right_w - if right.is_empty() { 0.0 } else { 8.0 }).max(80.0);
+                ui.allocate_ui_with_layout(Vec2::new(mid_w, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::ScrollArea::horizontal().id_salt("mixer.strips").auto_shrink([false, false]).show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for &k in &middle {
+                                let r = strip(ui, st, &all[k], k, &selected, &all, &meters, h);
+                                rects.push((all[k].id, r));
+                            }
+                        });
+                    });
                 });
+                if !right.is_empty() {
+                    edge(ui, h);
+                }
+                for &k in &right {
+                    let r = strip(ui, st, &all[k], k, &selected, &all, &meters, h);
+                    sticky_mark(ui, r);
+                    rects.push((all[k].id, r));
+                }
             });
+            // The cables run between all strips, the sticky ones too.
+            let mut cui = ui.new_child(egui::UiBuilder::new().max_rect(outer.response.rect));
+            cables(&mut cui, st, &all, &rects, &meters);
+            // Where each strip is (tests and tooling).
+            ui.data_mut(|d| d.insert_temp(egui::Id::new("mixer.rects"), rects.clone()));
+            // A click on empty mixer space (or Escape) deselects: the cables disappear.
+            let area = outer.response.rect;
+            let empty_click = ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| area.contains(p) && !rects.iter().any(|r| r.1.contains(p))));
+            let escape = ui.ui_contains_pointer() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if empty_click || escape {
+                st.ui.mixer_sel.clear();
+            }
         });
         ui.separator();
         ui.allocate_ui_with_layout(Vec2::new(PANEL_W, avail.y), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -234,6 +262,50 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     if st.session.in_gesture() && !ui.ctx().input(|i| i.pointer.any_down()) && !ui.ctx().wants_keyboard_input() {
         st.session.end_gesture();
     }
+}
+
+fn strip_width(compact: bool, master: bool) -> f32 {
+    match (compact, master) {
+        (true, true) => 52.0,
+        (true, false) => 46.0,
+        (false, true) => 96.0,
+        (false, false) => 88.0,
+    }
+}
+
+/// Indices into `all` (master first): the strips fixed at the left, the scrolling ones, those fixed at the
+/// right. Docked-left channels come first and docked-right ones last; sticky ones stay at their side
+/// (the master and docked-left at the left, docked-right at the right).
+pub fn layout_order(all: &[MixerChannel]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    let mut order: Vec<usize> = (1..all.len()).collect();
+    order.sort_by_key(|&k| match all[k].dock {
+        Dock::Left => 0,
+        Dock::None => 1,
+        Dock::Right => 2,
+    });
+    order.insert(0, 0);
+    let (mut left, mut middle, mut right) = (Vec::new(), Vec::new(), Vec::new());
+    for k in order {
+        let c = &all[k];
+        match (c.is_sticky(), c.dock) {
+            (true, Dock::Right) => right.push(k),
+            (true, _) => left.push(k),
+            _ => middle.push(k),
+        }
+    }
+    // A sticky channel that is not docked keeps its place in the left group after the docked ones.
+    (left, middle, right)
+}
+
+/// The accent line on top of a strip that stays in view.
+fn sticky_mark(ui: &Ui, r: egui::Rect) {
+    ui.painter().line_segment([r.left_top() + Vec2::new(4.0, 1.0), r.right_top() + Vec2::new(-4.0, 1.0)], Stroke::new(2.0_f32, theme::ACCENT_2));
+}
+
+/// The divider between fixed and scrolling strips.
+fn edge(ui: &mut Ui, h: f32) {
+    let (r, _) = ui.allocate_exact_size(Vec2::new(6.0, h), Sense::hover());
+    ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0_f32, theme::GRID_BAR));
 }
 
 /// Renames a mixer track; a playlist track that carried the same name follows.
@@ -314,9 +386,39 @@ fn strip_menu(ui: &mut Ui, st: &mut State, m: &MixerChannel, is_master: bool) {
             ui.close_menu();
         }
     });
+    ui.separator();
+    let ids = if st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.len() > 1 { st.ui.mixer_sel.clone() } else { vec![id] };
+    let mut sticky = m.is_sticky();
+    if ui.checkbox(&mut sticky, "Sticky (stays in view while scrolling)").changed() {
+        let ids = ids.clone();
+        st.session.edit("Sticky mixer channel", |p| {
+            for id in &ids {
+                if let Some(c) = p.mixer.get_mut(*id) {
+                    c.sticky = Some(sticky);
+                }
+            }
+        });
+        ui.close_menu();
+    }
+    if !is_master {
+        ui.menu_button("Dock", |ui| {
+            for (d, label) in [(Dock::Left, "Dock left"), (Dock::Right, "Dock right"), (Dock::None, "Undock")] {
+                if ui.selectable_label(m.dock == d, label).clicked() {
+                    let ids = ids.clone();
+                    st.session.edit("Dock mixer channel", |p| {
+                        for id in &ids {
+                            if let Some(c) = p.mixer.get_mut(*id) {
+                                c.dock = d;
+                            }
+                        }
+                    });
+                    ui.close_menu();
+                }
+            }
+        });
+    }
     if !is_master {
         ui.separator();
-        let ids = if st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.len() > 1 { st.ui.mixer_sel.clone() } else { vec![id] };
         if ui.button("Move left    Alt+Left").clicked() {
             st.session.edit("Move mixer tracks", |p| p.move_mixer_channels(&ids, -1));
             ui.close_menu();
@@ -345,12 +447,7 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
     let in_sel = !is_sel && st.ui.mixer_sel.len() > 1 && st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.contains(&sel.id);
     let vca = m.kind == ChannelKind::Vca;
     let compact = st.settings.compact_mixer;
-    let width = match (compact, is_master) {
-        (true, true) => 52.0,
-        (true, false) => 46.0,
-        (false, true) => 96.0,
-        (false, false) => 88.0,
-    };
+    let width = strip_width(compact, is_master);
     let fill = if is_sel || in_sel { theme::PANEL_2 } else { theme::PANEL };
     let stroke = if is_sel {
         Stroke::new(1.5_f32, theme::ACCENT)

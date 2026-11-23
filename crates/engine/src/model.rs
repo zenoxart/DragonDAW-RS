@@ -804,6 +804,12 @@ pub struct MixerChannel {
     pub surround: SurroundPan,
     /// Mix group (linked faders).
     pub group: Option<Id>,
+    /// Docked to a side of the mixer (shown there, before / after the others).
+    #[serde(default)]
+    pub dock: Dock,
+    /// Stays in view while the mixer scrolls (`None` = the default: only the master).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticky: Option<bool>,
     /// What the channel is in the mix, as the user set it for auto-balance (`None` = from its names / sound).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance_role: Option<crate::balance::Role>,
@@ -813,7 +819,21 @@ fn yes() -> bool {
     true
 }
 
+/// Which side of the mixer a channel is docked to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Dock {
+    #[default]
+    None,
+    Left,
+    Right,
+}
+
 impl MixerChannel {
+    /// Whether it stays in view while the mixer scrolls (the master does unless turned off).
+    pub fn is_sticky(&self) -> bool {
+        self.sticky.unwrap_or(self.id == MASTER)
+    }
+
     pub fn new(id: Id, name: &str, color: Rgb) -> Self {
         MixerChannel {
             id,
@@ -838,6 +858,8 @@ impl MixerChannel {
             group: None,
             surround: SurroundPan::default(),
             balance_role: None,
+            dock: Dock::None,
+            sticky: None,
         }
     }
 }
