@@ -112,9 +112,115 @@ impl Role {
         }
     }
 
+    /// One line on what the role is and where it sits, for the role menu.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Role::LeadVocal => "The main voice – everything else is set around it",
+            Role::Kick => "Kick drum – right under the lead",
+            Role::Drums => "A whole drum kit or loop on one channel",
+            Role::Snare => "Snare, clap or rim – close behind the kick",
+            Role::Toms => "Tom fills",
+            Role::Bass => "Bass guitar or synth bass",
+            Role::Sub808 => "808 or sub bass – carries the low end",
+            Role::Lead => "Melody, solo, hook or lead synth",
+            Role::BackingVocal => "Doubles, harmonies, ad-libs, choir",
+            Role::Chords => "Piano, keys, guitars, chord synths",
+            Role::Perc => "Hi-hats, shakers, percussion",
+            Role::Cymbals => "Crashes, rides, overheads",
+            Role::Pad => "Pads and string beds in the background",
+            Role::Fx => "Risers, sweeps, impacts, noises",
+            Role::Room => "Room mics and ambience",
+            Role::Other => "Anything else – sits with the chords",
+        }
+    }
+
+    pub fn group(self) -> Group {
+        match self {
+            Role::LeadVocal | Role::BackingVocal => Group::Vocals,
+            Role::Kick | Role::Drums | Role::Snare | Role::Toms | Role::Perc | Role::Cymbals | Role::Room => Group::Drums,
+            Role::Bass | Role::Sub808 => Group::LowEnd,
+            Role::Lead | Role::Chords | Role::Pad | Role::Other => Group::Music,
+            Role::Fx => Group::Fx,
+        }
+    }
+
     /// Kick, bass and 808 own the low end.
     pub fn owns_low_end(self) -> bool {
         matches!(self, Role::Kick | Role::Bass | Role::Sub808 | Role::Drums)
+    }
+}
+
+/// The sections of the balance report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Group {
+    Vocals,
+    Drums,
+    LowEnd,
+    Music,
+    Fx,
+}
+
+impl Group {
+    pub const ALL: [Group; 5] = [Group::Vocals, Group::Drums, Group::LowEnd, Group::Music, Group::Fx];
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Vocals => "Vocals",
+            Group::Drums => "Drums",
+            Group::LowEnd => "Low end",
+            Group::Music => "Music",
+            Group::Fx => "Effects",
+        }
+    }
+}
+
+/// The overall character of the balance: shifts whole groups of roles against the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Style {
+    #[default]
+    Balanced,
+    /// The vocals further forward, the music a little back (pop, singer-songwriter).
+    VocalForward,
+    /// Kick, snare, 808 and bass up front (hip-hop, trap, EDM).
+    BeatDriven,
+    /// Pads, chords, effects and room up (ambient, cinematic, chill).
+    Lush,
+}
+
+impl Style {
+    pub const ALL: [Style; 4] = [Style::Balanced, Style::VocalForward, Style::BeatDriven, Style::Lush];
+    pub fn label(self) -> &'static str {
+        match self {
+            Style::Balanced => "Balanced",
+            Style::VocalForward => "Vocal up front",
+            Style::BeatDriven => "Beat driven",
+            Style::Lush => "Lush & wide",
+        }
+    }
+    pub fn hint(self) -> &'static str {
+        match self {
+            Style::Balanced => "An even starting mix for most songs",
+            Style::VocalForward => "Vocals 2 dB more forward, the music slightly back – pop, ballads, singer-songwriter",
+            Style::BeatDriven => "Kick, snare, 808 and bass louder – hip-hop, trap, EDM",
+            Style::Lush => "Pads, chords, effects and room louder – ambient, cinematic, chill",
+        }
+    }
+    /// dB added to a role's place under the lead.
+    pub fn offset(self, r: Role) -> f32 {
+        match (self, r) {
+            (Style::Balanced, _) => 0.0,
+            (Style::VocalForward, Role::LeadVocal) => 2.0,
+            (Style::VocalForward, Role::BackingVocal) => 1.0,
+            (Style::VocalForward, Role::Chords | Role::Pad | Role::Lead | Role::Other) => -1.0,
+            (Style::VocalForward, _) => 0.0,
+            (Style::BeatDriven, Role::Kick | Role::Drums | Role::Snare | Role::Sub808) => 2.0,
+            (Style::BeatDriven, Role::Bass | Role::Perc) => 1.0,
+            (Style::BeatDriven, Role::Pad | Role::Chords) => -1.0,
+            (Style::BeatDriven, _) => 0.0,
+            (Style::Lush, Role::Pad) => 4.0,
+            (Style::Lush, Role::Fx | Role::Room) => 3.0,
+            (Style::Lush, Role::Chords | Role::Cymbals) => 1.5,
+            (Style::Lush, _) => 0.0,
+        }
     }
 }
 
@@ -323,6 +429,19 @@ pub struct Entry {
     pub fader_db: f32,
     /// The fader hit its limit: the source itself is too quiet (+) or too loud (−) by this much.
     pub short_db: f32,
+    /// The user keeps this channel's fader where it was (it still counts in the headroom).
+    pub keep: bool,
+}
+
+impl Entry {
+    /// Loudness after the balance (its loud parts, post-fader, LUFS).
+    pub fn after_lufs(&self) -> f32 {
+        self.profile.active + self.fader_db
+    }
+    /// Loudness with the fader it had before.
+    pub fn before_lufs(&self) -> f32 {
+        self.profile.active + self.before_db
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,6 +468,11 @@ pub fn balanceable(p: &Project) -> Vec<Id> {
 /// The balance (before the headroom offset) from every channel's profile; `roles` are the user's
 /// corrections (they win over names and sound).
 pub fn plan(p: &Project, profiles: &[(Id, Profile)], roles: &[(Id, Role)]) -> Vec<Entry> {
+    plan_with(p, profiles, roles, Style::Balanced, &[])
+}
+
+/// [`plan`] in a mix `style`, with the channels in `keep` left at their faders.
+pub fn plan_with(p: &Project, profiles: &[(Id, Profile)], roles: &[(Id, Role)], style: Style, keep: &[Id]) -> Vec<Entry> {
     let mut out = Vec::new();
     for id in balanceable(p) {
         let Some(&(_, prof)) = profiles.iter().find(|(i, _)| *i == id) else { continue };
@@ -366,11 +490,11 @@ pub fn plan(p: &Project, profiles: &[(Id, Profile)], roles: &[(Id, Role)]) -> Ve
         } else {
             (role_from_sound(&prof), RoleSource::Sound)
         };
-        let mut rel = role.target() - prof.active;
+        let mut rel = role.target() + style.offset(role) - prof.active;
         if !role.owns_low_end() && prof.low_share() > 0.45 {
             rel -= 1.5;
         }
-        out.push(Entry { id, name: c.name.clone(), role, source, profile: prof, before_db: crate::dsp::gain_to_db(c.volume), relative_db: rel, fader_db: rel, short_db: 0.0 });
+        out.push(Entry { id, name: c.name.clone(), role, source, profile: prof, before_db: crate::dsp::gain_to_db(c.volume), relative_db: rel, fader_db: rel, short_db: 0.0, keep: keep.contains(&id) });
     }
     // Layers of one role share its level.
     let roles: Vec<Role> = out.iter().map(|e| e.role).collect();
@@ -387,6 +511,11 @@ pub fn plan(p: &Project, profiles: &[(Id, Profile)], roles: &[(Id, Role)]) -> Ve
 /// Applies the headroom offset to every fader and keeps them within their range.
 pub fn finish(entries: &mut [Entry], offset_db: f32) {
     for e in entries {
+        if e.keep {
+            e.fader_db = e.before_db;
+            e.short_db = 0.0;
+            continue;
+        }
         let want = e.relative_db + offset_db;
         e.fader_db = want.clamp(FADER_MIN_DB, FADER_MAX_DB);
         e.short_db = want - e.fader_db;
@@ -400,6 +529,29 @@ pub fn headroom_offset(sum: &Profile) -> f32 {
         return 0.0;
     }
     (SUM_TARGET_LUFS - sum.active).min(SUM_PEAK_DB - sum.peak_db)
+}
+
+/// The estimated loudness of a set of channels summed (their loud parts added as power): good enough to
+/// carry a measured headroom offset over to a changed plan without rendering again.
+fn est_sum(entries: &[Entry], offset_db: f32) -> f32 {
+    let e: f64 = entries.iter().map(|e| 10f64.powf(((e.profile.active + if e.keep { e.before_db } else { e.relative_db + offset_db }) / 10.0) as f64)).sum();
+    if e <= 0.0 {
+        -70.0
+    } else {
+        10.0 * e.log10() as f32
+    }
+}
+
+/// The headroom offset for a changed plan (`new`), from the offset measured for `base`: whatever the
+/// change adds to the sum (estimated) comes off every fader, so the sum stays where it was measured.
+pub fn carry_offset(base: &[Entry], base_offset: f32, new: &[Entry]) -> f32 {
+    let target = est_sum(base, base_offset);
+    let mut off = base_offset;
+    // Kept faders don't move with the offset, so a couple of rounds settle it.
+    for _ in 0..4 {
+        off += target - est_sum(new, off);
+    }
+    off
 }
 
 /// The project with the planned faders set (before the offset) and the master's effects bypassed: what
@@ -502,12 +654,32 @@ mod tests {
         assert!((headroom_offset(&sum) + 6.0).abs() < 1e-3);
         let peaky = prof(-20.0, MID, -1.0, 0.8);
         assert!((headroom_offset(&peaky) + 5.0).abs() < 1e-3);
-        let mk = |rel| Entry { id: 1, name: String::new(), role: Role::Other, source: RoleSource::Name, profile: Profile::default(), before_db: 0.0, relative_db: rel, fader_db: 0.0, short_db: 0.0 };
+        let mk = |rel| Entry { id: 1, name: String::new(), role: Role::Other, source: RoleSource::Name, profile: Profile::default(), before_db: 0.0, relative_db: rel, fader_db: 0.0, short_db: 0.0, keep: false };
         let mut es = vec![mk(4.0), mk(20.0), mk(-50.0)];
         finish(&mut es, -6.0);
         assert_eq!(es[0].fader_db, -2.0);
         assert_eq!((es[1].fader_db, es[1].short_db), (10.0, 4.0), "needs 4 dB more at the source");
         assert_eq!((es[2].fader_db, es[2].short_db), (-40.0, -16.0));
+    }
+
+    #[test]
+    fn styles_keep_and_carried_headroom() {
+        let mut p = Project::new_default();
+        let vox = p.add_mixer_channel("Vocal");
+        let pad = p.add_mixer_channel("Pad");
+        let profiles = vec![(vox, prof(-20.0, MID, -6.0, 0.8)), (pad, prof(-20.0, MID, -10.0, 0.9))];
+        let base = plan(&p, &profiles, &[]);
+        let lush = plan_with(&p, &profiles, &[], Style::Lush, &[]);
+        let gap = |es: &[Entry]| es[0].relative_db - es[1].relative_db;
+        assert!((gap(&base) - gap(&lush) - 4.0).abs() < 1e-3, "lush brings the pad 4 dB closer");
+        // The carried offset keeps the estimated sum where it was.
+        let off = carry_offset(&base, -10.0, &lush);
+        assert!((est_sum(&base, -10.0) - est_sum(&lush, off)).abs() < 0.01);
+        // A kept channel stays at its fader.
+        let mut kept = plan_with(&p, &profiles, &[], Style::Balanced, &[pad]);
+        finish(&mut kept, -10.0);
+        let k = kept.iter().find(|e| e.id == pad).unwrap();
+        assert!(k.keep && k.fader_db == k.before_db);
     }
 
     #[test]

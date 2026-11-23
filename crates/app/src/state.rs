@@ -401,10 +401,21 @@ pub struct BalanceReport {
     /// The balanced sum's loudness and peak into the master chain (after the offset).
     pub sum: (f32, f32),
     pub open: bool,
+    /// The plan the headroom was measured for (later changes carry the offset over from it).
+    pub base: Vec<dragon_engine::balance::Entry>,
+    pub style: dragon_engine::balance::Style,
+    /// Channels whose fader the user keeps.
+    pub keep: Vec<Id>,
+    /// A/B: the old faders are on right now (to compare).
+    pub hearing_before: bool,
 }
 
 /// A running mixer auto-balance (see [`State::start_auto_balance`]).
 pub struct AutoBalanceJob {
+    /// The style and kept channels of the previous report, carried into the new one.
+    pub carry: (dragon_engine::balance::Style, Vec<Id>),
+    /// The user closed the progress window (the result still opens when it's done).
+    pub hidden: bool,
     pub progress: Arc<std::sync::atomic::AtomicU32>,
     pub result: Arc<Mutex<Option<BalanceReport>>>,
 }
@@ -700,17 +711,20 @@ impl State {
             }
             balance::finish(&mut entries, offset);
             if let Ok(mut r) = r2.lock() {
-                *r = Some(BalanceReport { profiles, entries, offset, sum, open: true });
+                let base = entries.clone();
+                *r = Some(BalanceReport { profiles, entries, offset, sum, open: true, base, style: Default::default(), keep: Vec::new(), hearing_before: false });
             }
             redhive_client_framework::runtime::request_repaint();
         });
-        self.balance_job = Some(AutoBalanceJob { progress, result });
+        let carry = self.balance_report.take().map(|r| (r.style, r.keep)).unwrap_or_default();
+        self.balance_job = Some(AutoBalanceJob { carry, hidden: false, progress, result });
     }
 
     /// Applies a finished auto-balance and opens its report.
     pub fn poll_auto_balance(&mut self) {
         let Some(job) = &self.balance_job else { return };
-        let Some(report) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
+        let Some(mut report) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
+        let (style, keep) = job.carry.clone();
         self.balance_job = None;
         if report.entries.is_empty() {
             self.toast("Auto-balance: no unmuted channel with audio to balance", Severity::Warning);
@@ -722,7 +736,13 @@ impl State {
         let extra = if short > 0 { format!(" – {short} need gain at the source, see the report") } else { String::new() };
         self.ui.status = format!("Auto-balance: {n} channels set – report in Mixer › Tools");
         self.toast(format!("Auto-balanced {n} channel{}{extra} – Ctrl+Z to undo", if n == 1 { "" } else { "s" }), Severity::Info);
+        report.style = style;
+        report.keep = keep;
+        let carried = report.style != Default::default() || !report.keep.is_empty();
         self.balance_report = Some(report);
+        if carried {
+            self.rebalance("Auto-balance: style", None);
+        }
     }
 
     fn apply_balance(&mut self, entries: &[dragon_engine::balance::Entry], label: &str, role: Option<(Id, Option<dragon_engine::balance::Role>)>) {
@@ -741,19 +761,94 @@ impl State {
         });
     }
 
+    /// Re-plans the balance from the last measurement (no new render) with the report's style and kept
+    /// channels, `role` changed on channel `id` first if given, and applies it as one undo step.
+    fn rebalance(&mut self, label: &str, role: Option<(Id, Option<dragon_engine::balance::Role>)>) {
+        use dragon_engine::balance;
+        let Some(rep) = &self.balance_report else { return };
+        let mut p = self.session.project.clone();
+        if let Some((id, r)) = role {
+            if let Some(c) = p.mixer.get_mut(id) {
+                c.balance_role = r;
+            }
+        }
+        // The faders from before the balance stay the reference for "before" and for kept channels.
+        for e in &rep.base {
+            if let Some(c) = p.mixer.get_mut(e.id) {
+                c.volume = dragon_engine::dsp::db_to_gain(e.before_db);
+            }
+        }
+        let mut entries = balance::plan_with(&p, &rep.profiles, &[], rep.style, &rep.keep);
+        let offset = balance::carry_offset(&rep.base, rep.offset, &entries);
+        balance::finish(&mut entries, offset);
+        self.apply_balance(&entries, label, role);
+        if let Some(r) = &mut self.balance_report {
+            r.entries = entries;
+            r.hearing_before = false;
+        }
+    }
+
     /// Changes what a channel is in the mix (`None` = from its names / sound again) and re-balances from
     /// the last measurement (no new render): the role is remembered on the channel.
     pub fn set_balance_role(&mut self, id: Id, role: Option<dragon_engine::balance::Role>) {
-        let Some(rep) = &self.balance_report else { return };
-        let mut p = self.session.project.clone();
-        if let Some(c) = p.mixer.get_mut(id) {
-            c.balance_role = role;
-        }
-        let mut entries = dragon_engine::balance::plan(&p, &rep.profiles, &[]);
-        dragon_engine::balance::finish(&mut entries, rep.offset);
-        self.apply_balance(&entries, "Auto-balance: role", Some((id, role)));
+        self.rebalance("Auto-balance: role", Some((id, role)));
+    }
+
+    /// The overall character of the balance (vocal up front, beat driven, …).
+    pub fn set_balance_style(&mut self, style: dragon_engine::balance::Style) {
         if let Some(r) = &mut self.balance_report {
-            r.entries = entries;
+            r.style = style;
+        }
+        self.rebalance("Auto-balance: style", None);
+    }
+
+    /// Keeps a channel's own fader (or lets auto-balance set it again).
+    pub fn toggle_balance_keep(&mut self, id: Id) {
+        if let Some(r) = &mut self.balance_report {
+            if let Some(k) = r.keep.iter().position(|x| *x == id) {
+                r.keep.remove(k);
+            } else {
+                r.keep.push(id);
+            }
+        }
+        self.rebalance("Auto-balance: keep fader", None);
+    }
+
+    /// A/B: puts the old faders on (`true`) or the balanced ones back, to compare by ear. Not an undo
+    /// step: the balance itself is one.
+    pub fn hear_balance_before(&mut self, before: bool) {
+        let Some(rep) = &mut self.balance_report else { return };
+        rep.hearing_before = before;
+        for e in &rep.entries {
+            if let Some(c) = self.session.project.mixer.get_mut(e.id) {
+                c.volume = dragon_engine::dsp::db_to_gain(if before { e.before_db } else { e.fader_db });
+            }
+        }
+        self.session.history.touch();
+    }
+
+    /// Puts every fader back where it was before the balance (one undo step) and closes the report.
+    pub fn revert_balance(&mut self) {
+        let Some(rep) = self.balance_report.take() else { return };
+        let back: Vec<(Id, f32)> = rep.base.iter().map(|e| (e.id, dragon_engine::dsp::db_to_gain(e.before_db))).collect();
+        self.session.edit("Auto-balance undone", |p| {
+            for (id, v) in &back {
+                if let Some(c) = p.mixer.get_mut(*id) {
+                    c.volume = *v;
+                }
+            }
+        });
+        self.toast("Faders are back where they were", Severity::Info);
+    }
+
+    /// Closes the report, keeping what is on (the balance, unless the old faders were being compared:
+    /// then the balance goes back on).
+    pub fn close_balance(&mut self) {
+        if self.balance_report.as_ref().is_some_and(|r| r.hearing_before) {
+            self.hear_balance_before(false);
+        }
+        if let Some(r) = &mut self.balance_report {
+            r.open = false;
         }
     }
 

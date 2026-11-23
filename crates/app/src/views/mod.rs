@@ -3,6 +3,7 @@
 pub mod album;
 pub mod analog;
 pub mod automation;
+pub mod balance;
 pub mod browser;
 pub mod clip_view;
 pub mod envelope;

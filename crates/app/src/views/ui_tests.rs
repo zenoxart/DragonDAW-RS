@@ -1363,8 +1363,34 @@ fn mixer_auto_balance() {
     // Calling the pad a lead instrument (−4 instead of −12, no low-end penalty: still 1.5) moves only it.
     h.st.set_balance_role(mp, Some(dragon_engine::balance::Role::Lead));
     let (k2, p2) = (vol(&h, mk), vol(&h, mp));
-    assert!((k2 - k).abs() < 0.01 && (p2 - p - 8.0).abs() < 0.05, "kick {k2:.1}, pad {p:.1} -> {p2:.1}");
+    assert!(((p2 - k2) - (p - k) - 8.0).abs() < 0.05, "pad 8 dB closer to the kick: kick {k:.1} -> {k2:.1}, pad {p:.1} -> {p2:.1}");
+    assert!(k2 < k, "the headroom is kept: everything else comes down a little");
     assert_eq!(h.st.session.project.mixer.get(mp).unwrap().balance_role, Some(dragon_engine::balance::Role::Lead), "remembered");
+    // Keep my fader: the pad goes back to where it was before the balance.
+    let pad_before = h.st.balance_report.as_ref().unwrap().base.iter().find(|e| e.id == mp).unwrap().before_db;
+    h.st.toggle_balance_keep(mp);
+    assert!((vol(&h, mp) - pad_before).abs() < 0.01, "kept");
+    h.st.toggle_balance_keep(mp);
+    // Style: beat driven brings the kick 2 dB closer to the lead pad (role Lead) than balanced.
+    let gap0 = vol(&h, mk) - vol(&h, mp);
+    h.st.set_balance_style(dragon_engine::balance::Style::BeatDriven);
+    let gap1 = vol(&h, mk) - vol(&h, mp);
+    assert!((gap1 - gap0 - 2.0).abs() < 0.05, "{gap0} -> {gap1}");
+    // A/B: Before puts the old faders on without an undo step, After brings the balance back.
+    let (after_k, steps) = (vol(&h, mk), h.st.session.history.undo_len());
+    h.st.hear_balance_before(true);
+    assert!((vol(&h, mk) - h.st.balance_report.as_ref().unwrap().base[0].before_db).abs() < 0.01 || (vol(&h, mk) - after_k).abs() > 0.01);
+    assert_eq!(h.st.session.history.undo_len(), steps, "comparing is not an edit");
+    h.st.close_balance();
+    assert!((vol(&h, mk) - after_k).abs() < 0.01, "closing while comparing keeps the balance");
+    // Undo balance: every fader back.
+    h.st.balance_report.as_mut().unwrap().open = true;
+    let base = h.st.balance_report.as_ref().unwrap().base.clone();
+    h.st.revert_balance();
+    for e in base {
+        assert!((vol(&h, e.id) - e.before_db).abs() < 0.01);
+    }
+    assert!(h.st.balance_report.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
