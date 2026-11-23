@@ -385,10 +385,28 @@ impl UiState {
 /// Measured pre-fader loudness per mixer channel (LUFS).
 pub type Loudness = Vec<(Id, f32)>;
 
-/// A running mixer auto-balance (see [`State::start_auto_balance`]).
+/// A running album loudness match.
 pub struct BalanceJob {
     pub progress: Arc<std::sync::atomic::AtomicU32>,
     pub result: Arc<Mutex<Option<Loudness>>>,
+}
+
+/// What auto-balance measured and decided, kept for its report (and to re-balance when a role is changed).
+#[derive(Clone)]
+pub struct BalanceReport {
+    pub profiles: Vec<(Id, dragon_engine::balance::Profile)>,
+    pub entries: Vec<dragon_engine::balance::Entry>,
+    /// The headroom offset every fader got (dB).
+    pub offset: f32,
+    /// The balanced sum's loudness and peak into the master chain (after the offset).
+    pub sum: (f32, f32),
+    pub open: bool,
+}
+
+/// A running mixer auto-balance (see [`State::start_auto_balance`]).
+pub struct AutoBalanceJob {
+    pub progress: Arc<std::sync::atomic::AtomicU32>,
+    pub result: Arc<Mutex<Option<BalanceReport>>>,
 }
 
 pub struct State {
@@ -415,7 +433,9 @@ pub struct State {
     /// Frames left until a just-opened project counts as opened fine (its crash marker is cleared then).
     pub open_guard: Option<u32>,
     /// Mixer auto-balance running in the background: progress (‰) and the result when done.
-    pub balance_job: Option<BalanceJob>,
+    pub balance_job: Option<AutoBalanceJob>,
+    /// The last auto-balance (its report window).
+    pub balance_report: Option<BalanceReport>,
     /// Album loudness matching running in the background.
     pub album_job: Option<BalanceJob>,
     /// Audio watchdog: the callback count last seen, when it last moved, the last restart, and whether the
@@ -549,6 +569,7 @@ impl State {
             open_guard: None,
             audio_watch: (0, Instant::now(), None, false),
             balance_job: None,
+            balance_report: None,
             album_job: None,
         };
         st.open_midi();
@@ -646,8 +667,10 @@ impl State {
         }
     }
 
-    /// Starts the mixer's auto-balance: one offline render measures every channel's loudness (in the
-    /// background), then the faders are set (one undo step) – see `dragon_engine::edit::auto_balance`.
+    /// Starts the mixer's auto-balance in the background: a first offline render measures every channel
+    /// (loudness while playing, peak, spectrum), the balance is planned by role, a second render sums the
+    /// planned channels (master effects bypassed) to set the headroom, and then the faders move as one undo
+    /// step. See `dragon_engine::balance`.
     pub fn start_auto_balance(&mut self) {
         if self.balance_job.is_some() {
             return;
@@ -659,36 +682,79 @@ impl State {
         let result = Arc::new(Mutex::new(None));
         let (p2, r2) = (progress.clone(), result.clone());
         std::thread::spawn(move || {
+            use dragon_engine::balance;
+            use std::sync::atomic::Ordering::Relaxed;
             let mut pool = dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::Host));
             // At most 4 minutes are measured (enough for a balance; long songs stay quick).
-            let l = dragon_engine::render::measure_strip_loudness(&project, &cache, rate, &mut pool, 240.0, &mut |x| p2.store((x * 1000.0) as u32, std::sync::atomic::Ordering::Relaxed));
+            let profiles = dragon_engine::render::measure_strip_profiles(&project, &cache, rate, &mut pool, 240.0, &mut |x| p2.store((x * 650.0) as u32, Relaxed));
+            let mut entries = balance::plan(&project, &profiles, &[]);
+            let (mut offset, mut sum) = (0.0, (-70.0, -120.0));
+            if !entries.is_empty() {
+                let trial = balance::trial_project(&project, &entries);
+                let mut pool = dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::Host));
+                let sums = dragon_engine::render::measure_strip_profiles(&trial, &cache, rate, &mut pool, 240.0, &mut |x| p2.store(650 + (x * 350.0) as u32, Relaxed));
+                if let Some((_, m)) = sums.iter().find(|(id, _)| *id == dragon_engine::model::MASTER) {
+                    offset = balance::headroom_offset(m);
+                    sum = (m.active + offset, m.peak_db + offset);
+                }
+            }
+            balance::finish(&mut entries, offset);
             if let Ok(mut r) = r2.lock() {
-                *r = Some(l);
+                *r = Some(BalanceReport { profiles, entries, offset, sum, open: true });
             }
             redhive_client_framework::runtime::request_repaint();
         });
-        self.balance_job = Some(BalanceJob { progress, result });
+        self.balance_job = Some(AutoBalanceJob { progress, result });
     }
 
-    /// Applies a finished auto-balance.
+    /// Applies a finished auto-balance and opens its report.
     pub fn poll_auto_balance(&mut self) {
         let Some(job) = &self.balance_job else { return };
-        let Some(l) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
+        let Some(report) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
         self.balance_job = None;
-        let faders = dragon_engine::edit::auto_balance(&self.session.project, &l);
-        if faders.is_empty() {
-            self.toast("Auto-balance: no channel with audio to balance", Severity::Warning);
+        if report.entries.is_empty() {
+            self.toast("Auto-balance: no unmuted channel with audio to balance", Severity::Warning);
             return;
         }
-        let n = faders.len();
-        self.session.edit("Auto-balance", |p| {
+        self.apply_balance(&report.entries, "Auto-balance", None);
+        let n = report.entries.len();
+        let short = report.entries.iter().filter(|e| e.short_db.abs() > 0.5).count();
+        let extra = if short > 0 { format!(" – {short} need gain at the source, see the report") } else { String::new() };
+        self.ui.status = format!("Auto-balance: {n} channels set – report in Mixer › Tools");
+        self.toast(format!("Auto-balanced {n} channel{}{extra} – Ctrl+Z to undo", if n == 1 { "" } else { "s" }), Severity::Info);
+        self.balance_report = Some(report);
+    }
+
+    fn apply_balance(&mut self, entries: &[dragon_engine::balance::Entry], label: &str, role: Option<(Id, Option<dragon_engine::balance::Role>)>) {
+        let faders: Vec<(Id, f32)> = entries.iter().map(|e| (e.id, dragon_engine::dsp::db_to_gain(e.fader_db))).collect();
+        self.session.edit(label, |p| {
+            if let Some((id, r)) = role {
+                if let Some(c) = p.mixer.get_mut(id) {
+                    c.balance_role = r;
+                }
+            }
             for (id, v) in &faders {
                 if let Some(c) = p.mixer.get_mut(*id) {
                     c.volume = *v;
                 }
             }
         });
-        self.toast(format!("Auto-balanced {n} channel{} – Ctrl+Z to undo", if n == 1 { "" } else { "s" }), Severity::Info);
+    }
+
+    /// Changes what a channel is in the mix (`None` = from its names / sound again) and re-balances from
+    /// the last measurement (no new render): the role is remembered on the channel.
+    pub fn set_balance_role(&mut self, id: Id, role: Option<dragon_engine::balance::Role>) {
+        let Some(rep) = &self.balance_report else { return };
+        let mut p = self.session.project.clone();
+        if let Some(c) = p.mixer.get_mut(id) {
+            c.balance_role = role;
+        }
+        let mut entries = dragon_engine::balance::plan(&p, &rep.profiles, &[]);
+        dragon_engine::balance::finish(&mut entries, rep.offset);
+        self.apply_balance(&entries, "Auto-balance: role", Some((id, role)));
+        if let Some(r) = &mut self.balance_report {
+            r.entries = entries;
+        }
     }
 
     pub fn save_settings(&self) {

@@ -205,6 +205,11 @@ impl LoudnessMeter {
         Self::lufs(self.last(take) / take as f64)
     }
 
+    /// The 100 ms block energies measured so far (only kept by `exact` meters).
+    pub fn block_energies(&self) -> &[f64] {
+        &self.blocks
+    }
+
     /// Momentary loudness (400 ms).
     pub fn momentary(&self) -> f32 {
         self.window(4)

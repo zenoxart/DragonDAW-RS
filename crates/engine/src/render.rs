@@ -1215,8 +1215,8 @@ pub struct Renderer {
     scratch: Scratch,
     /// `route`'s copy of the source (kept between calls).
     route_tmp: (Vec<f32>, Vec<f32>),
-    /// Offline analysis: a loudness meter per strip, fed each strip's pre-fader signal (auto-balance).
-    strip_meters: Option<Vec<LoudnessMeter>>,
+    /// Offline analysis: an analyzer per strip, fed each strip's pre-fader signal (auto-balance).
+    strip_meters: Option<Vec<crate::balance::Analyzer>>,
     /// The mixer stage's load (share of the block time) and whether it runs on the worker threads.
     mix_load: f32,
     mix_parallel: bool,
@@ -1963,7 +1963,7 @@ impl Renderer {
             }
         }
 
-        // ---- offline analysis: per-strip pre-fader loudness
+        // ---- offline analysis: per-strip pre-fader loudness, peak and spectrum
         if let Some(ms) = &mut self.strip_meters {
             for (k, m) in ms.iter_mut().enumerate().take(self.pre_fader.len()) {
                 m.process(&self.pre_fader[k].0[..n], &self.pre_fader[k].1[..n]);
@@ -2426,9 +2426,16 @@ pub fn mixer_map(p: &Project) -> BTreeMap<Id, &MixerChannel> {
 
 /// Pre-fader integrated loudness (LUFS) of every audio strip over the song (or `max_secs` of it), from one
 /// offline render: what the mixer's auto-balance sets the faders from.
+/// Every mixer channel's gated integrated loudness (pre-fader, LUFS) over the song (at most `max_secs`).
 pub fn measure_strip_loudness(p: &Project, cache: &SampleCache, rate: f32, pool: &mut Pool, max_secs: f64, progress: &mut dyn FnMut(f32)) -> Vec<(Id, f32)> {
+    measure_strip_profiles(p, cache, rate, pool, max_secs, progress).into_iter().map(|(id, pr)| (id, pr.integrated)).collect()
+}
+
+/// Measures every mixer channel's pre-fader signal over the song (at most `max_secs`): the profiles
+/// auto-balance works from (`crate::balance`).
+pub fn measure_strip_profiles(p: &Project, cache: &SampleCache, rate: f32, pool: &mut Pool, max_secs: f64, progress: &mut dyn FnMut(f32)) -> Vec<(Id, crate::balance::Profile)> {
     let mut r = offline_renderer(p, cache, rate, pool);
-    r.strip_meters = Some((0..r.song.strips.len()).map(|_| LoudnessMeter::exact(rate)).collect());
+    r.strip_meters = Some((0..r.song.strips.len()).map(|_| crate::balance::Analyzer::new(rate)).collect());
     let end = p.song_length().max(4.0);
     let secs = r.song.tempo.beat_to_seconds(end).min(max_secs).max(1.0);
     let frames = (secs * rate as f64) as usize;
@@ -2449,7 +2456,7 @@ pub fn measure_strip_loudness(p: &Project, cache: &SampleCache, rate: f32, pool:
         progress(done as f32 / frames as f32);
     }
     let ms = r.strip_meters.take().unwrap_or_default();
-    r.song.strips.iter().zip(ms.iter()).filter(|(s, _)| !s.is_vca).map(|(s, m)| (s.id, m.integrated())).collect()
+    r.song.strips.iter().zip(ms.iter()).filter(|(s, _)| !s.is_vca).map(|(s, m)| (s.id, m.profile())).collect()
 }
 
 #[cfg(test)]

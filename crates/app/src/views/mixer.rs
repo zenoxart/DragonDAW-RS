@@ -1282,10 +1282,16 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
         ui.menu_button("Tools ⏷", |ui| {
             let busy = st.balance_job.is_some();
             let b = ui.add_enabled(!busy, egui::Button::new("Auto-balance all channels")).on_hover_text(
-                "Measures each channel's loudness over the song and sets every fader for an even starting mix (lead vocals and the low end forward, hats and pads back). Buses, VCAs and silent channels keep their faders. One undo step.",
+                "Measures every channel while it plays (loudness, peak and spectrum), works out what it is (from its names or its sound), sets each one by its role under the lead – vocal and kick forward, snare, bass and 808 close behind, chords, percussion, pads and effects further back – and leaves −6 dB of headroom into the master. Muted channels, buses, returns and VCAs keep their faders; pan and effects are never touched. One undo step, with a report where you can correct a role.",
             );
             if b.clicked() {
                 st.ctx.run("dragon.mixer.autobalance", serde_json::Value::Null);
+                ui.close_menu();
+            }
+            if st.balance_report.is_some() && ui.button("Last auto-balance report…").clicked() {
+                if let Some(r) = &mut st.balance_report {
+                    r.open = true;
+                }
                 ui.close_menu();
             }
         });
@@ -1296,4 +1302,89 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
         }
     });
     ui.add_space(2.0);
+}
+
+/// The auto-balance report: what every channel was taken for, how loud it plays, how far its fader moved
+/// and whether it needs gain at the source. Changing a role re-balances at once from the same measurement.
+pub fn balance_report(ctx: &egui::Context, st: &mut State) {
+    use dragon_engine::balance::{Role, RoleSource};
+    let Some(rep) = st.balance_report.clone() else { return };
+    if !rep.open {
+        return;
+    }
+    let mut open = true;
+    let mut change: Option<(Id, Option<Role>)> = None;
+    let mut remeasure = false;
+    egui::Window::new("Auto-balance").id(egui::Id::new("auto_balance_report")).open(&mut open).default_width(720.0).show(ctx, |ui| {
+        ui.label(
+            RichText::new(format!("Into the master chain: loud parts {:.1} LUFS, peaks {:.1} dBFS (targets −16 LUFS, −6 dBFS). Every fader moved by {:+.1} dB for that headroom.", rep.sum.0, rep.sum.1, rep.offset))
+                .small(),
+        );
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+            egui::Grid::new("balance_grid").striped(true).num_columns(6).spacing([12.0, 4.0]).show(ui, |ui| {
+                for h in ["Channel", "Is a …", "From", "Plays at", "Fader", ""] {
+                    ui.label(RichText::new(h).small().strong());
+                }
+                ui.end_row();
+                for e in &rep.entries {
+                    ui.label(&e.name);
+                    let mut sel = Some(e.role);
+                    let auto = e.source != RoleSource::User;
+                    egui::ComboBox::from_id_salt(("bal_role", e.id)).selected_text(e.role.label()).width(170.0).show_ui(ui, |ui| {
+                        if ui.selectable_label(auto, "Automatic (from names / sound)").clicked() && !auto {
+                            change = Some((e.id, None));
+                        }
+                        for r in Role::ALL {
+                            if ui.selectable_value(&mut sel, Some(r), r.label()).clicked() {
+                                change = Some((e.id, Some(r)));
+                            }
+                        }
+                    });
+                    ui.label(
+                        RichText::new(match e.source {
+                            RoleSource::Name => "name",
+                            RoleSource::Sound => "sound",
+                            RoleSource::User => "you",
+                        })
+                        .small()
+                        .color(theme::TEXT_DIM),
+                    );
+                    ui.label(RichText::new(format!("{:.1} LUFS", e.profile.active)).small()).on_hover_text(format!(
+                        "Loudness in its busy passages, before the fader. Plays in {:.0} % of the song; peak {:.1} dBFS; {:.0} % of its energy under 250 Hz.",
+                        e.profile.presence * 100.0,
+                        e.profile.peak_db,
+                        e.profile.low_share() * 100.0
+                    ));
+                    ui.label(RichText::new(format!("{:+.1} -> {:+.1} dB", e.before_db, e.fader_db)).small());
+                    if e.short_db > 0.5 {
+                        ui.label(RichText::new(format!("needs +{:.0} dB at the source", e.short_db)).small().color(theme::WARN));
+                    } else if e.short_db < -0.5 {
+                        ui.label(RichText::new(format!("{:.0} dB too hot at the source", e.short_db)).small().color(theme::WARN));
+                    } else {
+                        ui.label("");
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button("Measure again").on_hover_text("Renders the song again and re-balances (after you changed sounds, levels or the arrangement)").clicked() {
+                remeasure = true;
+            }
+            ui.label(RichText::new("Pan, sends and effects are never changed. Muted channels, buses, returns and VCAs keep their faders.").small().color(theme::TEXT_DIM));
+        });
+    });
+    if let Some((id, r)) = change {
+        st.set_balance_role(id, r);
+    }
+    if remeasure {
+        st.ctx.run("dragon.mixer.autobalance", serde_json::Value::Null);
+    }
+    if !open {
+        if let Some(r) = &mut st.balance_report {
+            r.open = false;
+        }
+    }
 }

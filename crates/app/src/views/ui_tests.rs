@@ -1313,8 +1313,9 @@ fn files_dropped_on_the_playlist_land_under_the_mouse() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Mixer auto-balance: measures every channel and sets the faders so the channels sit at their role's
-/// loudness – a loud kick and a quiet pad end up 7 dB apart (−18 vs −25 LUFS), in one undo step.
+/// Mixer auto-balance: measures every channel and sets the faders by role – the kick 1 dB under the focus,
+/// a pad 12 dB under, and 1.5 dB more because the pad's tone sits in the kick's low end – with the sum's
+/// peak at −6 dBFS into the master, in one undo step; correcting a role re-balances from the same measurement.
 #[test]
 fn mixer_auto_balance() {
     let mut h = Harness::new();
@@ -1336,6 +1337,10 @@ fn mixer_auto_balance() {
             p.mixer.get_mut(m).unwrap().name = name.into();
             ms.push(m);
         }
+        // Only these two take part (the template's drum channels are muted).
+        for c in &mut p.mixer.channels {
+            c.muted = !ms.contains(&c.id);
+        }
         (ms[0], ms[1])
     });
     h.st.start_auto_balance();
@@ -1348,8 +1353,18 @@ fn mixer_auto_balance() {
     let vol = |h: &Harness, id| dragon_engine::dsp::gain_to_db(h.st.session.project.mixer.get(id).unwrap().volume);
     let (k, p) = (vol(&h, mk), vol(&h, mp));
     let after = 13.98 + k - p; // the tones differ by 20·log10(0.5/0.1) dB
-    assert!((after - 7.0).abs() < 0.5, "kick {k:.1} dB, pad {p:.1} dB, so kick {after:.1} dB louder");
+    assert!((after - 12.5).abs() < 0.5, "kick {k:.1} dB, pad {p:.1} dB, so kick {after:.1} dB louder");
     assert_eq!(h.st.session.history.labels().last().map(|s| s.as_str()), Some("Auto-balance"));
+    let rep = h.st.balance_report.clone().expect("a report");
+    assert_eq!(rep.entries.len(), 2, "{:?}", rep.entries.iter().map(|e| (&e.name, e.role, e.profile.active)).collect::<Vec<_>>());
+    let (lufs, peak) = rep.sum;
+    assert!(lufs <= -15.9 && peak <= -5.9, "headroom into the master: {:?}", rep.sum);
+    assert!((lufs + 16.0).abs() < 0.2 || (peak + 6.0).abs() < 0.2, "the stricter target is met exactly: {:?}", rep.sum);
+    // Calling the pad a lead instrument (−4 instead of −12, no low-end penalty: still 1.5) moves only it.
+    h.st.set_balance_role(mp, Some(dragon_engine::balance::Role::Lead));
+    let (k2, p2) = (vol(&h, mk), vol(&h, mp));
+    assert!((k2 - k).abs() < 0.01 && (p2 - p - 8.0).abs() < 0.05, "kick {k2:.1}, pad {p:.1} -> {p2:.1}");
+    assert_eq!(h.st.session.project.mixer.get(mp).unwrap().balance_role, Some(dragon_engine::balance::Role::Lead), "remembered");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

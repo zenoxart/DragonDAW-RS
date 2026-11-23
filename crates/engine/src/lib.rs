@@ -26,6 +26,7 @@
 #![allow(clippy::needless_range_loop, clippy::should_implement_trait, clippy::type_complexity)]
 
 pub mod analysis;
+pub mod balance;
 pub mod dsp;
 pub mod edit;
 pub mod effects;

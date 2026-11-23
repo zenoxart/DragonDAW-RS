@@ -789,6 +789,9 @@ pub struct MixerChannel {
     pub surround: SurroundPan,
     /// Mix group (linked faders).
     pub group: Option<Id>,
+    /// What the channel is in the mix, as the user set it for auto-balance (`None` = from its names / sound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance_role: Option<crate::balance::Role>,
 }
 
 fn yes() -> bool {
@@ -819,6 +822,7 @@ impl MixerChannel {
             input: None,
             group: None,
             surround: SurroundPan::default(),
+            balance_role: None,
         }
     }
 }
