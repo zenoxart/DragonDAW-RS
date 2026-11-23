@@ -6,6 +6,7 @@ mod color;
 pub use color::{shape as saturation_curve, DragonParticle, INGREDIENTS as CRUCIBLE_INGREDIENTS};
 pub mod alter;
 pub mod clipper;
+pub mod drakesong;
 pub mod dynamics;
 pub mod eq;
 mod modulation;
@@ -208,6 +209,7 @@ pub fn registry() -> &'static [EffectDef] {
     R.get_or_init(|| {
         vec![
             eq::def(),
+            drakesong::def(),
             dynamics::compressor_def(),
             dynamics::multiband_def(),
             dynamics::gate_def(),

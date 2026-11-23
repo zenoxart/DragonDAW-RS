@@ -41,6 +41,8 @@ pub enum Finish {
     Cinnabar,
     /// Dark dragon-scale hide with gold edges (Wyrmdrum, the drum pads).
     Wyrmhide,
+    /// Jade-green enamel with fine scales (Drakesong, the character EQ): black knurled knobs.
+    Jade,
 }
 
 impl Finish {
@@ -61,6 +63,7 @@ impl Finish {
             Finish::Obsidian => Color32::from_rgb(0x0a, 0x0a, 0x0c),
             Finish::Cinnabar => Color32::from_rgb(0x46, 0x0e, 0x0c),
             Finish::Wyrmhide => Color32::from_rgb(0x2a, 0x2a, 0x1c),
+            Finish::Jade => Color32::from_rgb(0x1e, 0x4e, 0x2a),
         }
     }
 
@@ -76,6 +79,7 @@ impl Finish {
             Finish::Gold => Color32::from_rgb(0x24, 0x18, 0x08),
             Finish::Oxblood | Finish::Cinnabar => Color32::from_rgb(0xf1, 0xe4, 0xc8),
             Finish::Wyrmhide => Color32::from_rgb(0xec, 0xd6, 0x9a),
+            Finish::Jade => Color32::from_rgb(0xf4, 0xf6, 0xf0),
             Finish::Amethyst => Color32::from_rgb(0xe6, 0xdc, 0xff),
             Finish::Slate => Color32::from_rgb(0xd6, 0xf2, 0xec),
             Finish::Copper => Color32::from_rgb(0xf0, 0xc8, 0x98),
@@ -100,6 +104,7 @@ impl Finish {
             Finish::Oxblood => Some(Color32::from_rgb(0xf2, 0xa6, 0x4a)),
             Finish::Cinnabar => Some(Color32::from_rgb(0xff, 0x8a, 0x52)),
             Finish::Wyrmhide => Some(Color32::from_rgb(0xff, 0xb4, 0x4a)),
+            Finish::Jade => Some(Color32::from_rgb(0xff, 0xd8, 0x80)),
             Finish::Amethyst => Some(Color32::from_rgb(0xb4, 0x7c, 0xff)),
             Finish::Slate => Some(Color32::from_rgb(0x52, 0xf0, 0xd8)),
             f if f.gnostic() => Some(GNOSTIC_GOLD),
@@ -130,6 +135,7 @@ impl Finish {
             Finish::Cream => KnobStyle::Chicken,
             Finish::Oxblood | Finish::Cinnabar => KnobStyle::Cream,
             Finish::Wyrmhide => KnobStyle::Metal,
+            Finish::Jade => KnobStyle::Black,
             Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => KnobStyle::Brass,
         }
     }
@@ -159,6 +165,7 @@ pub fn finish_of(id: &str) -> Finish {
         "delay" => Finish::Slate,
         "cinnabar" => Finish::Cinnabar,
         "wyrmdrum" => Finish::Wyrmhide,
+        "drakesong" => Finish::Jade,
         _ => Finish::Copper,
     }
 }
@@ -200,6 +207,7 @@ mod plates {
             Finish::Obsidian => ("fx-plate-obsidian", include_bytes!("../../assets/fx/plate_obsidian.jpg")),
             Finish::Cinnabar => ("fx-plate-cinnabar", include_bytes!("../../assets/fx/plate_cinnabar.jpg")),
             Finish::Wyrmhide => ("fx-plate-wyrmhide", include_bytes!("../../assets/fx/plate_wyrmhide.jpg")),
+            Finish::Jade => ("fx-plate-jade", include_bytes!("../../assets/fx/plate_jade.jpg")),
         })
     }
 }
@@ -208,6 +216,7 @@ const KNOB_METAL: &[u8] = include_bytes!("../../assets/fx/knob_metal.png");
 const KNOB_CHICKEN: &[u8] = include_bytes!("../../assets/fx/knob_chicken.png");
 const KNOB_CREAM: &[u8] = include_bytes!("../../assets/fx/knob_cream.png");
 const KNOB_GUNMETAL: &[u8] = include_bytes!("../../assets/fx/knob_gunmetal.png");
+const KNOB_BLACK: &[u8] = include_bytes!("../../assets/fx/knob_black.png");
 const SCREW: &[u8] = include_bytes!("../../assets/fx/screw.png");
 const LAMP: &[u8] = include_bytes!("../../assets/fx/lamp.png");
 const TUBE: &[u8] = include_bytes!("../../assets/fx/tube.png");
@@ -231,6 +240,7 @@ pub fn knob_cap(ctx: &egui::Context, style: KnobStyle) -> Option<TextureHandle> 
         KnobStyle::Chicken => tex(ctx, "fx-knob-chicken", KNOB_CHICKEN),
         KnobStyle::Cream => tex(ctx, "fx-knob-cream", KNOB_CREAM),
         KnobStyle::Ring => tex(ctx, "fx-knob-gunmetal", KNOB_GUNMETAL),
+        KnobStyle::Black => tex(ctx, "fx-knob-black", KNOB_BLACK),
     }
 }
 

@@ -26,6 +26,8 @@ pub enum KnobStyle {
     Cream,
     /// Engraved brass (the gnostic units).
     Brass,
+    /// Black knurled aluminium with a white line (Drakesong).
+    Black,
 }
 
 #[derive(Clone, Copy)]
@@ -251,6 +253,19 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec("LFO 1", vec![p("lfo1_sync", "Sync"), k("lfo1_rate", "Rate"), p("lfo1_shape", "Shape")]),
                 sec("LFO 2", vec![p("lfo2_sync", "Sync"), k("lfo2_rate", "Rate"), p("lfo2_shape", "Shape")]),
                 sec(format!("Modulation slot {b}"), vec![Ctl::Bands, p(format!("m{b}_src"), "Source"), p(format!("m{b}_dst"), "Target"), k(format!("m{b}_amt"), "Amount")]),
+            ],
+        },
+        "drakesong" => Panel {
+            skin: MODERN,
+            bands: None,
+            sections: vec![
+                sec("Input", vec![big("input", "Input")]),
+                sec("HF", vec![big("hf_gain", "Gain"), k("hf_freq", "Freq")]),
+                sec("HMF", vec![big("hmf_gain", "Gain"), k("hmf_freq", "Freq")]),
+                sec("LMF", vec![big("lmf_gain", "Gain"), k("lmf_freq", "Freq")]),
+                sec("LF", vec![big("lf_gain", "Gain"), k("lf_freq", "Freq")]),
+                sec("Sub & Air", vec![k("sub", "Sub"), big("air", "Air"), p("air_freq", "Air freq")]),
+                sec("Output", vec![p("model", "Voicing"), k("output", "Output")]),
             ],
         },
         "cinnabar" => Panel {
@@ -487,7 +502,7 @@ pub fn draw_knob(p: &egui::Painter, c: Pos2, rad: f32, n: f32, style: KnobStyle,
             p.circle_stroke(c, rad - 6.0, Stroke::new(1.0_f32, Color32::from_white_alpha(22)));
             p.line_segment([pt(ang, rad * 0.25), pt(ang, rad - 9.0)], Stroke::new(2.0_f32, Color32::WHITE));
         }
-        KnobStyle::Metal | KnobStyle::Brass => {
+        KnobStyle::Metal | KnobStyle::Brass | KnobStyle::Black => {
             for t in 0..=10 {
                 let a = a0 + sweep * t as f32 / 10.0;
                 p.line_segment([pt(a, rad + 1.0), pt(a, rad + if t % 5 == 0 { 5.0 } else { 3.0 })], Stroke::new(1.0_f32, Color32::from_white_alpha(110)));
