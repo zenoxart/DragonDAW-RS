@@ -253,6 +253,24 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec(format!("Modulation slot {b}"), vec![Ctl::Bands, p(format!("m{b}_src"), "Source"), p(format!("m{b}_dst"), "Target"), k(format!("m{b}_amt"), "Amount")]),
             ],
         },
+        "cinnabar" => Panel {
+            skin: MODERN,
+            bands: None,
+            sections: vec![
+                sec("Osc 1", vec![p("o1_wave", "Wave"), k("o1_level", "Level"), k("o1_coarse", "Coarse"), k("o1_fine", "Fine"), k("o1_pw", "Width")]),
+                sec("Osc 2", vec![p("o2_wave", "Wave"), k("o2_level", "Level"), k("o2_coarse", "Coarse"), k("o2_fine", "Fine"), k("o2_pw", "Width")]),
+                sec("Osc 3", vec![p("o3_wave", "Wave"), k("o3_level", "Level"), k("o3_coarse", "Coarse"), k("o3_fine", "Fine"), k("o3_pw", "Width")]),
+                sec("Filter", vec![p("filter", "Mode"), big("cutoff", "Cutoff"), k("resonance", "Resonance"), k("filter_env", "Env amount")]),
+                sec("Filter envelope", vec![k("fa", "Attack"), k("fd", "Decay"), k("fs", "Sustain"), k("fr", "Release")]),
+                sec("Amp envelope", vec![k("aa", "Attack"), k("ad", "Decay"), k("as", "Sustain"), k("ar", "Release")]),
+                sec("Unison", vec![p("unison", "Voices"), k("detune", "Detune")]),
+                sec("LFO", vec![k("lfo_rate", "Rate"), k("lfo_pitch", "To pitch"), k("lfo_filter", "To filter")]),
+                sec("Voice", vec![k("glide", "Glide"), p("polyphony", "Polyphony"), big("gain", "Gain")]),
+            ],
+        },
+        "wyrmdrum" => {
+            Panel { skin: MODERN, bands: None, sections: vec![sec("Selected pad", vec![big("gain", "Level"), k("pan", "Pan"), k("pitch", "Pitch")]), sec("Playing", vec![p("choke", "Choke group"), p("note", "Note")])] }
+        }
         "chorus" => Panel { skin: MODERN, bands: None, sections: vec![sec("Chorus", vec![big("rate", "Rate"), big("depth", "Depth"), k("delay", "Delay")]), sec("Mix", vec![fad("mix", "Mix")])] },
         "flanger" => {
             Panel { skin: MODERN, bands: None, sections: vec![sec("Flanger", vec![big("rate", "Rate"), big("depth", "Depth"), k("feedback", "Feedback"), k("delay", "Delay")]), sec("Mix", vec![fad("mix", "Mix")])] }

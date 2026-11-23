@@ -2664,65 +2664,6 @@ fn particle(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let _ = col;
 }
 
-/// The synth's display: the mixed oscillators as one scrolling waveform (left) and the amp envelope
-/// with a playhead running through it (right).
-pub fn synth_hero(ui: &mut Ui, s: &dragon_engine::model::SynthParams, color: Color32, time: Option<f32>) {
-    use dragon_engine::model::Waveform;
-    let w = ui.available_width().max(260.0);
-    let (r, _) = ui.allocate_exact_size(Vec2::new(w, 120.0), egui::Sense::hover());
-    let p = ui.painter_at(r);
-    grid(&p, r, false);
-    let t = time.unwrap_or(0.0);
-    let split = r.left() + r.width() * 0.6;
-    let wr = Rect::from_min_max(r.min + Vec2::new(8.0, 8.0), Pos2::new(split - 8.0, r.bottom() - 8.0));
-    let osc = |wave: Waveform, ph: f32, pw: f32| -> f32 {
-        let x = ph.rem_euclid(1.0);
-        match wave {
-            Waveform::Saw => 2.0 * x - 1.0,
-            Waveform::Square => {
-                if x < pw {
-                    1.0
-                } else {
-                    -1.0
-                }
-            }
-            Waveform::Triangle => 1.0 - 4.0 * (x - 0.5).abs(),
-            Waveform::Sine => (x * TAU).sin(),
-            Waveform::Noise => ((x * 9301.0 + 49297.0).sin() * 233280.0).fract() * 2.0 - 1.0,
-        }
-    };
-    let total: f32 = s.osc.iter().map(|o| o.level).sum::<f32>().max(0.001);
-    let pts: Vec<Pos2> = (0..=240)
-        .map(|k| {
-            let u = k as f32 / 240.0;
-            let y: f32 = s.osc.iter().map(|o| o.level * osc(o.wave, (u * 2.0 + t * 0.25) * 2f32.powf(o.coarse as f32 / 12.0 + o.fine / 1200.0), o.pulse_width)).sum::<f32>() / total;
-            Pos2::new(wr.left() + u * wr.width(), wr.center().y - y.clamp(-1.2, 1.2) * wr.height() * 0.42)
-        })
-        .collect();
-    filled_curve(&p, &pts, wr.center().y, color);
-    // Amp envelope.
-    let er = Rect::from_min_max(Pos2::new(split + 8.0, r.top() + 18.0), r.max - Vec2::new(8.0, 8.0));
-    let e = &s.amp_adsr;
-    let (a, d, rl) = (e.attack.max(0.001), e.decay.max(0.001), e.release.max(0.001));
-    let hold = 0.25 * (a + d + rl);
-    let total_t = a + d + hold + rl;
-    let x_of = |tt: f32| er.left() + tt / total_t * er.width();
-    let y_of = |v: f32| er.bottom() - v * er.height();
-    let env = vec![Pos2::new(x_of(0.0), y_of(0.0)), Pos2::new(x_of(a), y_of(1.0)), Pos2::new(x_of(a + d), y_of(e.sustain)), Pos2::new(x_of(a + d + hold), y_of(e.sustain)), Pos2::new(x_of(total_t), y_of(0.0))];
-    filled_curve(&p, &env, er.bottom(), theme::ACCENT_2);
-    for q in &env[1..4] {
-        p.circle_filled(*q, 3.5, Color32::WHITE);
-    }
-    if time.is_some() {
-        let ph = (t / (total_t + 0.5)).fract() * (total_t + 0.5);
-        if ph <= total_t {
-            p.line_segment([Pos2::new(x_of(ph), er.top()), Pos2::new(x_of(ph), er.bottom())], Stroke::new(1.0_f32, Color32::WHITE.gamma_multiply(0.6)));
-        }
-    }
-    p.text(Pos2::new(er.left(), r.top() + 5.0), egui::Align2::LEFT_TOP, "AMP ENVELOPE", egui::FontId::proportional(9.0), theme::TEXT_DIM);
-    p.rect_stroke(r, 6.0, Stroke::new(1.0_f32, color.gamma_multiply(0.4)), egui::StrokeKind::Inside);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -37,6 +37,10 @@ pub enum Finish {
     Lapis,
     /// Black obsidian with a gold diagram (Philosopher's Stone).
     Obsidian,
+    /// Polished cinnabar, vermilion with dark veins (Cinnabar, the synth): cream knobs, like the modulation units.
+    Cinnabar,
+    /// Dark dragon-scale hide with gold edges (Wyrmdrum, the drum pads).
+    Wyrmhide,
 }
 
 impl Finish {
@@ -55,6 +59,8 @@ impl Finish {
             Finish::Forged => Color32::from_rgb(0x34, 0x32, 0x33),
             Finish::Lapis => Color32::from_rgb(0x1a, 0x1e, 0x6a),
             Finish::Obsidian => Color32::from_rgb(0x0a, 0x0a, 0x0c),
+            Finish::Cinnabar => Color32::from_rgb(0x46, 0x0e, 0x0c),
+            Finish::Wyrmhide => Color32::from_rgb(0x2a, 0x2a, 0x1c),
         }
     }
 
@@ -68,7 +74,8 @@ impl Finish {
             Finish::Aluminium => Color32::from_rgb(0x14, 0x15, 0x18),
             Finish::Cream => Color32::from_rgb(0x2a, 0x1e, 0x14),
             Finish::Gold => Color32::from_rgb(0x24, 0x18, 0x08),
-            Finish::Oxblood => Color32::from_rgb(0xf1, 0xe4, 0xc8),
+            Finish::Oxblood | Finish::Cinnabar => Color32::from_rgb(0xf1, 0xe4, 0xc8),
+            Finish::Wyrmhide => Color32::from_rgb(0xec, 0xd6, 0x9a),
             Finish::Amethyst => Color32::from_rgb(0xe6, 0xdc, 0xff),
             Finish::Slate => Color32::from_rgb(0xd6, 0xf2, 0xec),
             Finish::Copper => Color32::from_rgb(0xf0, 0xc8, 0x98),
@@ -91,6 +98,8 @@ impl Finish {
     pub fn accent(self) -> Option<Color32> {
         match self {
             Finish::Oxblood => Some(Color32::from_rgb(0xf2, 0xa6, 0x4a)),
+            Finish::Cinnabar => Some(Color32::from_rgb(0xff, 0x8a, 0x52)),
+            Finish::Wyrmhide => Some(Color32::from_rgb(0xff, 0xb4, 0x4a)),
             Finish::Amethyst => Some(Color32::from_rgb(0xb4, 0x7c, 0xff)),
             Finish::Slate => Some(Color32::from_rgb(0x52, 0xf0, 0xd8)),
             f if f.gnostic() => Some(GNOSTIC_GOLD),
@@ -119,7 +128,8 @@ impl Finish {
             Finish::Aluminium | Finish::Gold | Finish::Copper => KnobStyle::Ring,
             Finish::Black | Finish::Amethyst | Finish::Slate => KnobStyle::Metal,
             Finish::Cream => KnobStyle::Chicken,
-            Finish::Oxblood => KnobStyle::Cream,
+            Finish::Oxblood | Finish::Cinnabar => KnobStyle::Cream,
+            Finish::Wyrmhide => KnobStyle::Metal,
             Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => KnobStyle::Brass,
         }
     }
@@ -147,6 +157,8 @@ pub fn finish_of(id: &str) -> Finish {
         "chorus" | "flanger" | "phaser" | "tremolo" | "orbit" => Finish::Oxblood,
         "reverb" => Finish::Amethyst,
         "delay" => Finish::Slate,
+        "cinnabar" => Finish::Cinnabar,
+        "wyrmdrum" => Finish::Wyrmhide,
         _ => Finish::Copper,
     }
 }
@@ -186,6 +198,8 @@ mod plates {
             Finish::Forged => ("fx-plate-forged", include_bytes!("../../assets/fx/plate_forged.jpg")),
             Finish::Lapis => ("fx-plate-lapis", include_bytes!("../../assets/fx/plate_lapis.jpg")),
             Finish::Obsidian => ("fx-plate-obsidian", include_bytes!("../../assets/fx/plate_obsidian.jpg")),
+            Finish::Cinnabar => ("fx-plate-cinnabar", include_bytes!("../../assets/fx/plate_cinnabar.jpg")),
+            Finish::Wyrmhide => ("fx-plate-wyrmhide", include_bytes!("../../assets/fx/plate_wyrmhide.jpg")),
         })
     }
 }

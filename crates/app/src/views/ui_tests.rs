@@ -1996,7 +1996,7 @@ fn drum_pads_play_from_controller_pads_and_keys_and_take_dropped_samples() {
             Instrument::DrumPads(p) => p.clone(),
             _ => Vec::new(),
         };
-        super::windows::drum_editor(ui, st, cid, pads);
+        super::inst_ui::wyrmdrum(ui, st, cid, pads);
     }
     h.st.ui.piano_channel = Some(drums);
     h.idle(view, 2);

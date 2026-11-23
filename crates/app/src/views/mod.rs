@@ -16,6 +16,7 @@ pub mod fx_panel;
 pub mod fx_ui;
 pub mod guitar_ui;
 pub mod hammerstein;
+pub mod inst_ui;
 pub mod keyboard;
 pub mod keys;
 pub mod launcher;

@@ -1088,7 +1088,14 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 st.add_sampler(&f);
             }
         }
-        "add.synth" => st.ui.channel = Some(st.session.edit("Add synth", |p| p.add_channel("Cinnabar", Instrument::Synth(SynthParams::default())))),
+        "add.synth" => {
+            let cid = st.session.edit("Add synth", |p| p.add_channel("Cinnabar", Instrument::Synth(SynthParams::default())));
+            st.ui.channel = Some(cid);
+            st.ui.piano_channel = Some(cid);
+            if !st.ui.instrument_windows.contains(&cid) {
+                st.ui.instrument_windows.push(cid);
+            }
+        }
         "add.wavetable" => {
             let cid = st.session.edit("Add Transmuter", |p| p.add_channel("Transmuter", Instrument::Wavetable(Default::default())));
             st.ui.channel = Some(cid);

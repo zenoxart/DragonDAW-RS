@@ -62,8 +62,14 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
     for c in inst {
         let mut open = true;
         let title = st.session.project.channel(c).map(|x| format!("{} – {}", x.name, x.instrument.kind_name())).unwrap_or_default();
-        let wide = matches!(st.session.project.channel(c).map(|x| &x.instrument), Some(Instrument::Wavetable(_) | Instrument::Guitar(_) | Instrument::Piano(_)));
-        egui::Window::new(title).id(egui::Id::new(("inst", c))).open(&mut open).resizable(true).default_width(if wide { 1300.0 } else { 460.0 }).show(ctx, |ui| instrument_editor(ui, st, c));
+        // Rack units get the width their layout needs (the synth's sections side by side).
+        let width = match st.session.project.channel(c).map(|x| &x.instrument) {
+            Some(Instrument::Wavetable(_) | Instrument::Guitar(_) | Instrument::Piano(_)) => 1300.0,
+            Some(Instrument::Synth(_)) => 1180.0,
+            Some(Instrument::DrumPads(_)) => 900.0,
+            _ => 460.0,
+        };
+        egui::Window::new(title).id(egui::Id::new(("inst", c))).open(&mut open).resizable(true).vscroll(true).default_width(width).show(ctx, |ui| instrument_editor(ui, st, c));
         if !open || st.session.project.channel(c).is_none() {
             st.ui.instrument_windows.retain(|w| *w != c);
         }
@@ -1072,8 +1078,8 @@ fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
     ui.separator();
     match ch.instrument.clone() {
         Instrument::Sampler(s) => sampler_editor(ui, st, cid, s, ch.envelope),
-        Instrument::Synth(s) => synth_editor(ui, st, cid, s),
-        Instrument::DrumPads(pads) => drum_editor(ui, st, cid, pads),
+        Instrument::Synth(s) => super::inst_ui::cinnabar(ui, st, cid, s),
+        Instrument::DrumPads(pads) => super::inst_ui::wyrmdrum(ui, st, cid, pads),
         Instrument::Plugin(pl) => plugin_params(ui, st, pl, PluginSlot::Channel(cid)),
         Instrument::Wavetable(w) => super::wave_ui::editor(ui, st, cid, *w),
         Instrument::Guitar(g) => super::guitar_ui::editor(ui, st, cid, *g),
@@ -1179,109 +1185,6 @@ fn sampler_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SamplerParams, env: E
     env_editor(ui, st, "Volume envelope", env, move |p, e| with_channel(p, cid, |c| c.envelope = e));
 }
 
-fn set_synth(p: &mut Project, cid: Id, f: impl FnOnce(&mut SynthParams)) {
-    if let Some(Instrument::Synth(s)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
-        f(s);
-    }
-}
-
-fn synth_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SynthParams) {
-    let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
-    let color = st.session.project.channel(cid).map(|c| theme::rgb(c.color)).unwrap_or(theme::ACCENT);
-    super::fx_ui::synth_hero(ui, &s, color, time);
-    if time.is_some() {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
-    }
-    for k in 0..3 {
-        let o = s.osc[k];
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("OSC {}", k + 1)).small().color(theme::ACCENT_2));
-            let mut w = o.wave;
-            egui::ComboBox::from_id_salt(("osc", cid, k)).selected_text(format!("{w:?}")).width(80.0).show_ui(ui, |ui| {
-                for x in [Waveform::Saw, Waveform::Square, Waveform::Triangle, Waveform::Sine, Waveform::Noise] {
-                    ui.selectable_value(&mut w, x, format!("{x:?}"));
-                }
-            });
-            if w != o.wave {
-                st.session.edit("Waveform", |p| set_synth(p, cid, |x| x.osc[k].wave = w));
-            }
-            let mut lvl = o.level;
-            let r = knob(ui, &mut lvl, 0.0, 1.0, 0.0, "level", widgets::pct);
-            widgets::apply(st, &r, "Osc level", |p| set_synth(p, cid, |x| x.osc[k].level = lvl));
-            let mut co = o.coarse as f32;
-            let r = knob(ui, &mut co, -36.0, 36.0, 0.0, "coarse", |v| format!("{:+.0} st", v.round()));
-            widgets::apply(st, &r, "Osc coarse", |p| set_synth(p, cid, |x| x.osc[k].coarse = co.round() as i32));
-            let mut fi = o.fine;
-            let r = knob(ui, &mut fi, -1.0, 1.0, 0.0, "fine", |v| format!("{:+.0} ct", v * 100.0));
-            widgets::apply(st, &r, "Osc fine", |p| set_synth(p, cid, |x| x.osc[k].fine = fi));
-            let mut pw = o.pulse_width;
-            let r = knob(ui, &mut pw, 0.05, 0.95, 0.5, "pw", widgets::pct);
-            widgets::apply(st, &r, "Pulse width", |p| set_synth(p, cid, |x| x.osc[k].pulse_width = pw));
-        });
-    }
-    ui.separator();
-    ui.horizontal_wrapped(|ui| {
-        let mut f = s.filter;
-        egui::ComboBox::from_id_salt(("flt", cid)).selected_text(format!("{f:?}")).width(90.0).show_ui(ui, |ui| {
-            for x in [FilterMode::LowPass, FilterMode::HighPass, FilterMode::BandPass] {
-                ui.selectable_value(&mut f, x, format!("{x:?}"));
-            }
-        });
-        if f != s.filter {
-            st.session.edit("Filter mode", |p| set_synth(p, cid, |x| x.filter = f));
-        }
-        let hz = |v: f32| if v >= 1000.0 { format!("{:.1} kHz", v / 1000.0) } else { format!("{v:.0} Hz") };
-        let mut cut = (s.cutoff.max(20.0) / 20.0).log2() / 10.0;
-        let r = knob(ui, &mut cut, 0.0, 1.0, 1.0, "cutoff", |v| hz(20.0 * 2f32.powf(v * 10.0)));
-        let cutoff = 20.0 * 2f32.powf(cut * 10.0);
-        widgets::apply(st, &r, "Cutoff", |p| set_synth(p, cid, |x| x.cutoff = cutoff));
-        r.context_menu(|ui| {
-            if ui.button("Create automation lane").clicked() {
-                crate::views::automation::add_lane(st, Target::SynthCutoff(cid));
-                ui.close_menu();
-            }
-            if ui.button("MIDI learn").clicked() {
-                st.ui.midi_learn = Some(Target::SynthCutoff(cid));
-                ui.close_menu();
-            }
-        });
-        let fields: [(&str, f32, f32, f32, &str); 9] = [
-            ("reso", s.resonance, 0.0, 1.0, "resonance"),
-            ("env amt", s.filter_env, -1.0, 1.0, "filter_env"),
-            ("unison", s.unison as f32, 1.0, 8.0, "unison"),
-            ("detune", s.detune, 0.0, 1.0, "detune"),
-            ("lfo rate", s.lfo_rate, 0.0, 20.0, "lfo_rate"),
-            ("lfo➡pitch", s.lfo_pitch, 0.0, 1.0, "lfo_pitch"),
-            ("lfo➡filter", s.lfo_filter, 0.0, 1.0, "lfo_filter"),
-            ("glide", s.glide, 0.0, 1.0, "glide"),
-            ("gain", s.gain, 0.0, 2.0, "gain"),
-        ];
-        for (label, v, min, max, key) in fields {
-            let mut x = v;
-            let r = knob(ui, &mut x, min, max, v, label, |v| format!("{v:.2}"));
-            widgets::apply(st, &r, label, |p| {
-                set_synth(p, cid, |s| match key {
-                    "resonance" => s.resonance = x,
-                    "filter_env" => s.filter_env = x,
-                    "unison" => s.unison = x.round().max(1.0) as u32,
-                    "detune" => s.detune = x,
-                    "lfo_rate" => s.lfo_rate = x,
-                    "lfo_pitch" => s.lfo_pitch = x,
-                    "lfo_filter" => s.lfo_filter = x,
-                    "glide" => s.glide = x,
-                    _ => s.gain = x,
-                })
-            });
-        }
-        let mut poly = s.polyphony;
-        if ui.add(egui::DragValue::new(&mut poly).range(1..=32).prefix("voices ")).changed() {
-            st.session.edit("Polyphony", |p| set_synth(p, cid, |x| x.polyphony = poly));
-        }
-    });
-    env_editor(ui, st, "Filter envelope", s.filter_adsr, move |p, e| set_synth(p, cid, |x| x.filter_adsr = e));
-    env_editor(ui, st, "Amp envelope", s.amp_adsr, move |p, e| set_synth(p, cid, |x| x.amp_adsr = e));
-}
-
 /// Puts sample `path` on pad `k` of drum-pads channel `cid` (one undo step).
 pub fn assign_pad(st: &mut State, cid: Id, k: usize, path: PathBuf) {
     let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -1305,109 +1208,6 @@ pub fn pad_at(ctx: &egui::Context, pos: egui::Pos2) -> Option<(Id, usize)> {
     let (f, list): (u64, Vec<(Id, usize, egui::Rect)>) = ctx.data(|d| d.get_temp(egui::Id::new(PAD_RECTS)))?;
     (now.saturating_sub(f) <= 2).then_some(())?;
     list.into_iter().find(|(_, _, r)| r.contains(pos)).map(|(c, k, _)| (c, k))
-}
-
-pub(crate) fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
-    ui.label(
-        RichText::new(
-            "Drag a sample onto a pad (from the browser or your file explorer) · click to audition · right-click for options. Controller pads play their pads; keyboard keys play the pads too, repeating up the keyboard.",
-        )
-        .small()
-        .color(theme::TEXT_DIM),
-    );
-    let dragging_file = egui::DragAndDrop::has_payload_of_type::<PathBuf>(ui.ctx()) || ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
-    let mut rects: Vec<(Id, usize, egui::Rect)> = Vec::new();
-    let mut lit_any = false;
-    egui::Grid::new(("pads", cid)).spacing([6.0, 6.0]).show(ui, |ui| {
-        for (k, pad) in pads.iter().enumerate() {
-            let has = !pad.layers.is_empty();
-            // Lit while held (MIDI pad, key or click), fading out over 0.25 s after.
-            let light = match st.ui.pad_hits.get(&(cid, pad.note)) {
-                Some((true, _)) => 1.0,
-                Some((false, t)) => (1.0 - t.elapsed().as_secs_f32() / 0.25).max(0.0),
-                None => 0.0,
-            };
-            lit_any |= light > 0.0;
-            let base = if has { theme::ACCENT.gamma_multiply(0.5) } else { theme::PANEL_2 };
-            let b = egui::Button::new(RichText::new(format!("{}\n{}", if pad.name.is_empty() { "(empty)" } else { &pad.name }, dragon_engine::instruments::note_name(pad.note))).small().color(if light > 0.5 {
-                egui::Color32::BLACK
-            } else {
-                theme::TEXT
-            }))
-            .fill(base.lerp_to_gamma(theme::ACCENT_2, light))
-            .min_size(egui::vec2(96.0, 46.0));
-            let r = ui.add(b);
-            rects.push((cid, k, r.rect));
-            if dragging_file && r.contains_pointer() {
-                ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, egui::Stroke::new(2.0_f32, theme::PLAYHEAD), egui::StrokeKind::Outside);
-            }
-            if r.clicked() {
-                st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOn { channel: cid, note: pad.note, velocity: 0.9 }));
-                st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOff { channel: cid, note: pad.note }));
-                st.ui.pad_hits.insert((cid, pad.note), (false, std::time::Instant::now()));
-            }
-            if let Some(path) = super::widgets::dnd_release::<PathBuf>(&r) {
-                assign_pad(st, cid, k, (*path).clone());
-            }
-            r.context_menu(|ui| {
-                if ui.button("Load sample…").clicked() {
-                    if let Some(f) = rfd::FileDialog::new().add_filter("Audio", &["wav", "flac", "mp3", "ogg", "aif", "aiff"]).pick_file() {
-                        st.session.edit("Assign pad", |p| {
-                            if let Some(Instrument::DrumPads(v)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
-                                v[k].name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                                v[k].layers = vec![PadLayer { path: f, velocity_low: 0.0, velocity_high: 1.0 }];
-                            }
-                        });
-                    }
-                    ui.close_menu();
-                }
-                if ui.button("Add velocity layer…").clicked() {
-                    if let Some(f) = rfd::FileDialog::new().add_filter("Audio", &["wav", "flac", "mp3", "ogg", "aif", "aiff"]).pick_file() {
-                        st.session.edit("Add layer", |p| {
-                            if let Some(Instrument::DrumPads(v)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
-                                let n = v[k].layers.len() as f32 + 1.0;
-                                v[k].layers.push(PadLayer { path: f, velocity_low: 0.0, velocity_high: 1.0 });
-                                for (i, l) in v[k].layers.iter_mut().enumerate() {
-                                    l.velocity_low = i as f32 / n;
-                                    l.velocity_high = (i + 1) as f32 / n;
-                                }
-                            }
-                        });
-                    }
-                    ui.close_menu();
-                }
-                let mut pad2 = pad.clone();
-                let mut changed = ui.add(egui::Slider::new(&mut pad2.gain, 0.0..=2.0).text("gain")).changed();
-                changed |= ui.add(egui::Slider::new(&mut pad2.pan, -1.0..=1.0).text("pan")).changed();
-                changed |= ui.add(egui::Slider::new(&mut pad2.pitch, -24.0..=24.0).text("pitch")).changed();
-                changed |= ui.add(egui::Slider::new(&mut pad2.choke, 0..=8).text("choke group")).changed();
-                changed |= ui.add(egui::Slider::new(&mut pad2.note, 0..=127).text("note")).changed();
-                if changed {
-                    st.session.gesture("Pad settings", |p| {
-                        if let Some(Instrument::DrumPads(v)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
-                            v[k] = pad2;
-                        }
-                    });
-                }
-            });
-            if k % 4 == 3 {
-                ui.end_row();
-            }
-        }
-    });
-    let ctx = ui.ctx().clone();
-    let now = ctx.cumulative_pass_nr();
-    ctx.data_mut(|d| {
-        let e = d.get_temp_mut_or_default::<(u64, Vec<(Id, usize, egui::Rect)>)>(egui::Id::new(PAD_RECTS));
-        if e.0 != now {
-            *e = (now, Vec::new());
-        }
-        e.1.retain(|x| x.0 != cid);
-        e.1.extend(rects);
-    });
-    if lit_any {
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
-    }
 }
 
 /// The preset bar of a third-party plugin: the preset list (its `.vstpreset` files, or Dragon presets),

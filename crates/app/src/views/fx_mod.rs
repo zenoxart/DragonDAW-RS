@@ -86,7 +86,7 @@ thread_local! {
 pub fn phosphor(f: super::analog::Finish) -> Color32 {
     use super::analog::Finish::*;
     match f {
-        Cream | Gold | Copper => Color32::from_rgb(0xff, 0xb8, 0x4a),
+        Cream | Gold | Copper | Wyrmhide => Color32::from_rgb(0xff, 0xb8, 0x4a),
         Basalt | Forged | Obsidian => Color32::from_rgb(0xff, 0xd2, 0x7a),
         Lapis => Color32::from_rgb(0xb4, 0xc4, 0xff),
         Amethyst => Color32::from_rgb(0xb4, 0x7c, 0xff),
@@ -538,6 +538,8 @@ macro_rules! emblem_art {
 }
 emblem_art!(
     "alter",
+    "cinnabar",
+    "wyrmdrum",
     "bitcrusher",
     "class_a_strip",
     "clean_voice",
@@ -587,6 +589,8 @@ fn emblem_spec(id: &str) -> (Motion, Follows, Color32) {
         "bitcrusher" => (Turn, Level, Color32::from_rgb(0xff, 0x80, 0x40)),
         "dragon_particle" => (Breathe, Level, Color32::from_rgb(0xff, 0x30, 0x30)),
         "clean_voice" => (Ripples, Level, Color32::from_rgb(0xc8, 0xe8, 0xff)),
+        "cinnabar" => (Breathe, Level, Color32::from_rgb(0xff, 0x40, 0x30)),
+        "wyrmdrum" => (Tremble, Level, Color32::from_rgb(0xff, 0xa8, 0x3c)),
         _ => (Breathe, Level, AMBER),
     }
 }
