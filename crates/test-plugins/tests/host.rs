@@ -276,6 +276,9 @@ fn plugins_render_inside_a_project() {
     let (clap, bundle) = install(tmp.path());
     let sine = scan_file(PluginFormat::Clap, &clap).unwrap().remove(1);
     let vgain = scan_file(PluginFormat::Vst3, &bundle).unwrap().remove(0);
+    // Scanned plugins are trusted, as the app does after a scan (a project alone can't load a plugin file
+    // from an arbitrary place – see `dragon_engine::trust`).
+    dragon_engine::trust::trust_plugins([(sine.format, sine.id.as_str(), sine.path.as_path()), (vgain.format, vgain.id.as_str(), vgain.path.as_path())]);
 
     let render = |master_gain: Option<f64>| {
         let mut p = Project::new_default();
