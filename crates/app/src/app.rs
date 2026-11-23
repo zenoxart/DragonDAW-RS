@@ -87,7 +87,12 @@ impl DragonApp {
 
     fn run_command(&mut self, id: &str, ctx: &egui::Context) {
         match id {
-            "dragon.internal.reset_layout" => self.dock.reset(),
+            "dragon.internal.reset_layout" => {
+                self.dock.reset();
+                // Floating windows (editors, dialogs) come back on screen at their default places.
+                ctx.memory_mut(|m| m.reset_areas());
+                self.st.toast("Layout reset – every view is back in its place", redhive_contracts::ui::Severity::Info);
+            }
             _ => {
                 if !commands::execute(&mut self.st, id, ctx) {
                     self.st.ctx.log.warn("commands", format!("unknown command {id}"));
@@ -183,6 +188,11 @@ impl DragonApp {
         let mut pl_k = 0;
         for f in dropped {
             let ext = f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+            // Audio dropped on a drum pad goes on that pad.
+            if let (true, Some((cid, k))) = (dragon_engine::edit::is_audio_file(&f), at.and_then(|p| crate::views::windows::pad_at(ctx, p))) {
+                crate::views::windows::assign_pad(&mut self.st, cid, k, f.clone());
+                continue;
+            }
             if let (true, Some((track, beat)), Some(info)) = (dragon_engine::edit::is_audio_file(&f), pl_target, pl.as_ref()) {
                 let tid = track.and_then(|t| info.tracks.get(t + pl_k)).map(|t| t.0);
                 self.st.add_audio_clip_at(&f, tid, beat);

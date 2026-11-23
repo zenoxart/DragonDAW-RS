@@ -1282,28 +1282,72 @@ fn synth_editor(ui: &mut Ui, st: &mut State, cid: Id, s: SynthParams) {
     env_editor(ui, st, "Amp envelope", s.amp_adsr, move |p, e| set_synth(p, cid, |x| x.amp_adsr = e));
 }
 
-fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
-    ui.label(RichText::new("Drop samples on pads · click to audition · right-click for options").small().color(theme::TEXT_DIM));
+/// Puts sample `path` on pad `k` of drum-pads channel `cid` (one undo step).
+pub fn assign_pad(st: &mut State, cid: Id, k: usize, path: PathBuf) {
+    let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    st.session.edit("Assign pad", |p| {
+        if let Some(Instrument::DrumPads(v)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
+            if let Some(pad) = v.get_mut(k) {
+                pad.layers = vec![PadLayer { path, velocity_low: 0.0, velocity_high: 1.0 }];
+                pad.name = name;
+            }
+        }
+    });
+}
+
+/// Where the drum pads were drawn this frame: (frame, [(channel, pad, rect)]) – files dropped from the
+/// system (Explorer, Finder) land on the pad under the mouse.
+pub const PAD_RECTS: &str = "drum.pads";
+
+/// The pad under `pos` if pads were drawn in the last couple of frames.
+pub fn pad_at(ctx: &egui::Context, pos: egui::Pos2) -> Option<(Id, usize)> {
+    let now = ctx.cumulative_pass_nr();
+    let (f, list): (u64, Vec<(Id, usize, egui::Rect)>) = ctx.data(|d| d.get_temp(egui::Id::new(PAD_RECTS)))?;
+    (now.saturating_sub(f) <= 2).then_some(())?;
+    list.into_iter().find(|(_, _, r)| r.contains(pos)).map(|(c, k, _)| (c, k))
+}
+
+pub(crate) fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
+    ui.label(
+        RichText::new(
+            "Drag a sample onto a pad (from the browser or your file explorer) · click to audition · right-click for options. Controller pads play their pads; keyboard keys play the pads too, repeating up the keyboard.",
+        )
+        .small()
+        .color(theme::TEXT_DIM),
+    );
+    let dragging_file = egui::DragAndDrop::has_payload_of_type::<PathBuf>(ui.ctx()) || ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+    let mut rects: Vec<(Id, usize, egui::Rect)> = Vec::new();
+    let mut lit_any = false;
     egui::Grid::new(("pads", cid)).spacing([6.0, 6.0]).show(ui, |ui| {
         for (k, pad) in pads.iter().enumerate() {
             let has = !pad.layers.is_empty();
-            let b = egui::Button::new(RichText::new(format!("{}\n{}", pad.name, dragon_engine::instruments::note_name(pad.note))).small())
-                .fill(if has { theme::ACCENT.gamma_multiply(0.5) } else { theme::PANEL_2 })
-                .min_size(egui::vec2(96.0, 46.0));
+            // Lit while held (MIDI pad, key or click), fading out over 0.25 s after.
+            let light = match st.ui.pad_hits.get(&(cid, pad.note)) {
+                Some((true, _)) => 1.0,
+                Some((false, t)) => (1.0 - t.elapsed().as_secs_f32() / 0.25).max(0.0),
+                None => 0.0,
+            };
+            lit_any |= light > 0.0;
+            let base = if has { theme::ACCENT.gamma_multiply(0.5) } else { theme::PANEL_2 };
+            let b = egui::Button::new(RichText::new(format!("{}\n{}", if pad.name.is_empty() { "(empty)" } else { &pad.name }, dragon_engine::instruments::note_name(pad.note))).small().color(if light > 0.5 {
+                egui::Color32::BLACK
+            } else {
+                theme::TEXT
+            }))
+            .fill(base.lerp_to_gamma(theme::ACCENT_2, light))
+            .min_size(egui::vec2(96.0, 46.0));
             let r = ui.add(b);
+            rects.push((cid, k, r.rect));
+            if dragging_file && r.contains_pointer() {
+                ui.painter().rect_stroke(r.rect.expand(2.0), 6.0, egui::Stroke::new(2.0_f32, theme::PLAYHEAD), egui::StrokeKind::Outside);
+            }
             if r.clicked() {
                 st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOn { channel: cid, note: pad.note, velocity: 0.9 }));
                 st.audio.send(dragon_engine::device::Command::Live(dragon_engine::render::LiveEvent::NoteOff { channel: cid, note: pad.note }));
+                st.ui.pad_hits.insert((cid, pad.note), (false, std::time::Instant::now()));
             }
             if let Some(path) = super::widgets::dnd_release::<PathBuf>(&r) {
-                let path = (*path).clone();
-                let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                st.session.edit("Assign pad", |p| {
-                    if let Some(Instrument::DrumPads(v)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
-                        v[k].layers = vec![PadLayer { path, velocity_low: 0.0, velocity_high: 1.0 }];
-                        v[k].name = name;
-                    }
-                });
+                assign_pad(st, cid, k, (*path).clone());
             }
             r.context_menu(|ui| {
                 if ui.button("Load sample…").clicked() {
@@ -1351,6 +1395,19 @@ fn drum_editor(ui: &mut Ui, st: &mut State, cid: Id, pads: Vec<Pad>) {
             }
         }
     });
+    let ctx = ui.ctx().clone();
+    let now = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let e = d.get_temp_mut_or_default::<(u64, Vec<(Id, usize, egui::Rect)>)>(egui::Id::new(PAD_RECTS));
+        if e.0 != now {
+            *e = (now, Vec::new());
+        }
+        e.1.retain(|x| x.0 != cid);
+        e.1.extend(rects);
+    });
+    if lit_any {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
 }
 
 /// The preset bar of a third-party plugin: the preset list (its `.vstpreset` files, or Dragon presets),

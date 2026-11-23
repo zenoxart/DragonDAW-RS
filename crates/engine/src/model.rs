@@ -529,6 +529,21 @@ pub enum Instrument {
     Piano(Box<crate::pno::PianoParams>),
 }
 
+/// The pad a live note plays: the pad on exactly that note, else – for a keyboard, whose keys are not on
+/// the pads' notes – the pads in note order repeating up and down the keyboard, so every key plays one.
+pub fn pad_for_note(pads: &[Pad], note: u8) -> Option<usize> {
+    if pads.is_empty() {
+        return None;
+    }
+    if let Some(k) = pads.iter().position(|p| p.note == note) {
+        return Some(k);
+    }
+    let mut order: Vec<usize> = (0..pads.len()).collect();
+    order.sort_by_key(|&k| pads[k].note);
+    let base = pads[order[0]].note as i32;
+    Some(order[(note as i32 - base).rem_euclid(pads.len() as i32) as usize])
+}
+
 impl Instrument {
     pub fn kind_name(&self) -> &'static str {
         match self {
@@ -1461,5 +1476,21 @@ mod move_tests {
         // [0, 1, 2, 4, 3]: tracks 3 and 4 form a block at the end – it stays.
         p.move_tracks(&[ids[3], ids[4]], 1);
         assert_eq!((p.tracks[3].id, p.tracks[4].id), (ids[4], ids[3]), "a block at the end stays");
+    }
+}
+
+#[cfg(test)]
+mod pad_note_tests {
+    use super::*;
+
+    #[test]
+    fn keys_fold_onto_the_pads() {
+        let pads: Vec<Pad> = (0..16).map(|k| Pad { note: 36 + k, ..Default::default() }).collect();
+        assert_eq!(pad_for_note(&pads, 36), Some(0), "pad 1 on its own note (controller pads)");
+        assert_eq!(pad_for_note(&pads, 51), Some(15));
+        assert_eq!(pad_for_note(&pads, 52), Some(0), "the next key starts over at pad 1");
+        assert_eq!(pad_for_note(&pads, 60), Some(8), "middle C plays a pad too");
+        assert_eq!(pad_for_note(&pads, 35), Some(15), "below the pads, too");
+        assert_eq!(pad_for_note(&[], 60), None);
     }
 }

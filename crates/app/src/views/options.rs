@@ -28,9 +28,9 @@ pub const TABS: [(Tab, &str, &str); 5] = [
 
 const TAB_KEY: &str = "options.tab";
 
-/// Shows Options on the Audio page (the tutorial's audio set-up steps).
-pub fn select_audio_tab(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(TAB_KEY), Tab::Audio));
+/// Shows Options on page `tab`.
+pub fn select_tab(ctx: &egui::Context, tab: Tab) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(TAB_KEY), tab));
 }
 
 pub fn show(ui: &mut Ui, st: &mut State) {
@@ -135,10 +135,12 @@ fn audio(ui: &mut Ui, st: &mut State) {
         crate::tutorial::anchor(ui.ctx(), "options.audio_buffer", buf_r.response.rect);
         ui.end_row();
         ui.label("");
-        ui.label(RichText::new(format!("Running: {}", st.audio.describe())).small().color(theme::TEXT_DIM));
+        let run_r = ui.label(RichText::new(format!("Running: {}", st.audio.describe())).small().color(theme::TEXT_DIM));
+        crate::tutorial::anchor(ui.ctx(), "options.audio_running", run_r.rect);
         ui.end_row();
         ui.label("Recording offset");
-        ui.add(egui::Slider::new(&mut cfg.record_offset_ms, -50.0..=50.0).suffix(" ms")).on_hover_text("Fine-tunes latency compensation of recordings (positive = earlier)");
+        let off_r = ui.add(egui::Slider::new(&mut cfg.record_offset_ms, -50.0..=50.0).suffix(" ms")).on_hover_text("Fine-tunes latency compensation of recordings (positive = earlier)");
+        crate::tutorial::anchor(ui.ctx(), "options.audio_offset", off_r.rect);
         ui.end_row();
     });
     let changed = cfg != st.settings.device;
@@ -156,7 +158,8 @@ fn audio(ui: &mut Ui, st: &mut State) {
     ui.add_space(6.0);
     match st.audio.input() {
         Some((name, n)) => {
-            ui.label(RichText::new(format!("✔ Recording from {name} ({n} inputs)")).color(theme::OK));
+            let r = ui.label(RichText::new(format!("✔ Recording from {name} ({n} inputs)")).color(theme::OK));
+            crate::tutorial::anchor(ui.ctx(), "options.audio_status", r.rect);
         }
         None => {
             let why = st.audio.input_error().unwrap_or_else(|| "no input device".into());
@@ -167,7 +170,9 @@ fn audio(ui: &mut Ui, st: &mut State) {
     if ui.add_enabled(changed, egui::Button::new("Apply audio settings")).clicked() {
         restart_audio(st);
     }
-    if ui.button("Restart audio engine").clicked() {
+    let rs = ui.button("Restart audio engine");
+    crate::tutorial::anchor(ui.ctx(), "options.audio_restart", rs.rect);
+    if rs.clicked() {
         restart_audio(st);
     }
 }
@@ -180,7 +185,8 @@ fn midi(ui: &mut Ui, st: &mut State) {
         ui.label(RichText::new("No MIDI inputs found.").color(theme::TEXT_DIM));
     }
     let mut sel = st.settings.device.midi_inputs.clone();
-    ui.label(RichText::new("None selected = all inputs are opened.").small().color(theme::TEXT_DIM));
+    let hint = ui.label(RichText::new("None selected = all inputs are opened.").small().color(theme::TEXT_DIM));
+    crate::tutorial::anchor(ui.ctx(), "options.midi_inputs", hint.rect);
     for p in &ports {
         let mut on = sel.contains(p);
         if ui.checkbox(&mut on, p).changed() {

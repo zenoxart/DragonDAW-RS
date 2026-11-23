@@ -1950,3 +1950,75 @@ fn live_notes_light_the_piano_roll_keys() {
     h.idle(view, 1);
     assert_eq!(h.st.ui.pr_y, y1);
 }
+
+/// Drum pads: controller pads (MIDI channel 10) reach the drum pads even when another instrument is
+/// selected; keyboard keys on a drum-pads channel play pads (exact note, else the pads repeating); the
+/// note-off follows its note-on; a sample dragged onto a pad (browser payload, or a system drop via
+/// `pad_at`) lands on that pad.
+#[test]
+fn drum_pads_play_from_controller_pads_and_keys_and_take_dropped_samples() {
+    let mut h = Harness::new();
+    let ctx = h.ctx.clone();
+    crate::commands::execute(&mut h.st, "dragon.add.drums", &ctx);
+    let drums = h.st.ui.channel.expect("the drums are selected");
+    let pads = match &h.st.session.project.channel(drums).unwrap().instrument {
+        Instrument::DrumPads(p) => p.clone(),
+        _ => panic!("not drum pads"),
+    };
+    let other = h.st.session.project.channels.iter().find(|c| c.id != drums).unwrap().id;
+    let lit = |h: &Harness, note: u8| h.st.ui.pad_hits.get(&(drums, note)).map(|x| x.0);
+
+    // Controller pad on MIDI channel 10 while another instrument is selected: still the drums.
+    h.st.ui.channel = Some(other);
+    h.st.live_note_from(true, pads[0].note, 1.0, Some(9));
+    assert_eq!(lit(&h, pads[0].note), Some(true));
+    h.st.live_note_from(false, pads[0].note, 0.0, Some(9));
+    assert_eq!(lit(&h, pads[0].note), Some(false));
+    // A keyboard (channel 1) plays the selected instrument, not the pads.
+    assert_eq!(h.st.live_target(60, Some(0)).map(|t| t.0), Some(other));
+
+    // Drums selected: any key plays a pad.
+    h.st.ui.channel = Some(drums);
+    let (ch, n) = h.st.live_target(60, Some(0)).unwrap();
+    assert_eq!(ch, drums);
+    assert!(pads.iter().any(|p| p.note == n), "middle C plays one of the pads");
+    // The note-off goes where the note-on went, even if the selection changed in between.
+    h.st.live_note_from(true, 61, 0.8, Some(0));
+    let (_, n61) = h.st.live_target(61, Some(0)).unwrap();
+    h.st.ui.channel = Some(other);
+    h.st.live_note_from(false, 61, 0.0, Some(0));
+    assert_eq!(lit(&h, n61), Some(false), "released on the drums");
+
+    // Drag a sample from the browser onto pad 3.
+    fn view(ui: &mut egui::Ui, st: &mut State) {
+        let cid = st.ui.piano_channel.unwrap();
+        let pads = match &st.session.project.channel(cid).unwrap().instrument {
+            Instrument::DrumPads(p) => p.clone(),
+            _ => Vec::new(),
+        };
+        super::windows::drum_editor(ui, st, cid, pads);
+    }
+    h.st.ui.piano_channel = Some(drums);
+    h.idle(view, 2);
+    let rects: (u64, Vec<(Id, usize, Rect)>) = h.ctx.data(|d| d.get_temp(egui::Id::new(super::windows::PAD_RECTS))).unwrap();
+    let r = rects.1.iter().find(|x| x.0 == drums && x.1 == 2).unwrap().2;
+    let at = r.center();
+    let path = std::path::PathBuf::from("/samples/new_snare.wav");
+    h.frame(view, vec![Event::PointerMoved(at)], Modifiers::NONE);
+    h.frame(view, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    egui::DragAndDrop::set_payload(&h.ctx, path.clone());
+    h.frame(view, vec![Event::PointerMoved(at + egui::vec2(3.0, 0.0))], Modifiers::NONE);
+    h.frame(view, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    let pad = |h: &Harness, k: usize| match &h.st.session.project.channel(drums).unwrap().instrument {
+        Instrument::DrumPads(p) => p[k].clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(pad(&h, 2).layers[0].path, path);
+    assert_eq!(pad(&h, 2).name, "new_snare");
+    // A file dropped from the system: the app finds the pad under the mouse.
+    h.idle(view, 1);
+    let r5 = rects.1.iter().find(|x| x.0 == drums && x.1 == 5).unwrap().2;
+    assert_eq!(super::windows::pad_at(&h.ctx, r5.center()), Some((drums, 5)));
+    super::windows::assign_pad(&mut h.st, drums, 5, "/x/clap.wav".into());
+    assert_eq!(pad(&h, 5).name, "clap");
+}

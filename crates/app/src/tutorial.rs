@@ -130,6 +130,59 @@ pub const AUDIO_STEPS: &[Step] = &[
         text: "Smaller buffers mean less delay: 128 frames ≈ 3 ms, good for recording and playing live. Crackles or dropouts? Go up to 256 or 512 – best for mixing big projects. The line below shows what really runs (ASIO can override it in its own control panel). Use headphones when you monitor a mic, or the speakers feed back into it.",
         try_it: None,
     },
+    Step {
+        target: Some("options.audio_running"),
+        open: Some("dragon.options"),
+        title: "What is really running",
+        text: "This line shows the driver, device, sample rate, buffer and the delay it really has, in and out. Some ASIO drivers ignore the buffer you pick here and use their own: then set it in the interface's control panel and press Restart audio engine. A delay over ~12 ms feels sluggish when you play live.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.audio_offset"),
+        open: Some("dragon.options"),
+        title: "Recording offset",
+        text: "Recordings are moved back by the delay the driver reports, so they line up with the beat. If a recorded click or clap still lands a little late (or early), nudge this: positive = earlier. Most interfaces need 0.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.audio_restart"),
+        open: Some("dragon.options"),
+        title: "When there is no sound",
+        text: "Pick the driver again or press Restart audio engine. Still nothing? Close other programs that use the interface (ASIO and WASAPI exclusive take it for themselves), check the Output, try 48000 Hz, and on Windows allow microphone access for desktop apps. A green ✔ line here means the input is open.",
+        try_it: None,
+    },
+    Step {
+        target: Some("options.midi_inputs"),
+        open: Some("dragon.options"),
+        title: "MIDI keyboards and pad controllers",
+        text: "Options › MIDI: tick your controller (none ticked = every one is used) and press Reconnect MIDI after plugging one in. Keys play the instrument selected in the channel rack; pads send drum notes and play the drum pads. Keys you press light up on the piano roll.",
+        try_it: None,
+    },
+];
+
+/// Chapter "Windows & layout": getting views back and resetting the layout.
+pub const LAYOUT_STEPS: &[Step] = &[
+    Step {
+        target: None,
+        open: None,
+        title: "Lost a window?",
+        text: "Every view has a key: F5 playlist, F6 channel rack, F7 piano roll, F9 mixer, F10 options, Alt+F8 browser. Press it to bring the view back – or open it from the View menu. Tabs can be dragged to dock them anywhere.",
+        try_it: None,
+    },
+    Step {
+        target: None,
+        open: None,
+        title: "Reset the layout",
+        text: "If the window arrangement is a mess or a panel is gone, press Ctrl+Shift+L (View › Reset layout): every view goes back to its place and floating windows come back on screen. Your project is not touched.",
+        try_it: None,
+    },
+    Step {
+        target: None,
+        open: None,
+        title: "Too many windows",
+        text: "F12 closes every floating window (effect and instrument editors) at once. Ctrl+Shift+P opens the command palette – type what you are looking for, e.g. \"reset\" or \"mixer\".",
+        try_it: None,
+    },
 ];
 
 pub const RECORD_STEPS: &[Step] = &[
@@ -208,11 +261,13 @@ pub enum TourKind {
     Recording,
     /// Setting up the audio driver (Help › Set up audio).
     Audio,
+    /// Getting lost windows back and resetting the layout (Help › Windows & layout).
+    Layout,
 }
 
 impl TourKind {
     /// The chapters, in the order the start screen offers them: (kind, title, minutes).
-    pub const CHAPTERS: [(TourKind, &'static str, u32); 3] = [(TourKind::Basics, "Basics", 2), (TourKind::Audio, "Audio set-up", 1), (TourKind::Recording, "Recording", 2)];
+    pub const CHAPTERS: [(TourKind, &'static str, u32); 4] = [(TourKind::Basics, "Basics", 2), (TourKind::Audio, "Audio set-up", 2), (TourKind::Recording, "Recording", 2), (TourKind::Layout, "Windows & layout", 1)];
 
     pub fn title(self) -> &'static str {
         Self::CHAPTERS.iter().find(|c| c.0 == self).map(|c| c.1).unwrap_or("Tour")
@@ -224,6 +279,7 @@ fn steps(kind: TourKind) -> &'static [Step] {
         TourKind::Basics => STEPS,
         TourKind::Recording => RECORD_STEPS,
         TourKind::Audio => AUDIO_STEPS,
+        TourKind::Layout => LAYOUT_STEPS,
     }
 }
 
@@ -270,7 +326,8 @@ pub fn show(ctx: &Context, st: &mut State) {
         if let Some(v) = step.open {
             st.ctx.open(v, None);
             if v == "dragon.options" {
-                crate::views::options::select_audio_tab(ctx);
+                let tab = if step.target.is_some_and(|t| t.starts_with("options.midi")) { crate::views::options::Tab::Midi } else { crate::views::options::Tab::Audio };
+                crate::views::options::select_tab(ctx, tab);
             }
         }
         st.ui.tour.opened = Some(k);

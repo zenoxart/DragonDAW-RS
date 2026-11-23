@@ -181,6 +181,11 @@ pub struct UiState {
     pub released: Vec<Option<Instant>>,
     /// The last note played live: the piano roll scrolls to it if it's out of view.
     pub follow_note: Option<u8>,
+    /// Live notes held now: (MIDI channel or 255 for the typing keyboard, note) → (rack channel, note it
+    /// plays), so the note-off goes where the note-on went.
+    pub live_map: std::collections::HashMap<(u8, u8), (Id, u8)>,
+    /// Drum pads hit live: (rack channel, pad note) → (held, when) – the pads light up.
+    pub pad_hits: std::collections::HashMap<(Id, u8), (bool, Instant)>,
     /// What an opened project wanted that was not loaded (plugins from unknown places, network files).
     pub trust_prompt: Vec<dragon_engine::trust::Blocked>,
     /// What the user chose to keep off (not asked again this session).
@@ -328,6 +333,8 @@ impl UiState {
             sounding: vec![0.0; 128],
             released: vec![None; 128],
             follow_note: None,
+            live_map: Default::default(),
+            pad_hits: Default::default(),
             trust_prompt: Vec::new(),
             trust_dismissed: Vec::new(),
             effect_windows: Vec::new(),
@@ -959,7 +966,27 @@ impl State {
         self.audio.send(Command::Seek(beat.max(0.0)));
     }
 
+    /// Which rack channel a live note plays and which note it becomes. Controller pads usually send on
+    /// MIDI channel 10: those always reach a drum-pads instrument (the selected one, else the first in the
+    /// rack). On a drum-pads channel every key plays a pad (see `pad_for_note`).
+    pub fn live_target(&self, note: u8, midi_channel: Option<u8>) -> Option<(Id, u8)> {
+        let p = &self.session.project;
+        let is_drums = |id: Id| matches!(p.channel(id).map(|c| &c.instrument), Some(Instrument::DrumPads(_)));
+        let sel = self.ui.channel.or(self.ui.piano_channel);
+        let ch = if midi_channel == Some(9) && !sel.is_some_and(is_drums) { p.channels.iter().find(|c| matches!(c.instrument, Instrument::DrumPads(_))).map(|c| c.id).or(sel) } else { sel }?;
+        let note = match p.channel(ch).map(|c| &c.instrument) {
+            Some(Instrument::DrumPads(pads)) => dragon_engine::model::pad_for_note(pads, note).map(|k| pads[k].note).unwrap_or(note),
+            _ => note,
+        };
+        Some((ch, note))
+    }
+
     pub fn live_note(&mut self, on: bool, note: u8, velocity: f32) {
+        self.live_note_from(on, note, velocity, None);
+    }
+
+    /// A live note from MIDI channel `midi_channel` (0-based; `None` = the typing keyboard).
+    pub fn live_note_from(&mut self, on: bool, note: u8, velocity: f32, midi_channel: Option<u8>) {
         // Light the key on the piano-roll keyboard (whatever channel the note goes to).
         if let Some(v) = self.ui.sounding.get_mut(note as usize) {
             *v = if on { velocity.max(0.05) } else { 0.0 };
@@ -973,7 +1000,20 @@ impl State {
             self.ui.waiting_record = false;
             self.start_recording();
         }
-        let Some(ch) = self.ui.channel.or(self.ui.piano_channel) else { return };
+        let key = (midi_channel.unwrap_or(255), note);
+        let target = if on {
+            let t = self.live_target(note, midi_channel);
+            if let Some(t) = t {
+                self.ui.live_map.insert(key, t);
+            }
+            t
+        } else {
+            self.ui.live_map.remove(&key).or_else(|| self.live_target(note, midi_channel))
+        };
+        let Some((ch, note)) = target else { return };
+        if matches!(self.session.project.channel(ch).map(|c| &c.instrument), Some(Instrument::DrumPads(_))) {
+            self.ui.pad_hits.insert((ch, note), (on, Instant::now()));
+        }
         self.audio.send(Command::Live(if on { LiveEvent::NoteOn { channel: ch, note, velocity } } else { LiveEvent::NoteOff { channel: ch, note } }));
         let t = self.audio.transport();
         let secs = t.state.seconds + if t.state.playing { t.at.elapsed().as_secs_f64() } else { 0.0 };
@@ -1606,8 +1646,8 @@ impl State {
                 continue;
             }
             match t.message {
-                M::NoteOn { note, velocity, .. } if velocity > 0 => self.live_note(true, note, velocity as f32 / 127.0),
-                M::NoteOn { note, .. } | M::NoteOff { note, .. } => self.live_note(false, note, 0.0),
+                M::NoteOn { note, velocity, channel } if velocity > 0 => self.live_note_from(true, note, velocity as f32 / 127.0, Some(channel)),
+                M::NoteOn { note, channel, .. } | M::NoteOff { note, channel } => self.live_note_from(false, note, 0.0, Some(channel)),
                 // Pedals go straight to the instrument being played (unless MIDI learn or a mapping takes them).
                 M::Control { controller: c @ (64 | 66 | 67), value, channel } if self.ui.midi_learn.is_none() && !self.session.project.midi_mappings.iter().any(|x| x.channel == channel && x.controller == c) => {
                     if let Some(ch) = self.ui.channel.or(self.ui.piano_channel) {
