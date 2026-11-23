@@ -90,10 +90,20 @@ jobs:
           $env:DRAGON_STARTUP_COMMANDS = "file.new_demo,transport.play"
           $env:DRAGON_SMOKE_PLUGIN = "$env:RUNNER_TEMP/dragon_test.clap"
           $env:DRAGON_SMOKE_CLOSE_AFTER = "8"
+          $err = Join-Path $env:RUNNER_TEMP "dragon-smoke-err.txt"
           foreach ($run in 1..3) {
-            $p = Start-Process -FilePath target/debug/dragon-daw.exe -PassThru -NoNewWindow
+            $p = Start-Process -FilePath target/debug/dragon-daw.exe -PassThru -NoNewWindow -RedirectStandardError $err
             if (-not $p.WaitForExit(90000)) { $p.Kill(); throw "run ${run}: the app did not close" }
-            if ($p.ExitCode -ne 0) { throw "run ${run}: exit code $($p.ExitCode)" }
+            if ($p.ExitCode -ne 0) {
+              # GitHub's Windows runners have no OpenGL 2.0: the window can't open at all there, so the
+              # close test can't run (a real crash or a bad exit still fails the step).
+              if ((Get-Content $err -Raw) -match "requires opengl 2\.0") {
+                Write-Host "::warning::Close smoke test skipped: this runner has no OpenGL 2.0, so the app window cannot open"
+                exit 0
+              }
+              Get-Content $err | Select-Object -Last 20
+              throw "run ${run}: exit code $($p.ExitCode)"
+            }
             Write-Host "run ${run}: closed cleanly"
           }
           $crash = Join-Path $env:LOCALAPPDATA "DragonDAW/Crash/last-crash.txt"
