@@ -17,6 +17,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      # `@stable` / `@1.89` select the Rust toolchain (the 1.89 one is the MSRV check), not an action version.
-      - dependency-name: dtolnay/rust-toolchain
+    # All actions are pinned to commit SHAs; Dependabot updates the SHA and the version comment.
+    # dtolnay/rust-toolchain is pinned to its master branch; the toolchain comes from `toolchain:`.

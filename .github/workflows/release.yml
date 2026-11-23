@@ -22,8 +22,9 @@ concurrency:
   group: release-${{ github.event_name == 'workflow_run' && 'nightly' || github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
+# Security: no permissions by default; each job gets only what it needs. All actions are pinned
+# to commit SHAs (tags can be moved by their owners); Dependabot keeps the pins up to date.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,8 +32,19 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.name }}
-    # Nightly only after a green CI run.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # Nightly only after a green CI run of a *push to main in this repository*.
+    # Security: CI also runs for pull requests, including from forks, and `branches: [main]` above
+    # only compares the branch *name*, which a fork can also call `main`. Without these checks a
+    # stranger's pull request would be built here and published as the official nightly.
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -59,18 +71,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false # the build runs crate build scripts; don't leave a token in .git
       - name: Install system libraries
         if: runner.os == 'Linux'
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update && apt-get install -y --no-install-recommends build-essential curl ca-certificates git pkg-config libasound2-dev cmake clang xz-utils
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; pinned, so the toolchain is given via `toolchain:`
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
       - name: Build
@@ -105,6 +119,8 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             # Video import needs ffmpeg: ship the LGPL build next to the app (found in ffmpeg\ beside it).
             curl -fsSL -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip \
+              && curl -fsSL -o ffmpeg.sums https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256 \
+              && grep ' ffmpeg-master-latest-win64-lgpl.zip$' ffmpeg.sums | sed 's/ ffmpeg-master-latest-win64-lgpl.zip$/ ffmpeg.zip/' | sha256sum -c - \
               && 7z x -offmpeg-src ffmpeg.zip > /dev/null \
               && mkdir -p "$DIR/ffmpeg" \
               && cp ffmpeg-src/*/bin/ffmpeg.exe ffmpeg-src/*/bin/ffprobe.exe "$DIR/ffmpeg/" \
@@ -116,6 +132,8 @@ jobs:
             if [ "${{ runner.os }}" = "Linux" ]; then
               # Ship ffmpeg on Linux too (BtbN's static LGPL build), found in ffmpeg/ beside the app.
               curl -fsSL -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-lgpl.tar.xz \
+                && curl -fsSL -o ffmpeg.sums https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256 \
+                && grep ' ffmpeg-master-latest-linux64-lgpl.tar.xz$' ffmpeg.sums | sed 's/ ffmpeg-master-latest-linux64-lgpl.tar.xz$/ ffmpeg.tar.xz/' | sha256sum -c - \
                 && mkdir -p ffmpeg-src && tar -xJf ffmpeg.tar.xz -C ffmpeg-src \
                 && mkdir -p "$DIR/ffmpeg" \
                 && cp ffmpeg-src/*/bin/ffmpeg ffmpeg-src/*/bin/ffprobe "$DIR/ffmpeg/" \
@@ -125,7 +143,7 @@ jobs:
             tar czf "$DIR.tar.gz" "$DIR"
             echo "ASSET=$DIR.tar.gz" >> "$GITHUB_ENV"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.name }}
           path: ${{ env.ASSET }}
@@ -136,14 +154,23 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the release
+      id-token: write      # sign the build attestation
+      attestations: write  # store it
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      # Signed proof that these files were built by this workflow from this repository.
+      # Check a download with: gh attestation verify <file> --repo zenoxart/DragonDAW-RS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/*.zip, dist/*.tar.gz'
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: dist/*
           generate_release_notes: true
@@ -152,18 +179,32 @@ jobs:
   nightly:
     name: Publish nightly
     needs: build
-    if: github.event_name == 'workflow_run'
+    # same guard as the build job (needs: build is skipped for foreign runs, this makes it explicit)
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: write      # replace the nightly release
+      id-token: write      # sign the build attestation
+      attestations: write  # store it
     env:
       GH_TOKEN: ${{ github.token }}
       SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt
+      # Signed proof that these files were built by this workflow from this repository.
+      # Check a download with: gh attestation verify <file> --repo zenoxart/DragonDAW-RS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/*.zip, dist/*.tar.gz'
       - name: Replace the nightly release
         run: |
           set -euo pipefail
