@@ -382,6 +382,8 @@ impl eframe::App for DragonApp {
         views::overlays::palette(ctx, &mut self.st);
         views::overlays::toasts(ctx, &mut self.st);
         views::overlays::recovery(ctx, &mut self.st);
+        self.st.poll_trust();
+        views::overlays::trust_prompt(ctx, &mut self.st);
         crate::crash::window(ctx, &mut self.st);
         // A project that has been open (compiled and running) for a moment opened fine.
         if let Some(n) = self.st.open_guard {

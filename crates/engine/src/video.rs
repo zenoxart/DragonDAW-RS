@@ -146,6 +146,8 @@ fn no_window(cmd: &mut Command) {
 
 /// The LGPL ffmpeg builds (BtbN's official automated builds) for Windows and Linux.
 pub const FFMPEG_WIN_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip";
+/// The checksums the ffmpeg builds are published with.
+pub const FFMPEG_SUMS_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256";
 pub const FFMPEG_LINUX_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-lgpl.tar.xz";
 
 /// Whether [`install_ffmpeg`] can fetch ffmpeg on this system (Windows and x86-64 Linux).
@@ -176,12 +178,22 @@ pub fn install_ffmpeg() -> Result<PathBuf> {
     std::fs::create_dir_all(&tmp).map_err(io)?;
     let archive = tmp.join(if cfg!(windows) { "ffmpeg.zip" } else { "ffmpeg.tar.xz" });
     let result = (|| {
-        run(Command::new(if cfg!(windows) { "curl.exe" } else { "curl" }).args(["-fL", "--retry", "3", "-o"]).arg(&archive).arg(install_url()))?;
+        use crate::trust::system_tool;
+        let curl = system_tool(if cfg!(windows) { "curl.exe" } else { "curl" });
+        run(Command::new(&curl).args(["-fL", "--retry", "3", "-o"]).arg(&archive).arg(install_url()))?;
+        // The archive is a program we are about to run: it must match the checksum its publisher lists.
+        let sums = String::from_utf8_lossy(&run(Command::new(&curl).args(["-fsSL", "--retry", "3"]).arg(FFMPEG_SUMS_URL))?).into_owned();
+        let name = install_url().rsplit('/').next().unwrap_or_default();
+        let want = crate::trust::checksum_for(&sums, name).ok_or_else(|| EngineError::Io(format!("no published checksum for {name} – not installed")))?;
+        let got = crate::trust::sha256_file(&archive).map_err(io)?;
+        if got != want {
+            return Err(EngineError::Io("the ffmpeg download does not match its published checksum – not installed".into()));
+        }
         // tar unpacks zip files too on Windows (bsdtar); fall back to PowerShell if it is missing.
-        let tar = run(Command::new(if cfg!(windows) { "tar.exe" } else { "tar" }).arg("-xf").arg(&archive).arg("-C").arg(&tmp));
+        let tar = run(Command::new(system_tool(if cfg!(windows) { "tar.exe" } else { "tar" })).arg("-xf").arg(&archive).arg("-C").arg(&tmp));
         if tar.is_err() && cfg!(windows) {
             let ps = |p: &Path| p.to_string_lossy().replace('\'', "''");
-            run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command"]).arg(format!("Expand-Archive -Force -Path '{}' -DestinationPath '{}'", ps(&archive), ps(&tmp))))?;
+            run(Command::new(system_tool("powershell.exe")).args(["-NoProfile", "-NonInteractive", "-Command"]).arg(format!("Expand-Archive -Force -Path '{}' -DestinationPath '{}'", ps(&archive), ps(&tmp))))?;
         } else {
             tar?;
         }
@@ -245,6 +257,7 @@ fn run(cmd: &mut Command) -> Result<Vec<u8>> {
 
 /// Reads duration, frame rate and size of a video file.
 pub fn probe(path: &Path) -> Result<VideoRef> {
+    crate::trust::check_read(path)?;
     let out = run(Command::new(ffprobe()).args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate:format=duration", "-of", "default=noprint_wrappers=1"]).arg(path))?;
     let text = String::from_utf8_lossy(&out);
     let mut v = VideoRef { path: path.to_path_buf(), ..Default::default() };
@@ -273,6 +286,7 @@ pub fn probe(path: &Path) -> Result<VideoRef> {
 
 /// Extracts the soundtrack to a 48 kHz stereo WAV. Returns `false` when the file has no audio.
 pub fn extract_audio(path: &Path, out: &Path) -> Result<bool> {
+    crate::trust::check_read(path)?;
     if let Some(d) = out.parent() {
         let _ = std::fs::create_dir_all(d);
     }
@@ -286,6 +300,7 @@ pub fn extract_audio(path: &Path, out: &Path) -> Result<bool> {
 
 /// One RGBA frame at `seconds`, scaled to `width` pixels wide. Returns `(width, height, rgba)`.
 pub fn frame_at(path: &Path, seconds: f64, width: u32, src_w: u32, src_h: u32) -> Result<(u32, u32, Vec<u8>)> {
+    crate::trust::check_read(path)?;
     let width = width.max(16) & !1;
     let height = (((src_h as f64 / src_w.max(1) as f64) * width as f64).round() as u32).max(2) & !1;
     let rgba = run(Command::new(ffmpeg()).args(["-v", "error", "-ss", &format!("{:.3}", seconds.max(0.0)), "-i"]).arg(path).args([

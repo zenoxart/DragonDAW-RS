@@ -192,6 +192,10 @@ pub struct Host;
 
 impl PluginFactory for Host {
     fn create_effect(&mut self, p: &PluginRef, rate: f32, max_block: usize) -> Option<Box<dyn Effect>> {
+        // Only plugin files from known places (see `crate::trust`): a project can name any path.
+        let path = crate::trust::resolve_plugin(p)?;
+        let resolved = PluginRef { path, ..p.clone() };
+        let p = &resolved;
         breadcrumb(p, "effect", || {
             let r: Result<Box<dyn Effect>> = match p.format {
                 PluginFormat::Clap => clap::ClapPlugin::load(p, rate, max_block, false).map(|x| Box::new(x) as Box<dyn Effect>),
@@ -202,6 +206,10 @@ impl PluginFactory for Host {
     }
 
     fn create_instrument(&mut self, p: &PluginRef, rate: f32, max_block: usize) -> Option<Box<dyn InstrumentVoice>> {
+        // Only plugin files from known places (see `crate::trust`): a project can name any path.
+        let path = crate::trust::resolve_plugin(p)?;
+        let resolved = PluginRef { path, ..p.clone() };
+        let p = &resolved;
         breadcrumb(p, "instrument", || {
             let r: Result<Box<dyn InstrumentVoice>> = match p.format {
                 PluginFormat::Clap => clap::ClapPlugin::load(p, rate, max_block, true).map(|x| Box::new(x) as Box<dyn InstrumentVoice>),

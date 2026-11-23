@@ -61,6 +61,8 @@ pub struct Release {
     pub asset_name: String,
     pub asset_url: String,
     pub size: u64,
+    /// The archive's SHA-256 as GitHub reports it (hex); the download is checked against it.
+    pub sha256: Option<String>,
 }
 
 /// The archive name part for this platform (as the release workflow names them).
@@ -83,10 +85,24 @@ fn version_key(v: &str) -> Vec<u64> {
     v.trim_start_matches('v').split(['-', '+']).next().unwrap_or("").split('.').map(|p| p.parse().unwrap_or(0)).collect()
 }
 
-fn asset(release: &Value, platform: &str) -> Option<(String, String, u64)> {
+/// Only this repository's release downloads are accepted.
+fn download_prefix() -> String {
+    format!("https://github.com/{REPO}/releases/download/")
+}
+
+/// A file name that can't leave the folder it is saved in (no separators, no "..").
+fn plain_name(name: &str) -> bool {
+    !name.is_empty() && name.len() < 200 && !name.contains("..") && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-+".contains(c))
+}
+
+/// (name, url, size, sha256) of this platform's archive in a release.
+fn asset(release: &Value, platform: &str) -> Option<(String, String, u64, Option<String>)> {
     release["assets"].as_array()?.iter().find_map(|a| {
         let name = a["name"].as_str()?;
-        (name.contains(platform) && (name.ends_with(".zip") || name.ends_with(".tar.gz"))).then(|| (name.to_string(), a["browser_download_url"].as_str().unwrap_or_default().to_string(), a["size"].as_u64().unwrap_or(0)))
+        let url = a["browser_download_url"].as_str().unwrap_or_default();
+        let ok = name.contains(platform) && (name.ends_with(".zip") || name.ends_with(".tar.gz")) && plain_name(name) && url.starts_with(&download_prefix());
+        let sha = a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())).map(|h| h.to_ascii_lowercase());
+        ok.then(|| (name.to_string(), url.to_string(), a["size"].as_u64().unwrap_or(0), sha))
     })
 }
 
@@ -103,10 +119,10 @@ pub fn pick(releases: &Value, build: &Build, platform: &str) -> Option<Release> 
         .filter(|r| build.channel != "stable" || !r["prerelease"].as_bool().unwrap_or(false))
         .filter_map(|r| asset(r, platform).map(|a| (r, a)))
         .max_by(|a, b| version_key(a.0["tag_name"].as_str().unwrap_or("")).cmp(&version_key(b.0["tag_name"].as_str().unwrap_or(""))));
-    if let Some((r, (name, url, size))) = stable {
+    if let Some((r, (name, url, size, sha256))) = stable {
         let tag = r["tag_name"].as_str().unwrap_or("");
         if version_key(tag) > mine {
-            return Some(Release { id: tag.into(), label: tag.trim_start_matches('v').into(), page: r["html_url"].as_str().unwrap_or("").into(), asset_name: name, asset_url: url, size });
+            return Some(Release { id: tag.into(), label: tag.trim_start_matches('v').into(), page: r["html_url"].as_str().unwrap_or("").into(), asset_name: name, asset_url: url, size, sha256 });
         }
     }
     if build.channel == "stable" {
@@ -115,17 +131,19 @@ pub fn pick(releases: &Value, build: &Build, platform: &str) -> Option<Release> 
     // Nightly: a different commit is a newer build (the nightly release is replaced on every green main).
     let nightly = list.iter().find(|r| r["tag_name"].as_str() == Some("nightly"))?;
     let sha = nightly["target_commitish"].as_str().unwrap_or("");
-    let (name, url, size) = asset(nightly, platform)?;
+    let (name, url, size, sha256) = asset(nightly, platform)?;
     // The commit is also in the archive name ("dragon-daw-nightly-1a2b3c4-…").
     let sha = if sha.len() >= 7 { sha.to_string() } else { name.split("nightly-").nth(1).and_then(|s| s.split('-').next()).unwrap_or("").to_string() };
     if sha.is_empty() || (!build.sha.is_empty() && (sha.starts_with(&build.sha) || build.sha.starts_with(&sha))) {
         return None;
     }
-    Some(Release { id: format!("nightly-{}", short(&sha)), label: format!("nightly {}", short(&sha)), page: nightly["html_url"].as_str().unwrap_or("").into(), asset_name: name, asset_url: url, size })
+    Some(Release { id: format!("nightly-{}", short(&sha)), label: format!("nightly {}", short(&sha)), page: nightly["html_url"].as_str().unwrap_or("").into(), asset_name: name, asset_url: url, size, sha256 })
 }
 
+use dragon_engine::trust::{sha256_file, system_tool};
+
 fn curl() -> Command {
-    let mut cmd = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
+    let mut cmd = Command::new(system_tool(if cfg!(windows) { "curl.exe" } else { "curl" }));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -149,8 +167,16 @@ pub fn check(build: &Build) -> Result<Option<Release>, String> {
     Ok(pick(&json, build, platform()))
 }
 
-/// Downloads `release` into `dir` (blocking); returns the file.
+/// Downloads `release` into `dir` (blocking) and checks it against the SHA-256 GitHub published for it;
+/// returns the file. A release without a checksum, from another place or with an odd file name is
+/// refused: an update is installed over the app, so it must be exactly what was released.
 pub fn download(release: &Release, dir: &Path) -> Result<PathBuf, String> {
+    if !plain_name(&release.asset_name) || !release.asset_url.starts_with(&download_prefix()) {
+        return Err("the update does not come from Dragon DAW's releases".into());
+    }
+    let Some(expected) = release.sha256.clone() else {
+        return Err(format!("this release has no published checksum, so it is not installed automatically – download it from {}", release.page));
+    };
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let file = dir.join(&release.asset_name);
     let part = dir.join(format!("{}.part", release.asset_name));
@@ -158,6 +184,11 @@ pub fn download(release: &Release, dir: &Path) -> Result<PathBuf, String> {
     if !out.status.success() {
         let _ = std::fs::remove_file(&part);
         return Err(format!("the download failed ({})", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let got = sha256_file(&part).map_err(|e| e.to_string())?;
+    if got != expected {
+        let _ = std::fs::remove_file(&part);
+        return Err("the download does not match the released file (checksum differs) – it was deleted".into());
     }
     std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
     Ok(file)
@@ -174,7 +205,9 @@ fn downloads() -> PathBuf {
 fn write_installer(zip: &Path) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("the app's folder is unknown")?;
-    let tmp = std::env::temp_dir().join("dragon-update");
+    // Unique names: nothing else can have prepared (or swap in) the script or the folder it unpacks to.
+    let tag = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let tmp = std::env::temp_dir().join(format!("dragon-update-{tag}"));
     let ps = |p: &Path| p.to_string_lossy().replace('\'', "''");
     let script = format!(
         "$ErrorActionPreference='Stop'\r\n\
@@ -197,8 +230,12 @@ fn write_installer(zip: &Path) -> Result<PathBuf, String> {
         dir = ps(dir),
         exe = ps(&exe),
     );
-    let path = std::env::temp_dir().join("dragon-update.ps1");
-    std::fs::write(&path, script).map_err(|e| e.to_string())?;
+    let path = std::env::temp_dir().join(format!("dragon-update-{tag}.ps1"));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
+        f.write_all(script.as_bytes()).map_err(|e| e.to_string())?;
+    }
     Ok(path)
 }
 
@@ -206,7 +243,7 @@ fn write_installer(zip: &Path) -> Result<PathBuf, String> {
 fn install_and_restart(st: &mut State, zip: &Path) {
     match write_installer(zip) {
         Ok(script) => {
-            let mut cmd = Command::new("powershell");
+            let mut cmd = Command::new(system_tool("powershell.exe"));
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
@@ -454,12 +491,39 @@ mod tests {
         json!({
             "tag_name": tag, "prerelease": pre, "draft": false, "target_commitish": sha,
             "html_url": format!("https://github.com/{REPO}/releases/tag/{tag}"),
-            "assets": assets.iter().map(|a| json!({"name": a, "browser_download_url": format!("https://example/{a}"), "size": 50_000_000})).collect::<Vec<_>>()
+            "assets": assets.iter().map(|a| json!({"name": a, "browser_download_url": format!("https://github.com/zenoxart/DragonDAW-RS/releases/download/t/{a}"), "size": 50_000_000, "digest": format!("sha256:{}", "ab".repeat(32))})).collect::<Vec<_>>()
         })
     }
 
     fn build(version: &str, sha: &str, channel: &str) -> Build {
         Build { version: version.into(), sha: sha.into(), channel: channel.into() }
+    }
+
+    #[test]
+    fn only_this_repositorys_files_with_plain_names_and_checksums() {
+        let b = build("1.0.0", "", "stable");
+        let mut r = rel("v2.0.0", false, "", &["dragon-daw-2.0.0-windows-x86_64.zip"]);
+        r["assets"][0]["browser_download_url"] = json!("https://evil.example/dragon-daw-2.0.0-windows-x86_64.zip");
+        assert!(pick(&json!([r]), &b, "windows-x86_64").is_none(), "another host");
+        let mut r = rel("v2.0.0", false, "", &["dragon-daw-2.0.0-windows-x86_64.zip"]);
+        r["assets"][0]["name"] = json!("..\\..\\dragon-daw-windows-x86_64.zip");
+        assert!(pick(&json!([r]), &b, "windows-x86_64").is_none(), "a name that leaves the folder");
+        let r = rel("v2.0.0", false, "", &["dragon-daw-2.0.0-windows-x86_64.zip"]);
+        let found = pick(&json!([r]), &b, "windows-x86_64").unwrap();
+        assert_eq!(found.sha256.as_deref(), Some("ab".repeat(32).as_str()));
+        // No checksum: not downloaded automatically.
+        let dir = std::env::temp_dir().join(format!("dragon-upd-{}", std::process::id()));
+        let none = Release { sha256: None, ..found.clone() };
+        assert!(download(&none, &dir).unwrap_err().contains("checksum"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sha256_of_a_file() {
+        let f = std::env::temp_dir().join(format!("dragon-sha-{}", std::process::id()));
+        std::fs::write(&f, b"abc").unwrap();
+        assert_eq!(sha256_file(&f).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let _ = std::fs::remove_file(&f);
     }
 
     #[test]
@@ -506,7 +570,15 @@ mod bar_tests {
     fn the_bar_shows_a_found_release_and_skip_hides_it() {
         let mut st = State::new(redhive_client_framework::AppContext::new("en"), crate::state::Settings { show_splash: false, ..Default::default() });
         assert!(!visible(&st));
-        let rel = Release { id: "v9.0.0".into(), label: "9.0.0".into(), page: String::new(), asset_name: "dragon-daw-9.0.0-windows-x86_64.zip".into(), asset_url: "https://example/x.zip".into(), size: 60_000_000 };
+        let rel = Release {
+            id: "v9.0.0".into(),
+            label: "9.0.0".into(),
+            page: String::new(),
+            asset_name: "dragon-daw-9.0.0-windows-x86_64.zip".into(),
+            asset_url: "https://example/x.zip".into(),
+            size: 60_000_000,
+            sha256: None,
+        };
         // A start-up check that finds a release opens the window (the chip stays in the corner).
         st.ui.update.checking = Some(Arc::new(Mutex::new(Some(Ok(Some(rel.clone()))))));
         poll(&mut st);

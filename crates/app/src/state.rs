@@ -23,6 +23,10 @@ pub struct Settings {
     pub device: DeviceConfig,
     pub plugin_folders: Vec<PathBuf>,
     pub plugins: Vec<PluginInfo>,
+    /// Plugin files outside the plugin folders that the user allowed a project to load.
+    pub trusted_plugins: Vec<PathBuf>,
+    /// Network locations (`\\server\share`) the user allowed projects to read from.
+    pub allowed_shares: Vec<String>,
     pub recent: Vec<PathBuf>,
     pub browser_folders: Vec<PathBuf>,
     pub autosave_minutes: u32,
@@ -56,6 +60,8 @@ impl Default for Settings {
             device: DeviceConfig::default(),
             plugin_folders: Vec::new(),
             plugins: Vec::new(),
+            trusted_plugins: Vec::new(),
+            allowed_shares: Vec::new(),
             recent: Vec::new(),
             browser_folders: Vec::new(),
             autosave_minutes: 3,
@@ -175,6 +181,10 @@ pub struct UiState {
     pub released: Vec<Option<Instant>>,
     /// The last note played live: the piano roll scrolls to it if it's out of view.
     pub follow_note: Option<u8>,
+    /// What an opened project wanted that was not loaded (plugins from unknown places, network files).
+    pub trust_prompt: Vec<dragon_engine::trust::Blocked>,
+    /// What the user chose to keep off (not asked again this session).
+    pub trust_dismissed: Vec<dragon_engine::trust::Blocked>,
     pub effect_windows: Vec<(Id, Id)>,
     pub instrument_windows: Vec<Id>,
     pub palette: Option<String>,
@@ -318,6 +328,8 @@ impl UiState {
             sounding: vec![0.0; 128],
             released: vec![None; 128],
             follow_note: None,
+            trust_prompt: Vec::new(),
+            trust_dismissed: Vec::new(),
             effect_windows: Vec::new(),
             instrument_windows: Vec::new(),
             palette: None,
@@ -555,6 +567,7 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
 impl State {
     pub fn new(ctx: AppContext, mut settings: Settings) -> Self {
         let kit = default_kit(&ctx.paths);
+        apply_trust(&settings);
         let mut session = Session::new(Project::empty(), None);
         // 200 was the old default: lift it to the new one (500); anything below 200 is raised to 200.
         if settings.undo_limit == 200 {
@@ -768,6 +781,40 @@ impl State {
                 }
             }
         });
+    }
+
+    /// Collects what the engine blocked since the last frame, for the trust prompt.
+    pub fn poll_trust(&mut self) {
+        for b in dragon_engine::trust::take_blocked() {
+            if !self.ui.trust_prompt.contains(&b) && !self.ui.trust_dismissed.contains(&b) {
+                self.ui.trust_prompt.push(b);
+            }
+        }
+    }
+
+    /// The user allowed what the trust prompt listed: remembered, and the project loads it now.
+    pub fn allow_blocked(&mut self) {
+        use dragon_engine::trust::Blocked;
+        for b in std::mem::take(&mut self.ui.trust_prompt) {
+            match b {
+                Blocked::Plugin { path, .. } => {
+                    dragon_engine::trust::trust_plugin_path(&path);
+                    if !self.settings.trusted_plugins.contains(&path) {
+                        self.settings.trusted_plugins.push(path);
+                    }
+                }
+                Blocked::Network { root } => {
+                    dragon_engine::trust::allow_network(&root);
+                    if !self.settings.allowed_shares.contains(&root) {
+                        self.settings.allowed_shares.push(root);
+                    }
+                }
+            }
+        }
+        self.save_settings();
+        self.session.cache.clear();
+        self.session.force_recompile();
+        self.toast("Allowed – loading them now", Severity::Info);
     }
 
     /// Re-plans the balance from the last measurement (no new render) with the report's style and kept
@@ -1945,6 +1992,17 @@ pub fn sanitize(s: &str) -> String {
     s.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
+/// Tells the engine which plugin files and network locations the user trusts (see `dragon_engine::trust`).
+pub fn apply_trust(s: &Settings) {
+    dragon_engine::trust::trust_plugins(s.plugins.iter().map(|p| (p.format, p.id.as_str(), p.path.as_path())));
+    for p in &s.trusted_plugins {
+        dragon_engine::trust::trust_plugin_path(p);
+    }
+    for r in &s.allowed_shares {
+        dragon_engine::trust::allow_network(r);
+    }
+}
+
 fn chrono_like_stamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     format!("{secs}")
@@ -1955,6 +2013,8 @@ impl State {
     /// Adds the first effect of plugin file `path` to the master and opens its window (scripted tests).
     pub fn open_plugin_on_master(&mut self, path: &Path) {
         let format = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("clap")) { dragon_engine::model::PluginFormat::Clap } else { dragon_engine::model::PluginFormat::Vst3 };
+        // Named on purpose (DRAGON_SMOKE_PLUGIN): allowed.
+        dragon_engine::trust::trust_plugin_path(path);
         let infos = match dragon_engine::plugins::scan_file(format, path) {
             Ok(i) => i,
             Err(e) => {

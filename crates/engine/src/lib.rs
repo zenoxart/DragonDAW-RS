@@ -50,6 +50,7 @@ pub mod repair;
 pub mod samples;
 pub mod surround;
 pub mod time;
+pub mod trust;
 pub mod video;
 pub mod wt;
 pub mod wt_library;

@@ -78,12 +78,15 @@ pub fn load(path: &Path) -> Result<Project> {
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     rewrite_paths(&mut p, |f| if f.is_relative() && !f.as_os_str().is_empty() { dir.join(f) } else { f.to_path_buf() });
     p.repair();
+    // Before anything touches a file: network locations wait for the user (see `crate::trust`).
+    crate::trust::block_network_files(p.referenced_files().iter().map(PathBuf::as_path), Some(path));
     Ok(p)
 }
 
 /// Files the project references that do not exist.
 pub fn missing_files(p: &Project) -> Vec<PathBuf> {
-    p.referenced_files().into_iter().filter(|f| !f.exists()).collect()
+    // Blocked network files are not checked (that alone would reach out to the server).
+    p.referenced_files().into_iter().filter(|f| crate::trust::may_read(f) && !f.exists()).collect()
 }
 
 /// Replaces every file path in the project (clips, takes, samplers, drum pads).
@@ -118,7 +121,13 @@ fn relative_to(f: &Path, dir: &Path) -> PathBuf {
     f.strip_prefix(dir).map(Path::to_path_buf).unwrap_or_else(|_| f.to_path_buf())
 }
 
-/// Copies every referenced file into `<project dir>/Samples` (renaming on clashes) and points the project
+/// Whether a file is something a project legitimately references: audio, video or MIDI.
+pub fn is_media(f: &Path) -> bool {
+    const EXT: &[&str] = &["wav", "wave", "aif", "aiff", "flac", "mp3", "ogg", "oga", "opus", "m4a", "aac", "caf", "w64", "mp4", "mov", "mkv", "webm", "avi", "m4v", "mid", "midi"];
+    f.extension().and_then(|e| e.to_str()).is_some_and(|e| EXT.iter().any(|x| x.eq_ignore_ascii_case(e)))
+}
+
+/// Copies every referenced media file into `<project dir>/Samples` (renaming on clashes) and points the project
 /// at the copies – the project folder then contains everything it needs. The reference track and the
 /// video are included.
 pub fn collect_files(p: &mut Project, project_path: &Path) -> Result<usize> {
@@ -128,7 +137,9 @@ pub fn collect_files(p: &mut Project, project_path: &Path) -> Result<usize> {
     let mut map = std::collections::HashMap::new();
     let mut copied = 0;
     for f in p.referenced_files() {
-        if f.starts_with(&dir) || !f.exists() {
+        // Only media files are collected: a project naming another file (a key, a document) must not get
+        // it copied into a folder that may be shared. Blocked network files are left alone.
+        if f.starts_with(&dir) || !is_media(&f) || !crate::trust::may_read(&f) || !f.exists() {
             continue;
         }
         let name = f.file_name().map(|s| s.to_os_string()).unwrap_or_default();

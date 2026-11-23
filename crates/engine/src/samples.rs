@@ -93,6 +93,7 @@ pub fn decode(path: &Path) -> Result<AudioData> {
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
+    crate::trust::check_read(path)?;
     let file = std::fs::File::open(path).map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();

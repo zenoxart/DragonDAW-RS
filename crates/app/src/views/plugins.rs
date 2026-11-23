@@ -53,6 +53,7 @@ pub fn poll_scan(st: &mut State) {
     if let Some((list, errors)) = redhive_client_framework::runtime::poll(&mut st.ui.plugin_scan) {
         let n = list.len();
         st.settings.plugins = list;
+        crate::state::apply_trust(&st.settings);
         st.save_settings();
         for e in &errors {
             st.ctx.log.warn("plugins", e.clone());

@@ -126,3 +126,53 @@ pub fn about(ctx: &egui::Context, st: &mut State) {
     });
     st.ui.about = open;
 }
+
+/// Asks before an opened project may load a plugin from an unknown place or read from a network location.
+pub fn trust_prompt(ctx: &egui::Context, st: &mut State) {
+    use dragon_engine::trust::Blocked;
+    if st.ui.trust_prompt.is_empty() {
+        return;
+    }
+    let (mut allow, mut keep_off) = (false, false);
+    egui::Window::new("This project wants to load more").id(egui::Id::new("trust_prompt")).collapsible(false).resizable(false).default_width(560.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        let plugins: Vec<&Blocked> = st.ui.trust_prompt.iter().filter(|b| matches!(b, Blocked::Plugin { .. })).collect();
+        let shares: Vec<&Blocked> = st.ui.trust_prompt.iter().filter(|b| matches!(b, Blocked::Network { .. })).collect();
+        if !plugins.is_empty() {
+            ui.label(RichText::new("Plugins from places Dragon DAW doesn't know").strong());
+            ui.label(RichText::new("A plugin is a program: it runs with your rights. These are not in your plugin folders or your scanned plugins, so they were not loaded.").small().color(theme::TEXT_DIM));
+            for b in &plugins {
+                if let Blocked::Plugin { name, path } = b {
+                    ui.label(format!("  {name}"));
+                    ui.label(RichText::new(format!("    {}", path.display())).small().color(theme::TEXT_DIM));
+                }
+            }
+            ui.add_space(8.0);
+        }
+        if !shares.is_empty() {
+            ui.label(RichText::new("Files on other computers").strong());
+            ui.label(RichText::new("Opening files on a network location signs you in to that computer. These were not opened.").small().color(theme::TEXT_DIM));
+            for b in &shares {
+                if let Blocked::Network { root } = b {
+                    ui.label(format!("  {root}"));
+                }
+            }
+            ui.add_space(8.0);
+        }
+        ui.label(RichText::new("Only allow this if you know where the project comes from. Without them the project still opens; those slots stay silent.").small());
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.add(egui::Button::new(RichText::new("Keep them off").strong().color(egui::Color32::WHITE)).fill(theme::ACCENT)).clicked() {
+                keep_off = true;
+            }
+            if ui.button("Allow and load them").on_hover_text("Remembered: these plugins and locations are allowed from now on").clicked() {
+                allow = true;
+            }
+        });
+    });
+    if allow {
+        st.allow_blocked();
+    } else if keep_off {
+        let list = std::mem::take(&mut st.ui.trust_prompt);
+        st.ui.trust_dismissed.extend(list);
+    }
+}
