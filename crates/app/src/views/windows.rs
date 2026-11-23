@@ -20,18 +20,26 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
         let full = st.ui.fx_fullscreen == Some((m, i));
         // Full screen uses a window of its own, so the fitted window keeps its size and place for when you leave.
         let wid = if full { egui::Id::new(("fx.full", m, i)) } else { egui::Id::new(("fx", m, i)) };
+        let own_face = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_some_and(|x| super::fx_jade::own_face(&x.effect) || super::fx_forge::is_forge(&x.effect));
+        let forge = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_some_and(|x| super::fx_forge::is_forge(&x.effect));
         let mut w = egui::Window::new(title).id(wid).open(&mut open).resizable(true).vscroll(true);
         w = if full {
             w.fixed_rect(ctx.screen_rect().shrink(4.0)).collapsible(false)
         } else {
             // Wide editors (all four multiband columns side by side) open wider.
             let wide = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).is_some_and(|x| x.effect == "multiband");
-            w.default_width(if wide { 980.0 } else { 600.0 }).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
+            if own_face {
+                // A module with its own face: exactly as wide as the module, as tall as its content.
+                let fw = if forge { super::fx_forge::window_width() } else { super::fx_jade::window_width() };
+                w.resizable(false).vscroll(false).default_width(fw).min_width(fw).max_width(fw)
+            } else {
+                w.default_width(if wide { 980.0 } else { 600.0 }).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
+            }
         };
         // The smallest the window may get: wide enough for the panel's widest control and tall enough for
         // all of the editor (as measured last frame), within the screen.
         let need_id = egui::Id::new(("fx.need", m, i));
-        if !full {
+        if !full && !own_face {
             if let Some([need_w, need_h, win_w]) = ctx.data(|d| d.get_temp::<[f32; 3]>(need_id)) {
                 let screen = ctx.screen_rect();
                 let max_h = screen.height() - 120.0;
@@ -518,7 +526,10 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     // The display reads the same measured output (its meters show real values, not a demo).
     ui.data_mut(|d| d.insert_temp(egui::Id::new(("fx.hero", m, i)).with("out_level"), lv.unwrap_or((0.0, 0.0, 0.0))));
     let dev = egui::Frame::NONE.inner_margin(egui::Margin { left: 14 + ear, right: 14 + ear, top: 8, bottom: 14 }).show(ui, |ui| {
-        super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: ins.enabled, gr, level, time, key: egui::Id::new(("fx.unit", m, i)) });
+        // Dragonforge engraves its own name and meters.
+        if !super::fx_forge::is_forge(def.id) {
+            super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: ins.enabled, gr, level, time, key: egui::Id::new(("fx.unit", m, i)) });
+        }
         ui.add_space(6.0);
         let bezel = egui::Frame::NONE.fill(egui::Color32::from_rgb(0x08, 0x09, 0x0b)).corner_radius(7.0).inner_margin(egui::Margin::same(3)).stroke(if finish.gnostic() {
             egui::Stroke::new(2.0_f32, super::analog::GNOSTIC_GOLD.gamma_multiply(0.75))
@@ -526,8 +537,11 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
             egui::Stroke::new(2.0_f32, shade(face, 0.55))
         });
         // Jadefang has its own face (a classic EQ module layout, no display); the others a display.
-        let own_face = super::fx_jade::own_face(def.id);
-        let (edits, _) = if own_face {
+        let own_face = super::fx_jade::own_face(def.id) || super::fx_forge::is_forge(def.id);
+        let (edits, _) = if super::fx_forge::is_forge(def.id) {
+            let live = super::fx_forge::Live { tele: &tele, level, time, enabled: ins.enabled };
+            (super::fx_forge::body(ui, def, &ins.params, &live, egui::Id::new(("fx.forge", m, i))), false)
+        } else if own_face {
             (super::fx_jade::body(ui, def, &ins.params, ccol, egui::Id::new(("fx.jade", m, i))), false)
         } else {
             bezel.show(ui, |ui| super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) })).inner

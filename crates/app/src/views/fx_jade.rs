@@ -14,8 +14,14 @@ use std::collections::BTreeMap;
 use std::f32::consts::PI;
 
 const LEFT_W: f32 = 236.0;
-const ROW_H: f32 = 96.0;
-const MODULE_W: f32 = LEFT_W + 420.0;
+const ROW_H: f32 = 84.0;
+/// The black panel, a gap, then the rows (gain, freq with its name under it).
+const MODULE_W: f32 = LEFT_W + 24.0 + 270.0;
+
+/// The editor window's width for the module (faceplate ears and margins included).
+pub fn window_width() -> f32 {
+    MODULE_W + 2.0 * (14.0 + super::analog::EAR) + 14.0
+}
 const WHITE: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xee);
 const DIM: Color32 = Color32::from_rgb(0xc8, 0xd8, 0xc8);
 
@@ -39,7 +45,7 @@ const ROWS: [Row; 6] = [
 
 /// The height the face needs.
 pub fn height() -> f32 {
-    ROWS.len() as f32 * ROW_H + 16.0
+    ROWS.len() as f32 * ROW_H + 10.0
 }
 
 fn value(def: &EffectDef, params: &BTreeMap<String, f32>, id: &str) -> f32 {
@@ -100,8 +106,8 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
     p.text(Pos2::new(cx, left.top() + 66.0), egui::Align2::CENTER_CENTER, "CHARACTER EQ", egui::FontId::proportional(15.0), WHITE);
     // The keys, in a recessed well.
     let model = value(def, params, "model").round().max(0.0) as usize;
-    let key_h = 30.0;
-    let gap = 7.0;
+    let key_h = 27.0;
+    let gap = 6.0;
     let well = Rect::from_min_size(Pos2::new(left.left() + 18.0, left.top() + 86.0), Vec2::new(LEFT_W - 36.0, MODELS.len() as f32 * (key_h + gap) - gap + 22.0));
     p.rect_filled(well, 6.0, Color32::from_rgb(0x0b, 0x0c, 0x0d));
     p.rect_stroke(well, 6.0, Stroke::new(2.0_f32, Color32::from_black_alpha(230)), egui::StrokeKind::Inside);
@@ -133,8 +139,8 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
         }
     }
     // INPUT, big and white, with its scale.
-    let in_c = Pos2::new(cx, well.bottom() + 74.0);
-    let in_rad = 40.0;
+    let in_c = Pos2::new(cx, well.bottom() + 62.0);
+    let in_rad = 34.0;
     for (n, label) in [(0.0, "-24"), (0.25, "-12"), (0.5, "0"), (0.75, "+12"), (1.0, "+24")] {
         let a = PI * 0.75 + PI * 1.5 * n;
         p.text(in_c + Vec2::new(a.cos(), a.sin()) * (in_rad + 20.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(12.0), WHITE);
@@ -151,9 +157,9 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
         }
         r.on_hover_text(format!("Input {} – drives the voicing (the output follows it back); drag, Shift = fine, double-click resets", ip.format(ip.denormalize(n))));
     }
-    p.text(Pos2::new(cx, in_c.y + in_rad + 22.0), egui::Align2::CENTER_CENTER, "INPUT", egui::FontId::proportional(16.0), WHITE);
+    p.text(Pos2::new(cx, in_c.y + in_rad + 20.0), egui::Align2::CENTER_CENTER, "INPUT", egui::FontId::proportional(15.0), WHITE);
     // OUTPUT, small.
-    let out_c = Pos2::new(cx, (in_c.y + in_rad + 74.0).min(left.bottom() - 48.0));
+    let out_c = Pos2::new(cx, (in_c.y + in_rad + 62.0).min(left.bottom() - 44.0));
     let v = value(def, params, "output");
     if let Some(nv) = knob(ui, salt, prm("output"), v, out_c, 18.0, KnobStyle::Black, accent) {
         out.push(("output".into(), nv));
@@ -162,10 +168,10 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
     p.text(Pos2::new(cx, out_c.y + 40.0), egui::Align2::CENTER_CENTER, "OUTPUT", egui::FontId::proportional(11.0), WHITE);
 
     // ---- the band rows on the jade plate
-    let x0 = left.right() + 28.0;
+    let x0 = left.right() + 24.0;
     for (k, (name, gain, freq, (lo, hi))) in ROWS.iter().enumerate() {
-        let top = rect.top() + 8.0 + k as f32 * ROW_H;
-        let gc = Pos2::new(x0 + 60.0, top + 40.0);
+        let top = rect.top() + 6.0 + k as f32 * ROW_H;
+        let gc = Pos2::new(x0 + 58.0, top + 34.0);
         let gp = prm(gain);
         let v = value(def, params, gain);
         if let Some(nv) = knob(ui, salt, gp, v, gc, 30.0, KnobStyle::Black, accent) {
@@ -177,8 +183,8 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
             _ => ("-12", "+12"),
         };
         ends(&p, gc, 30.0, glo, ghi, 10.5, DIM);
-        p.text(Pos2::new(gc.x, gc.y + 46.0), egui::Align2::CENTER_CENTER, "GAIN", egui::FontId::proportional(13.0), WHITE);
-        let fc = Pos2::new(x0 + 190.0, top + 34.0);
+        p.text(Pos2::new(gc.x, gc.y + 42.0), egui::Align2::CENTER_CENTER, "GAIN", egui::FontId::proportional(12.0), WHITE);
+        let fc = Pos2::new(x0 + 196.0, top + 28.0);
         match freq {
             Some(f) => {
                 let fp = prm(f);
@@ -188,17 +194,21 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
                 }
                 ends(&p, fc, 22.0, lo, hi, 10.0, DIM);
                 let shown = if *f == "air_freq" { AIR_FREQS.get(v.round().max(0.0) as usize).copied().unwrap_or("").to_string() } else { fp.format(v) };
-                p.text(Pos2::new(fc.x, fc.y + 32.0), egui::Align2::CENTER_CENTER, "FREQ", egui::FontId::proportional(12.5), WHITE);
-                p.text(Pos2::new(fc.x, fc.y + 46.0), egui::Align2::CENTER_CENTER, shown, egui::FontId::monospace(9.5), DIM);
+                p.text(Pos2::new(fc.x, fc.y + 30.0), egui::Align2::CENTER_CENTER, "FREQ", egui::FontId::proportional(12.0), WHITE);
+                let _ = shown;
             }
             None => {
-                p.text(Pos2::new(fc.x, fc.y + 6.0), egui::Align2::CENTER_CENTER, "18 Hz · broad", egui::FontId::proportional(11.0), DIM);
+                p.text(Pos2::new(fc.x, fc.y + 8.0), egui::Align2::CENTER_CENTER, "18 Hz", egui::FontId::proportional(11.0), DIM);
+                p.text(Pos2::new(fc.x, fc.y + 22.0), egui::Align2::CENTER_CENTER, "very broad", egui::FontId::proportional(10.0), DIM);
             }
         }
-        p.text(Pos2::new(fc.x + 90.0, top + 40.0), egui::Align2::LEFT_CENTER, *name, egui::FontId::proportional(24.0), WHITE);
+        // The band's name, bold under its FREQ knob (as printed on the module).
+        let name_pos = Pos2::new(fc.x, fc.y + 49.0);
+        p.text(name_pos + Vec2::new(0.6, 0.0), egui::Align2::CENTER_CENTER, *name, egui::FontId::proportional(17.0), WHITE);
+        p.text(name_pos, egui::Align2::CENTER_CENTER, *name, egui::FontId::proportional(17.0), WHITE);
         if k + 1 < ROWS.len() {
-            let y = top + ROW_H - 2.0;
-            p.line_segment([Pos2::new(x0 - 8.0, y), Pos2::new((x0 + 360.0).min(rect.right() - 8.0), y)], Stroke::new(1.0_f32, Color32::from_black_alpha(70)));
+            let y = top + ROW_H - 3.0;
+            p.line_segment([Pos2::new(x0 - 6.0, y), Pos2::new(rect.right() - 4.0, y)], Stroke::new(1.0_f32, Color32::from_black_alpha(70)));
         }
     }
     out
@@ -267,13 +277,13 @@ mod tests {
         let left = full_left + full_w / 2.0 - MODULE_W / 2.0;
         let top = 8.0;
         // The third key (Ember).
-        let key = Pos2::new(left + LEFT_W / 2.0, top + 86.0 + 11.0 + 2.0 * 37.0 + 15.0);
+        let key = Pos2::new(left + LEFT_W / 2.0, top + 86.0 + 11.0 + 2.0 * 33.0 + 13.0);
         frame(&ctx, &params, vec![egui::Event::PointerMoved(key)]);
         frame(&ctx, &params, vec![egui::Event::PointerButton { pos: key, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
         let got = frame(&ctx, &params, vec![egui::Event::PointerButton { pos: key, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
         assert!(got.contains(&("model".to_string(), 2.0)), "{got:?}");
         // Drag the HF gain knob (row 2) up.
-        let knob = Pos2::new(left + LEFT_W + 28.0 + 60.0, top + 8.0 + ROW_H + 40.0);
+        let knob = Pos2::new(left + LEFT_W + 24.0 + 58.0, top + 6.0 + ROW_H + 34.0);
         frame(&ctx, &params, vec![egui::Event::PointerMoved(knob)]);
         frame(&ctx, &params, vec![egui::Event::PointerButton { pos: knob, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
         let mut all = Vec::new();
