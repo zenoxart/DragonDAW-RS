@@ -456,6 +456,9 @@ pub struct ParametricEq {
     lp: Box<LinearPhase>,
     lin_since: usize,
     lin_pending: bool,
+    /// Where in the dynamic bands' update grid the next sample is (kept across calls, so the gain moves
+    /// at the same moments whatever the sound card's block size).
+    dyn_phase: usize,
     solo: usize,
     solo_f: [Biquad; 2],
     pre: Analyzer,
@@ -485,6 +488,7 @@ impl ParametricEq {
             lp: Box::new(LinearPhase::new()),
             lin_since: 0,
             lin_pending: false,
+            dyn_phase: 0,
             solo: 0,
             solo_f: [Biquad::default(); 2],
             pre: Analyzer::new(rate),
@@ -583,9 +587,13 @@ impl ParametricEq {
 
     /// The minimum-phase band filters (dynamic bands and stereo placement included) at `self.frate`.
     fn run_bands(&mut self, l: &mut [f32], r: &mut [f32]) {
-        const SUB: usize = 32;
+        // A dynamic band's gain is re-set every SUB samples from the level heard so far (causal), on a grid
+        // that runs on across calls – block-size independent, in small steps.
+        const SUB: usize = 16;
         let att = (-1.0 / (0.005 * self.frate)).exp();
         let rel = (-1.0 / (0.080 * self.frate)).exp();
+        let phase0 = self.dyn_phase;
+        self.dyn_phase = (phase0 + l.len()) % SUB;
         for i in 0..EQ_BANDS {
             let b = self.bands[i];
             if !b.on {
@@ -594,23 +602,26 @@ impl ParametricEq {
             let dynamic = b.dyn_range.abs() > 0.05;
             let mut start = 0;
             while start < l.len() {
-                let end = (start + SUB).min(l.len());
+                let pos = (phase0 + start) % SUB;
+                let end = (start + SUB - pos).min(l.len());
                 if dynamic {
-                    // Detector on this band's region of the signal it sees; the gain moves from the static
-                    // gain towards gain + range as the level rises over the threshold (6 dB to full range).
+                    // The gain moves from the static gain towards gain + range as the level rises over the
+                    // threshold (6 dB to full range).
                     let d = &mut self.dyns[i];
+                    if pos == 0 {
+                        let over = (crate::dsp::gain_to_db(d.env.max(1e-6)) - b.thr) / 6.0;
+                        let want = b.dyn_range * over.clamp(0.0, 1.0);
+                        if (want - d.applied).abs() > 0.01 {
+                            d.applied = want;
+                            for f in &mut self.filters[i] {
+                                f.set(b.kind, b.freq, b.q, b.gain + want, b.slope, self.frate);
+                            }
+                        }
+                    }
                     for k in start..end {
                         let x = d.det.process(0.5 * (l[k] + r[k])).abs();
                         let c = if x > d.env { att } else { rel };
                         d.env = x + (d.env - x) * c;
-                    }
-                    let over = (crate::dsp::gain_to_db(d.env.max(1e-6)) - b.thr) / 6.0;
-                    let want = b.dyn_range * over.clamp(0.0, 1.0);
-                    if (want - d.applied).abs() > 0.05 {
-                        d.applied = want;
-                        for f in &mut self.filters[i] {
-                            f.set(b.kind, b.freq, b.q, b.gain + want, b.slope, self.frate);
-                        }
                     }
                 } else if self.dyns[i].applied != 0.0 {
                     self.dyns[i].applied = 0.0;

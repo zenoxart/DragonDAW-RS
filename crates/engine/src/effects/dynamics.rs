@@ -431,6 +431,8 @@ pub struct Multiband {
     dynf: [[Biquad; MB_BANDS]; 2],
     dynf_db: [f32; MB_BANDS],
     dynf_n: usize,
+    /// Samples into the dynamic filters' re-tune grid (kept across calls: block-size independent).
+    dynf_tick: usize,
     bands: [MbBand; MB_BANDS],
     /// Telemetry: per band the detector level (dB) and the gain change (dB).
     tele: [f32; MB_BANDS * 2],
@@ -589,8 +591,10 @@ impl Effect for Multiband {
                 }
             }
             if dynamic {
-                // Re-tune each band's filter when its gain moved (every 16 samples at most).
-                if i % 16 == 0 {
+                // Re-tune each band's filter when its gain moved (every 8 samples at most, on a grid that
+                // runs on across calls).
+                self.dynf_tick = (self.dynf_tick + 1) % 8;
+                if self.dynf_tick == 1 {
                     for b in 0..n {
                         let band = self.bands[b];
                         let db = if band.bypass { 0.0 } else { band.change + band.gain };
@@ -602,10 +606,9 @@ impl Effect for Multiband {
                 y = x;
                 for ch in 0..2 {
                     for b in 0..n {
-                        // A band at 0 dB is skipped: untouched audio, no phase shift.
-                        if self.dynf_db[b].abs() > 0.001 {
-                            y[ch] = self.dynf[ch][b].process(y[ch]);
-                        }
+                        // Always run (a band at 0 dB is an identity filter): skipping it would leave its state
+                        // stale, and it would click when the band's gain moves off 0 dB again.
+                        y[ch] = self.dynf[ch][b].process(y[ch]);
                     }
                 }
             }
@@ -644,6 +647,7 @@ pub fn multiband_def() -> EffectDef {
                 dynf: [[Biquad::default(); MB_BANDS]; 2],
                 dynf_db: [f32::NAN; MB_BANDS],
                 dynf_n: 0,
+                dynf_tick: 0,
                 bands: [MbBand::default(); MB_BANDS],
                 tele: [0.0; MB_BANDS * 2],
             };
@@ -1118,6 +1122,10 @@ pub struct DeEsser {
     pos: usize,
     gr: f32,
     tele: [f32; 3],
+    /// Samples since the shelf was last re-tuned (kept across calls: block-size independent).
+    tick: usize,
+    /// The reduction the shelf was last tuned to, per side.
+    tuned: [f32; 2],
 }
 
 const DEESS_PARAMS: &[ParamInfo] = &[
@@ -1142,6 +1150,7 @@ impl DeEsser {
             self.det_hp[ch].set(BiquadKind::HighPass, hp, 0.9, 0.0, self.rate);
             self.det_lp[ch].set(BiquadKind::LowPass, lp, 0.707, 0.0, self.rate);
             let red = self.red[ch];
+            self.tuned[ch] = red;
             self.split[ch].set(BiquadKind::HighShelf, (hp * 0.8).min(self.rate * 0.4), 0.707, -red, self.rate);
         }
     }
@@ -1215,9 +1224,11 @@ impl Effect for DeEsser {
             self.pos = (self.pos + 1) % n;
             for ch in 0..2 {
                 let g = db_to_gain(-self.red[ch]);
-                // Split band: a dynamic high shelf (re-tuned every 16 samples) cuts only above the
-                // detection frequency, so the voice body below it is untouched and the phase stays clean.
-                if i % 16 == 0 {
+                // Split band: a dynamic high shelf (re-tuned every 4 samples on a grid that runs on across
+                // calls) cuts only above the detection frequency, so the voice body below it is untouched
+                // and the phase stays clean.
+                if self.tick == 0 && (self.red[ch] - self.tuned[ch]).abs() > 0.02 {
+                    self.tuned[ch] = self.red[ch];
                     self.split[ch].set(BiquadKind::HighShelf, shelf_f, 0.707, -self.red[ch], self.rate);
                 }
                 let hf = self.split[ch].process(y[ch]);
@@ -1237,6 +1248,7 @@ impl Effect for DeEsser {
                 pout = pout.max(o.abs());
                 gr = gr.max(self.red[ch]);
             }
+            self.tick = (self.tick + 1) % 4;
         }
         self.gr = gr;
         let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
@@ -1273,6 +1285,8 @@ pub fn deesser_def() -> EffectDef {
                 pos: 0,
                 gr: 0.0,
                 tele: [-90.0, -90.0, 0.0],
+                tick: 0,
+                tuned: [0.0; 2],
             };
             d.update();
             Box::new(d)

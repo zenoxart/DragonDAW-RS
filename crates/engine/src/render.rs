@@ -22,6 +22,45 @@ use std::sync::{Arc, Mutex};
 pub const AUTOMATION_BLOCK: usize = 128;
 
 pub type SharedEffect = Arc<Mutex<Box<dyn Effect>>>;
+
+/// An insert's dry signal delayed by the effect's latency, so its mix blends dry and wet in time (an
+/// undelayed dry against a wet that runs late would comb-filter). Kept across recompiles like the effect.
+#[derive(Default)]
+pub struct DryDelay {
+    buf: [Vec<f32>; 2],
+    pos: usize,
+}
+
+impl DryDelay {
+    /// Sizes the line for `lat` samples (on the compile thread – never allocates on the audio thread).
+    fn ensure(&mut self, lat: usize) {
+        if self.buf[0].len() != lat {
+            self.buf = [vec![0.0; lat], vec![0.0; lat]];
+            self.pos = 0;
+        }
+    }
+    fn len(&self) -> usize {
+        self.buf[0].len()
+    }
+    /// Feeds `l` / `r` in and replaces them with the signal `len()` samples ago.
+    fn run(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let len = self.len();
+        if len == 0 {
+            return;
+        }
+        let [a, b] = &mut self.buf;
+        for k in 0..l.len() {
+            std::mem::swap(&mut a[self.pos], &mut l[k]);
+            std::mem::swap(&mut b[self.pos], &mut r[k]);
+            self.pos += 1;
+            if self.pos == len {
+                self.pos = 0;
+            }
+        }
+    }
+}
+
+pub type SharedDry = Arc<Mutex<DryDelay>>;
 pub type SharedInstrument = Arc<Mutex<Box<dyn InstrumentVoice>>>;
 
 /// Creates third-party plugin instances (implemented by [`crate::plugins`]).
@@ -40,6 +79,8 @@ pub struct Pool {
     inboxes: HashMap<Id, (Arc<Inbox>, ParamSent)>,
     /// Per channel: the instrument settings last applied (an unchanged instrument is not locked).
     applied: HashMap<Id, (Instrument, Envelope)>,
+    /// Per insert: its dry signal delayed by its latency (for the mix).
+    dry: HashMap<Id, SharedDry>,
 }
 
 /// Parameter values last sent to an effect.
@@ -257,10 +298,18 @@ impl Pool {
         Some(shared)
     }
 
+    /// The insert's dry delay, sized to its current latency.
+    fn dry(&mut self, ins: Id, lat: usize) -> SharedDry {
+        let d = self.dry.entry(ins).or_default().clone();
+        d.lock().unwrap_or_else(std::sync::PoisonError::into_inner).ensure(lat);
+        d
+    }
+
     /// Drops processors whose owner no longer exists.
     fn retain(&mut self, effects: &HashSet<Id>, instruments: &HashSet<Id>) {
         self.effects.retain(|k, _| effects.contains(k));
         self.inboxes.retain(|k, _| effects.contains(k));
+        self.dry.retain(|k, _| effects.contains(k));
         self.instruments.retain(|k, _| instruments.contains(k));
         self.applied.retain(|k, _| instruments.contains(k));
     }
@@ -351,6 +400,7 @@ struct CInsert {
     mix: f32,
     sidechain: Option<usize>,
     mods: Vec<CMod>,
+    dry: SharedDry,
 }
 
 /// A compiled modulation route of a built-in effect.
@@ -554,7 +604,17 @@ impl Song {
                         .collect(),
                     _ => Vec::new(),
                 };
-                inserts.push(CInsert { id: ins.id, effect: e, inbox, enabled: ins.enabled, mix: ins.mix.clamp(0.0, 1.0), sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i), mods });
+                let dry = cx.pool.dry(ins.id, lat);
+                inserts.push(CInsert {
+                    id: ins.id,
+                    effect: e,
+                    inbox,
+                    enabled: ins.enabled,
+                    mix: ins.mix.clamp(0.0, 1.0),
+                    sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i),
+                    mods,
+                    dry,
+                });
             }
             let audible = !c.muted && (!any_solo || solo_ok.contains(&i));
             strips.push(CStrip {
@@ -1752,13 +1812,17 @@ impl Renderer {
                             let mut e = ins.effect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             ins.inbox.apply(&mut **e);
                             e.set_position(b0, playing);
-                            if mix >= 0.999 && mix0 >= 0.999 {
+                            // A latent effect's dry line is fed every block, so a mix moving below 100 % finds
+                            // the recent dry signal in it.
+                            let mut dly = ins.dry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if mix >= 0.999 && mix0 >= 0.999 && dly.len() == 0 {
                                 e.process(bl, br, None);
                             } else {
                                 slot.dry.0.clear();
                                 slot.dry.0.extend_from_slice(bl);
                                 slot.dry.1.clear();
                                 slot.dry.1.extend_from_slice(br);
+                                dly.run(&mut slot.dry.0, &mut slot.dry.1);
                                 e.process(bl, br, None);
                                 for k in 0..n {
                                     let m = ramp(mix0, mix, k, n);
@@ -1864,13 +1928,15 @@ impl Renderer {
                         ins.inbox.apply(&mut **e);
                         e.set_position(b0, playing);
                         crate::fault::set_current(Some(ins.id));
-                        if mix >= 0.999 && mix0 >= 0.999 {
+                        let mut dly = ins.dry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if mix >= 0.999 && mix0 >= 0.999 && dly.len() == 0 {
                             e.process(bl, br, sc);
                         } else {
                             dry_buf.0.clear();
                             dry_buf.0.extend_from_slice(bl);
                             dry_buf.1.clear();
                             dry_buf.1.extend_from_slice(br);
+                            dly.run(&mut dry_buf.0, &mut dry_buf.1);
                             e.process(bl, br, sc);
                             for k in 0..n {
                                 let m = ramp(mix0, mix, k, n);
@@ -2845,6 +2911,41 @@ mod tests {
         }
         let half = level(Some((0.0, 0.5)));
         assert!(half > dry * 1.5 && half < dry * 3.5, "mix 50 %: {}", half / dry);
+    }
+
+    /// A latent insert at a partial mix blends its dry signal in time with the wet: a flat linear-phase EQ
+    /// (≈ 64 ms latency) at 50 % sounds exactly like no EQ – no comb filtering.
+    #[test]
+    fn insert_mix_is_latency_aligned() {
+        let dir = tempfile::tempdir().unwrap();
+        let tone = dir.path().join("t.wav");
+        let s: Vec<f32> = (0..44100 * 3)
+            .map(|i| {
+                let t = i as f32 / 44100.0;
+                ((std::f32::consts::TAU * 1000.0 * t).sin() + (std::f32::consts::TAU * 1370.0 * t).sin() + (std::f32::consts::TAU * 2210.0 * t).sin()) * 0.05
+            })
+            .collect();
+        write_wav(&tone, &s, &s, 44100, BitDepth::Float32, false, false).unwrap();
+        let render = |mix: Option<f32>| {
+            let mut p = Project::new_default();
+            let id = p.next_id();
+            p.tracks[0].clips.push(Clip { id, name: "t".into(), start: 0.0, length: 6.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: tone.clone(), ..Default::default() }) });
+            if let Some(mix) = mix {
+                let def = crate::effects::find("eq").unwrap();
+                let mut params = def.defaults();
+                params.insert("phase".into(), 1.0);
+                let m1 = p.tracks[0].mixer;
+                let ins = p.next_id();
+                p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "eq".into(), enabled: true, mix, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            }
+            render_secs(&p, 2.0).0
+        };
+        let dry = render(None);
+        let half = render(Some(0.5));
+        let rms = |v: &[f32]| (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+        let (a, b) = (rms(&dry[44100..80000]), rms(&half[44100..80000]));
+        let db = 20.0 * (b / a).log10();
+        assert!(db.abs() < 0.3, "flat linear-phase EQ at 50 % mix changed the level by {db:.2} dB (comb filtering)");
     }
 
     /// MIDI velocity as a modulation source (MIDI sources), with slew: a hard note pulls the

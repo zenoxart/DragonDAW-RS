@@ -595,6 +595,8 @@ pub struct Tremolo {
     shape: LfoShape,
     pan: bool,
     lfo: Lfo,
+    /// The modulation, smoothed over ~1.5 ms: a square wave's edges would otherwise click.
+    sm: f32,
 }
 
 impl Effect for Tremolo {
@@ -614,8 +616,11 @@ impl Effect for Tremolo {
     fn reset(&mut self) {}
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let hz = if self.sync == 0 { self.speed } else { (self.bpm / 60.0 / SYNC_BEATS[self.sync]) as f32 };
+        let k = 1.0 - (-1.0 / (0.0015 * self.rate)).exp();
         for i in 0..l.len() {
-            let m = self.lfo.next(hz, self.rate, self.shape);
+            let raw = self.lfo.next(hz, self.rate, self.shape);
+            self.sm += (raw - self.sm) * k;
+            let m = self.sm;
             if self.pan {
                 let p = m * self.depth;
                 l[i] *= (1.0 - p).min(1.0);
@@ -637,7 +642,7 @@ pub fn tremolo_def() -> EffectDef {
         description: "Tempo-synced volume or pan modulation.",
         params: TREM_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Tremolo { rate, bpm: 120.0, sync: 5, speed: 4.0, depth: 0.6, shape: LfoShape::Sine, pan: false, lfo: Lfo::default() }),
+        create: |rate| Box::new(Tremolo { rate, bpm: 120.0, sync: 5, speed: 4.0, depth: 0.6, shape: LfoShape::Sine, pan: false, lfo: Lfo::default(), sm: 0.0 }),
     }
 }
 

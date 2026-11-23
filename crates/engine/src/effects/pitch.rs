@@ -186,6 +186,9 @@ pub struct Psola {
     next_syn: f64,
     delay: u64,
     started: bool,
+    /// The output's recent peak (≈ 7 ms decay at 48 kHz): "near silence" is judged on it, not on one sample
+    /// (a zero crossing of a tone that is still sounding is not silence).
+    lvl: f32,
 }
 
 const PS_N: usize = 1 << 14;
@@ -206,6 +209,7 @@ impl Psola {
             next_syn: 0.0,
             delay: (PS_UNVOICED + PS_MARGIN) as u64,
             started: false,
+            lvl: 0.0,
         }
     }
 
@@ -317,7 +321,8 @@ impl Psola {
         // Glide the delay towards the period's: a skipped or repeated sample, every 16 samples at most and
         // only where it cannot be heard – between notes (unvoiced) or near silence – unless the delay is
         // far too short for the voice (it went down a lot), when grains would be cut.
-        let quiet = !self.voiced || y.abs() < 2e-3;
+        self.lvl = y.abs().max(self.lvl * 0.9969);
+        let quiet = !self.voiced || self.lvl < 3e-4;
         let far = (self.w - self.e) as f32 + 0.5 * p < want as f32;
         if self.w.is_multiple_of(16) && (quiet || far) {
             let cur = self.w - self.e;

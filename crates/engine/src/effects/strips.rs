@@ -647,7 +647,8 @@ impl DrumBus {
         self.sat.set_param("tube", tube);
         self.sat.set_param("drive", drive * 24.0);
         self.sat.set_param("output", -drive * 10.0);
-        self.sat.set_param("mix", 1.0);
+        // Faded in over the first 5 % of the knob, so leaving 0 doesn't jump into the tube colour.
+        self.sat.set_param("mix", (drive * 20.0).min(1.0));
         self.drive_hp.set(BiquadKind::HighPass, self.v("drive_hp"), 0.7, 0.0, r);
         let focus = if self.v("focus") >= 0.5 { 80.0 } else { 50.0 };
         self.harm_bp.set(BiquadKind::BandPass, focus, 1.2, 0.0, r);
@@ -689,10 +690,8 @@ impl Effect for DrumBus {
             pin = pin.max(l[i].abs()).max(r[i].abs());
             sq_in += 0.5 * (l[i] * l[i] + r[i] * r[i]);
         }
-        // Drive, then its high-pass.
-        if self.v("drive") > 0.0 {
-            self.sat.process(l, r, None);
-        }
+        // Drive (always running: its oversampling delay stays the same at any setting), then its high-pass.
+        self.sat.process(l, r, None);
         for i in 0..n {
             l[i] = self.drive_hp.run(0, l[i]);
             r[i] = self.drive_hp.run(1, r[i]);
@@ -808,6 +807,9 @@ impl Effect for DrumBus {
         self.rms_in = sq_in / n.max(1) as f32 + (self.rms_in - sq_in / n.max(1) as f32) * a;
         self.rms_out = sq_out / n.max(1) as f32 + (self.rms_out - sq_out / n.max(1) as f32) * a;
         self.tele = [pin, pout, self.comp.gain_reduction() * cmix, self.rms_in.sqrt(), self.rms_out.sqrt(), if pin > self.rms_in.sqrt() * 3.0 { 1.0 } else { 0.0 }];
+    }
+    fn latency(&self) -> usize {
+        self.sat.latency()
     }
     fn gain_reduction(&self) -> f32 {
         self.comp.gain_reduction() * self.v("comp_mix") / 100.0

@@ -104,12 +104,14 @@ impl TubeStage {
         let x = self.lp;
         // Grid conduction charges the coupling cap: positive peaks shift the bias down, recovering slowly.
         let over = self.over_hold.next((x * m.k + m.asym - 0.6).max(0.0));
-        let attack = 0.002 * m.blocking;
-        let release = 0.00003;
+        // (Per-sample rates tuned at 48 kHz, scaled to the stage's rate – it may run oversampled.)
+        let per = 48_000.0 / self.rate;
+        let attack = 0.002 * m.blocking * per;
+        let release = 0.00003 * per;
         self.shift += (over * 0.5 - self.shift) * if over * 0.5 > self.shift { attack } else { release };
         // Supply sag: sustained level pulls the gain down a little.
         let a = self.sag_hold.next(x);
-        self.env += (a - self.env) * if a > self.env { 0.0005 } else { 0.00005 };
+        self.env += (a - self.env) * if a > self.env { 0.0005 * per } else { 0.00005 * per };
         let sag = 1.0 / (1.0 + m.sag * self.env * 1.5);
         let y = tube_curve(&m, self.bias - self.shift, x * sag);
         // Output coupling capacitor (≈ 5 Hz high-pass: blocks the DC, leaves the bass alone).

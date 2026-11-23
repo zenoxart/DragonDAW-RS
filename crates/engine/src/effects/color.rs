@@ -38,6 +38,12 @@ pub struct Saturator {
     ing_tubes: [[crate::dsp::tube::TubeStage; 2]; 3],
     /// Input and output peaks of the last block (the cauldron's heat).
     tele: [f32; 2],
+    /// The waveshaping runs at twice the rate: at high drive the curves turn within a sample or two, and
+    /// sampled at the base rate that aliases into crackle.
+    os: [crate::dsp::oversample::Oversampler; 2],
+    /// The dry signal, delayed by the oversampler's latency (for the mix).
+    dry: [Vec<f32>; 2],
+    dpos: usize,
 }
 
 #[inline]
@@ -95,6 +101,11 @@ impl Effect for Saturator {
     fn reset(&mut self) {
         self.tone.iter_mut().chain(self.dc.iter_mut()).for_each(OnePole::reset);
         self.tubes.iter_mut().chain(self.ing_tubes.iter_mut().flatten()).for_each(|t| t.reset());
+        self.os.iter_mut().for_each(|o| o.reset());
+        self.dry.iter_mut().for_each(|d| d.fill(0.0));
+    }
+    fn latency(&self) -> usize {
+        self.dry[0].len()
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let peak = |l: &[f32], r: &[f32]| l.iter().chain(r.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
@@ -105,24 +116,41 @@ impl Effect for Saturator {
         let base_w = (1.0 - total).max(0.0);
         let norm = 1.0 / (base_w + total).max(1e-6);
         let gains: [f32; 3] = std::array::from_fn(|k| db_to_gain(INGREDIENTS[k].2));
+        let lat = self.dry[0].len();
+        let mut up = [0.0f32; 2];
         for i in 0..l.len() {
             for (ch, x) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
-                let d = *x * self.drive;
-                // Tube mode runs the selected tube model (with bias shift, Miller roll-off and sag).
-                let mut y = if base_w > 0.0 {
-                    let b = if self.mode == 0 { self.tubes[ch].process(d) } else { shape(self.mode, d) };
-                    b * base_w
-                } else {
-                    0.0
-                };
-                for k in 0..3 {
-                    if self.ing[k] > 0.0 {
-                        y += self.ing_tubes[k][ch].process(d * gains[k]) / gains[k].sqrt() * self.ing[k];
+                let input = *x;
+                self.os[ch].up(input * self.drive, &mut up);
+                let mut shaped = [0.0f32; 2];
+                for (k, d) in up.into_iter().enumerate() {
+                    // Tube mode runs the selected tube model (with bias shift, Miller roll-off and sag).
+                    let mut y = if base_w > 0.0 {
+                        let b = if self.mode == 0 { self.tubes[ch].process(d) } else { shape(self.mode, d) };
+                        b * base_w
+                    } else {
+                        0.0
+                    };
+                    for g in 0..3 {
+                        if self.ing[g] > 0.0 {
+                            y += self.ing_tubes[g][ch].process(d * gains[g]) / gains[g].sqrt() * self.ing[g];
+                        }
                     }
+                    shaped[k] = y * norm;
                 }
-                let y = y * norm;
+                let y = self.os[ch].down(&shaped);
                 let y = self.dc[ch].highpass(self.tone[ch].process(y)) * self.out;
-                *x = *x * (1.0 - self.mix) + y * self.mix;
+                let dry = if lat > 0 {
+                    let d = self.dry[ch][self.dpos];
+                    self.dry[ch][self.dpos] = input;
+                    d
+                } else {
+                    input
+                };
+                *x = dry * (1.0 - self.mix) + y * self.mix;
+            }
+            if lat > 0 {
+                self.dpos = (self.dpos + 1) % lat;
             }
         }
         self.tele[1] = peak(l, r);
@@ -141,9 +169,27 @@ pub fn saturator_def() -> EffectDef {
         params: SAT_PARAMS,
         uses_sidechain: false,
         create: |rate| {
-            let t = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], rate);
-            let ing = |k: usize| [crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[INGREDIENTS[k].1], rate); 2];
-            Box::new(Saturator { rate, mode: 0, drive: 2.0, out: 0.7, mix: 1.0, tone: [OnePole::new(12000.0, rate); 2], dc: [OnePole::new(5.0, rate); 2], tubes: [t; 2], ing: [0.0; 3], ing_tubes: [ing(0), ing(1), ing(2)], tele: [0.0; 2] })
+            // The tube stages run inside the 2× oversampling.
+            let t = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], rate * 2.0);
+            let ing = |k: usize| [crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[INGREDIENTS[k].1], rate * 2.0); 2];
+            let os = crate::dsp::oversample::Oversampler::new(2);
+            let lat = os.latency();
+            Box::new(Saturator {
+                rate,
+                mode: 0,
+                drive: 2.0,
+                out: 0.7,
+                mix: 1.0,
+                tone: [OnePole::new(12000.0, rate); 2],
+                dc: [OnePole::new(5.0, rate); 2],
+                tubes: [t; 2],
+                ing: [0.0; 3],
+                ing_tubes: [ing(0), ing(1), ing(2)],
+                tele: [0.0; 2],
+                os: [os.clone(), os],
+                dry: [vec![0.0; lat], vec![0.0; lat]],
+                dpos: 0,
+            })
         },
     }
 }
@@ -180,13 +226,17 @@ mod crucible_tests {
         let src: Vec<f32> = (0..n).map(|i| 0.5 * (i as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin()).collect();
         let (mut l, mut r) = (src.clone(), src.clone());
         a.process(&mut l, &mut r, None);
-        // Reference: the same chain by hand.
-        let mut tube = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], 48_000.0);
+        // Reference: the same chain by hand (the tube runs 2× oversampled).
+        let mut tube = crate::dsp::tube::TubeStage::new(crate::dsp::tube::TUBES[0], 96_000.0);
+        let mut os = crate::dsp::oversample::Oversampler::new(2);
         let mut tone = OnePole::new(12000.0, 48_000.0);
         let mut dc = OnePole::new(5.0, 48_000.0);
         let (drive, out) = (db_to_gain(6.0), db_to_gain(-3.0));
         for (i, x) in src.iter().enumerate() {
-            let y = dc.highpass(tone.process(tube.process(x * drive))) * out;
+            let mut up = [0.0f32; 2];
+            os.up(x * drive, &mut up);
+            let shaped = [tube.process(up[0]), tube.process(up[1])];
+            let y = dc.highpass(tone.process(os.down(&shaped))) * out;
             assert!((y - l[i]).abs() < 1e-6, "sample {i}: {y} vs {}", l[i]);
         }
     }
@@ -775,7 +825,7 @@ impl Effect for DragonParticle {
         self.limiter.reset();
     }
     fn latency(&self) -> usize {
-        self.limiter.latency()
+        self.sat.latency() + self.limiter.latency()
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _sc: Option<(&[f32], &[f32])>) {
         let n = l.len().max(1);
