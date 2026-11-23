@@ -104,7 +104,10 @@ fn meters(ui: &mut Ui, st: &mut State) {
             ui.heading("Master");
             let (l, r) = m.strips.get(&st.session.project.mixer.master.id).copied().unwrap_or((0.0, 0.0));
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 1.0;
+                widgets::fader_scale(ui, 2.0, 170.0);
                 widgets::meter(ui, l, r, 170.0);
+                ui.add_space(3.0);
                 let mut v = st.session.project.mixer.master.volume;
                 let resp = widgets::fader(ui, &mut v, 2.0, 170.0);
                 widgets::apply(st, &resp, "Master volume", |p| p.mixer.master.volume = v);

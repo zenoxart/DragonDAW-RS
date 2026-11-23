@@ -542,10 +542,14 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
             }
             // Meter, fader and its dB scale, centred as one group; they fill the strip's height.
             let fader_h = (height - if vca || compact { 140.0 } else { 295.0 }).max(50.0);
-            // Compact: meter and fader only (no dB scale).
-            let group_w: f32 = if compact { 12.0 + 3.0 + 18.0 } else { 12.0 + 4.0 + 18.0 + 2.0 + 24.0 };
+            // dB scale, meter, fader – left to right, all on the same level scale. Compact: no scale.
+            let group_w: f32 = if compact { 12.0 + 3.0 + 18.0 } else { 26.0 + 1.0 + 12.0 + 4.0 + 18.0 };
             centred_row(ui, width, group_w, |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
+                if !compact {
+                    widgets::fader_scale(ui, 2.0, fader_h);
+                    ui.add_space(1.0);
+                }
                 let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));
                 widgets::meter(ui, l, rr, fader_h);
                 ui.add_space(if compact { 3.0 } else { 4.0 });
@@ -556,10 +560,6 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 }
                 widgets::apply(st, &r, "Volume", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.volume = v));
                 r.context_menu(|ui| learn_menu(ui, st, Target::MixerVolume(id)));
-                if !compact {
-                    ui.add_space(2.0);
-                    widgets::fader_scale(ui, 2.0, fader_h);
-                }
             });
             // The fader's level in dB (what you balance with) and the current peak.
             let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));

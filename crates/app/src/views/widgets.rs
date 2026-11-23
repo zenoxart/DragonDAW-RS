@@ -332,30 +332,79 @@ pub fn mini_knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32,
     r
 }
 
-/// A vertical fader 0 … max (linear gain), with a dB scale tooltip.
+/// The level scale shared by the mixer's dB scale, meters and faders, so a number, a meter's top and a
+/// fader cap at the same level sit at the same height. A console taper: linear in dB between these
+/// points (more room around 0 dB, where you balance), the last stretch to −∞ linear in gain.
+const LEVEL_POINTS: [(f32, f32); 8] = [(6.0206, 1.0), (0.0, 0.80), (-5.0, 0.69), (-10.0, 0.58), (-20.0, 0.40), (-30.0, 0.27), (-40.0, 0.16), (-60.0, 0.04)];
+/// Inset at the top and bottom of every part of the strip (the fader cap's half height): the scale, the
+/// meter and the fader track all start and end at the same place.
+pub const LEVEL_INSET: f32 = 6.0;
+
+/// A level in dB → 0 … 1 up the scale.
+pub fn level_pos(db: f32) -> f32 {
+    if db >= LEVEL_POINTS[0].0 {
+        return 1.0;
+    }
+    for w in LEVEL_POINTS.windows(2) {
+        let ((d0, n0), (d1, n1)) = (w[0], w[1]);
+        if db >= d1 {
+            return n1 + (n0 - n1) * (db - d1) / (d0 - d1);
+        }
+    }
+    // Below −60 dB: linear in gain down to silence.
+    let (d, n) = LEVEL_POINTS[LEVEL_POINTS.len() - 1];
+    (n * dragon_engine::dsp::db_to_gain(db) / dragon_engine::dsp::db_to_gain(d)).clamp(0.0, n)
+}
+
+/// 0 … 1 up the scale → the level in dB (−∞ as a very low number).
+pub fn level_db(n: f32) -> f32 {
+    let n = n.clamp(0.0, 1.0);
+    for w in LEVEL_POINTS.windows(2) {
+        let ((d0, n0), (d1, n1)) = (w[0], w[1]);
+        if n >= n1 {
+            return d1 + (d0 - d1) * (n - n1) / (n0 - n1);
+        }
+    }
+    let (d, nn) = LEVEL_POINTS[LEVEL_POINTS.len() - 1];
+    if n <= 0.0 {
+        -200.0
+    } else {
+        dragon_engine::dsp::gain_to_db(dragon_engine::dsp::db_to_gain(d) * n / nn)
+    }
+}
+
+/// The y of a level in a strip part `rect` (inset like every other part).
+fn level_y(rect: Rect, db: f32) -> f32 {
+    let (top, bottom) = (rect.top() + LEVEL_INSET, rect.bottom() - LEVEL_INSET);
+    bottom - level_pos(db) * (bottom - top)
+}
+
+/// A vertical fader 0 … max (linear gain) on the shared level scale ([`level_pos`]).
 pub fn fader(ui: &mut Ui, value: &mut f32, max: f32, height: f32) -> Response {
     let (rect, mut r) = ui.allocate_exact_size(Vec2::new(18.0, height), Sense::click_and_drag());
-    let to_n = |v: f32| (v / max).clamp(0.0, 1.0).powf(0.5);
-    let from_n = |n: f32| n.clamp(0.0, 1.0).powi(2) * max;
+    let max_db = dragon_engine::dsp::gain_to_db(max);
+    let to_n = |v: f32| level_pos(dragon_engine::dsp::gain_to_db(v.max(1e-9)).min(max_db));
+    let from_n = |n: f32| if n <= 0.0 { 0.0 } else { dragon_engine::dsp::db_to_gain(level_db(n)).min(max) };
+    let track = Rect::from_min_max(Pos2::new(rect.center().x - 2.0, rect.top() + LEVEL_INSET), Pos2::new(rect.center().x + 2.0, rect.bottom() - LEVEL_INSET));
     let mut n = to_n(*value);
     if r.dragged() {
         let fine = if ui.input(|i| i.modifiers.shift) { 0.15 } else { 1.0 };
-        n = (n - r.drag_delta().y / height * fine).clamp(0.0, 1.0);
+        n = (n - r.drag_delta().y / track.height() * fine).clamp(0.0, 1.0);
         *value = from_n(n);
         r.mark_changed();
     }
     if r.double_clicked() {
         *value = 0.8;
+        n = to_n(*value);
         r.mark_changed();
     }
     let p = ui.painter();
-    let track = Rect::from_center_size(rect.center(), Vec2::new(4.0, height - 8.0));
     p.rect_filled(track, 2.0, theme::BG);
     // Unity mark.
-    let unity_y = track.bottom() - to_n(1.0) * track.height();
+    let unity_y = level_y(rect, 0.0);
     p.line_segment([Pos2::new(rect.left(), unity_y), Pos2::new(rect.right(), unity_y)], Stroke::new(1.0_f32, theme::GRID_BAR));
     let y = track.bottom() - n * track.height();
-    let cap = Rect::from_center_size(Pos2::new(rect.center().x, y), Vec2::new(18.0, 10.0));
+    let cap = Rect::from_center_size(Pos2::new(rect.center().x, y), Vec2::new(18.0, 2.0 * LEVEL_INSET - 2.0));
     p.rect_filled(cap, 2.0, if r.dragged() { theme::ACCENT_2 } else { Color32::from_gray(200) });
     p.line_segment([Pos2::new(cap.left() + 2.0, y), Pos2::new(cap.right() - 2.0, y)], Stroke::new(1.0_f32, Color32::BLACK));
     let db = dragon_engine::dsp::gain_to_db(*value);
@@ -364,44 +413,52 @@ pub fn fader(ui: &mut Ui, value: &mut f32, max: f32, height: f32) -> Response {
     if keyboard_step(ui, &r, value, 0.0, max) {
         r.mark_changed();
     }
-    r.on_hover_text(format!("{db:.1} dB"))
+    r.on_hover_text(if *value <= 0.0 { "-∞ dB".to_string() } else { format!("{db:.1} dB") })
 }
 
-/// The dB scale for a [`fader`] of the same `max` and `height`: marks at the fader's own positions
-/// (its square-root taper), so the cap lines up with the number it is at.
-pub fn fader_scale(ui: &mut Ui, max: f32, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(24.0, height), Sense::hover());
+/// The marks of the shared level scale, with the numbers (dB) right-aligned against the meter beside
+/// it; `height` as the meter's and fader's.
+pub fn fader_scale(ui: &mut Ui, _max: f32, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(26.0, height), Sense::hover());
     let p = ui.painter();
-    let top = rect.top() + 4.0;
-    let h = height - 8.0;
-    for db in [6.0f32, 0.0, -6.0, -12.0, -24.0, -48.0] {
-        let n = (dragon_engine::dsp::db_to_gain(db) / max).clamp(0.0, 1.0).sqrt();
-        if n <= 0.0 {
-            continue;
-        }
-        let y = top + h - n * h;
+    let font = egui::FontId::monospace(8.5);
+    let mut last_y = f32::NEG_INFINITY;
+    // From the top down; a mark whose number would crowd the one above keeps only its tick.
+    for db in [6.0f32, 3.0, 0.0, -3.0, -5.0, -10.0, -15.0, -20.0, -30.0, -40.0, -60.0] {
+        let y = level_y(rect, db);
         let unity = db == 0.0;
-        p.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.left() + if unity { 5.0 } else { 3.0 }, y)], Stroke::new(1.0_f32, if unity { theme::TEXT } else { theme::TEXT_DIM }));
-        let label = if db > 0.0 { format!("+{db:.0}") } else { format!("{db:.0}") };
-        p.text(Pos2::new(rect.left() + 8.0, y), egui::Align2::LEFT_CENTER, label, egui::FontId::monospace(8.5), if unity { theme::TEXT } else { theme::TEXT_DIM });
+        let major = matches!(db as i32, 6 | 0 | -10 | -20 | -30 | -40 | -60);
+        let col = if unity { theme::TEXT } else { theme::TEXT_DIM };
+        p.line_segment([Pos2::new(rect.right() - if major { 5.0 } else { 3.0 }, y), Pos2::new(rect.right(), y)], Stroke::new(1.0_f32, col));
+        if y - last_y >= 9.5 || unity {
+            let label = if db > 0.0 { format!("+{db:.0}") } else { format!("{db:.0}") };
+            p.text(Pos2::new(rect.right() - 7.0, y), egui::Align2::RIGHT_CENTER, label, font.clone(), col);
+            last_y = y;
+        }
     }
-    p.text(Pos2::new(rect.left() + 8.0, top + h), egui::Align2::LEFT_CENTER, "-∞", egui::FontId::monospace(8.5), theme::TEXT_DIM);
+    p.text(Pos2::new(rect.right() - 7.0, rect.bottom() - LEVEL_INSET), egui::Align2::RIGHT_CENTER, "-∞", font, theme::TEXT_DIM);
 }
 
-/// Stereo peak meter (linear values) with a peak-hold colour.
+/// Stereo peak meter (linear values) on the shared level scale ([`level_pos`]), with the same ticks as the
+/// scale beside it and a 0 dB line.
 pub fn meter(ui: &mut Ui, l: f32, r: f32, height: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(12.0, height), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 1.0, theme::BG);
+    let well = Rect::from_min_max(Pos2::new(rect.left(), rect.top() + LEVEL_INSET), Pos2::new(rect.right(), rect.bottom() - LEVEL_INSET));
+    p.rect_filled(well.expand2(Vec2::new(0.0, 1.0)), 1.0, theme::BG);
     for (i, v) in [l, r].into_iter().enumerate() {
         let x0 = rect.left() + i as f32 * 6.0 + 0.5;
-        // −60 … +6 dB display range.
-        let db = dragon_engine::dsp::gain_to_db(v.max(1e-6));
-        let n = ((db + 60.0) / 66.0).clamp(0.0, 1.0);
-        let bar = Rect::from_min_max(Pos2::new(x0, rect.bottom() - n * rect.height()), Pos2::new(x0 + 5.0, rect.bottom()));
-        p.rect_filled(bar, 0.0, theme::meter_color(v));
+        let db = dragon_engine::dsp::gain_to_db(v.max(1e-9));
+        let bar = Rect::from_min_max(Pos2::new(x0, level_y(rect, db)), Pos2::new(x0 + 5.0, well.bottom()));
+        if bar.height() > 0.0 {
+            p.rect_filled(bar, 0.0, theme::meter_color(v));
+        }
     }
-    let zero = rect.bottom() - (60.0 / 66.0) * rect.height();
+    for db in [-10.0f32, -20.0, -30.0, -40.0] {
+        let y = level_y(rect, db);
+        p.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0_f32, Color32::from_black_alpha(90)));
+    }
+    let zero = level_y(rect, 0.0);
     p.line_segment([Pos2::new(rect.left(), zero), Pos2::new(rect.right(), zero)], Stroke::new(1.0_f32, theme::REC.gamma_multiply(0.6)));
 }
 
@@ -606,5 +663,35 @@ mod tests {
         assert_eq!(p("2,5 kHz"), Some(2500.0));
         assert_eq!(p("4:1"), Some(4.0));
         assert_eq!(p("abc"), None);
+    }
+}
+
+#[cfg(test)]
+mod level_scale_tests {
+    use super::*;
+
+    /// The scale, the meter and the fader share one mapping: monotonic, round-trips, the marks where
+    /// they should be, and a fader at a level shows the same dB as the scale at its height.
+    #[test]
+    fn one_scale_for_numbers_meters_and_faders() {
+        let mut last = -1.0;
+        for k in 0..=1000 {
+            let db = -90.0 + k as f32 * 0.096;
+            let n = level_pos(db);
+            assert!(n >= last, "monotonic at {db}");
+            last = n;
+            if db > -80.0 {
+                assert!((level_db(n) - db).abs() < 0.01, "round trip at {db}: {}", level_db(n));
+            }
+        }
+        assert!((level_pos(6.0206) - 1.0).abs() < 1e-6);
+        assert!((level_pos(0.0) - 0.80).abs() < 1e-6);
+        assert!(level_pos(-200.0) < 1e-6);
+        // Gain → fader position → gain.
+        for g in [0.01f32, 0.1, 0.5, 0.8, 1.0, 1.5, 2.0] {
+            let n = level_pos(dragon_engine::dsp::gain_to_db(g));
+            let back = dragon_engine::dsp::db_to_gain(level_db(n));
+            assert!((back - g).abs() / g < 1e-3, "{g} -> {back}");
+        }
     }
 }
