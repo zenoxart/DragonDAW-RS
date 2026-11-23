@@ -118,7 +118,6 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "orbit" => 220.0,
         "drum_bus" => 200.0,
         "dragon_particle" => 200.0,
-        "drakesong" => 220.0,
         _ => 170.0,
     };
     let height = hero_height(h.def.id, base, w, ui.available_height(), ui.ctx().screen_rect().height());
@@ -127,8 +126,6 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
     if let Some((x, y)) = xy_params(h.def.id) {
         let name = |id: Option<&str>| id.and_then(|id| h.def.params.iter().find(|p| p.id == id)).map(|p| p.name).unwrap_or("-");
         let _ = resp.clone().on_hover_text(format!("Drag: left / right = {}, up / down = {} (Shift = fine, double-click resets)", name(x), name(y)));
-    } else if h.def.id == "drakesong" {
-        let _ = resp.clone().on_hover_text("Click a key to change the voicing · drag a node: sideways = frequency, up / down = gain · double-click resets a band");
     } else if h.def.id == "multiband" {
         let _ = resp.clone().on_hover_text("Drag a crossover sideways, a band up / down for its threshold (Shift = fine, double-click resets)");
     } else if !hit_regions(h.def.id, r).is_empty() {
@@ -169,7 +166,6 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "drum_bus" => drum_bus(&p, r, h, col),
         "alter" => alter(&p, r, h, col),
         "orbit" => orbit(&p, r, h, col),
-        "drakesong" => super::fx_drake::draw(&p, r, h, col),
         _ => {
             grid(&p, r, false);
             let pts: Vec<Pos2> = (0..=96).map(|k| Pos2::new(r.left() + r.width() * k as f32 / 96.0, r.center().y + (k as f32 * 0.25 + h.t() * 3.0).sin() * r.height() * 0.3)).collect();
@@ -202,9 +198,6 @@ fn square(r: Rect) -> Rect {
 }
 
 fn interact(ui: &Ui, r: Rect, resp: &egui::Response, h: &Hero) -> Vec<(String, f32)> {
-    if h.def.id == "drakesong" {
-        return super::fx_drake::interact(ui, r, resp, h);
-    }
     let mut out = Vec::new();
     if h.def.id == "eq" {
         // The band panel stays while the mouse is on it (off the graph).
@@ -2699,7 +2692,7 @@ mod tests {
     #[test]
     fn every_display_responds_to_a_drag() {
         let mut dead = Vec::new();
-        for def in effects::registry().iter().filter(|d| d.id != "eq") {
+        for def in effects::registry().iter().filter(|d| d.id != "eq" && !super::super::fx_jade::own_face(d.id)) {
             let params = def.defaults();
             let mut moved = false;
             'points: for gy in [0.5f32, 0.3, 0.7] {

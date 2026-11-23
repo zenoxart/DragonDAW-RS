@@ -539,7 +539,7 @@ macro_rules! emblem_art {
 emblem_art!(
     "alter",
     "cinnabar",
-    "drakesong",
+    "jadefang",
     "wyrmdrum",
     "bitcrusher",
     "class_a_strip",
@@ -591,7 +591,7 @@ fn emblem_spec(id: &str) -> (Motion, Follows, Color32) {
         "dragon_particle" => (Breathe, Level, Color32::from_rgb(0xff, 0x30, 0x30)),
         "clean_voice" => (Ripples, Level, Color32::from_rgb(0xc8, 0xe8, 0xff)),
         "cinnabar" => (Breathe, Level, Color32::from_rgb(0xff, 0x40, 0x30)),
-        "drakesong" => (Ripples, Level, Color32::from_rgb(0xff, 0xd8, 0x80)),
+        "jadefang" => (Ripples, Level, Color32::from_rgb(0xff, 0xd8, 0x80)),
         "wyrmdrum" => (Tremble, Level, Color32::from_rgb(0xff, 0xa8, 0x3c)),
         _ => (Breathe, Level, AMBER),
     }

@@ -26,7 +26,7 @@ pub enum KnobStyle {
     Cream,
     /// Engraved brass (the gnostic units).
     Brass,
-    /// Black knurled aluminium with a white line (Drakesong).
+    /// Black knurled aluminium with a white line (Jadefang).
     Black,
 }
 
@@ -101,6 +101,11 @@ thread_local! {
 thread_local! {
     /// The ink of the face being drawn (labels and values printed on it).
     static INK: std::cell::Cell<(Color32, Color32)> = const { std::cell::Cell::new((theme::TEXT, theme::TEXT_DIM)) };
+}
+
+/// Sets the ink knob scales are printed in (faces drawn outside `show`).
+pub fn set_ink(ink: Color32, dim: Color32) {
+    INK.with(|c| c.set((ink, dim)));
 }
 
 fn ink() -> Color32 {
@@ -253,19 +258,6 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec("LFO 1", vec![p("lfo1_sync", "Sync"), k("lfo1_rate", "Rate"), p("lfo1_shape", "Shape")]),
                 sec("LFO 2", vec![p("lfo2_sync", "Sync"), k("lfo2_rate", "Rate"), p("lfo2_shape", "Shape")]),
                 sec(format!("Modulation slot {b}"), vec![Ctl::Bands, p(format!("m{b}_src"), "Source"), p(format!("m{b}_dst"), "Target"), k(format!("m{b}_amt"), "Amount")]),
-            ],
-        },
-        "drakesong" => Panel {
-            skin: MODERN,
-            bands: None,
-            sections: vec![
-                sec("Input", vec![big("input", "Input")]),
-                sec("HF", vec![big("hf_gain", "Gain"), k("hf_freq", "Freq")]),
-                sec("HMF", vec![big("hmf_gain", "Gain"), k("hmf_freq", "Freq")]),
-                sec("LMF", vec![big("lmf_gain", "Gain"), k("lmf_freq", "Freq")]),
-                sec("LF", vec![big("lf_gain", "Gain"), k("lf_freq", "Freq")]),
-                sec("Sub & Air", vec![k("sub", "Sub"), big("air", "Air"), p("air_freq", "Air freq")]),
-                sec("Output", vec![p("model", "Voicing"), k("output", "Output")]),
             ],
         },
         "cinnabar" => Panel {
@@ -441,7 +433,7 @@ fn fit_text(p: &egui::Painter, at: Pos2, align: egui::Align2, text: &str, width:
 }
 
 /// Knob drag / wheel / reset handling on a normalized value. Returns the new value.
-fn knob_input(ui: &Ui, r: &mut Response, n: f32, default: f32, px: f32) -> f32 {
+pub fn knob_input(ui: &Ui, r: &mut Response, n: f32, default: f32, px: f32) -> f32 {
     let mut n = n;
     if r.dragged() {
         let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
@@ -1198,7 +1190,7 @@ mod tests {
     /// each once per band view (nothing falls back to the generic knob grid, nothing is shown twice).
     #[test]
     fn every_effect_has_a_complete_panel() {
-        for def in effects::registry() {
+        for def in effects::registry().iter().filter(|d| !super::super::fx_jade::own_face(d.id)) {
             let first = panel(def.id, 1).unwrap_or_else(|| panic!("{} has no panel", def.id));
             let bands = first.bands.map(|b| b.0).unwrap_or(1);
             let mut seen = std::collections::BTreeSet::new();

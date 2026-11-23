@@ -1,4 +1,4 @@
-//! **Drakesong** – a character EQ: six voicings of the same four bands (LF shelf, LMF and HMF bells, HF
+//! **Jadefang** – a character EQ: six voicings of the same four bands (LF shelf, LMF and HMF bells, HF
 //! shelf), an input that drives each voicing's iron or valve stage, and the two famous extremes of a
 //! very broad "open" EQ: a SUB band that lifts the lowest octaves without boom and an AIR band – a
 //! boost-only shelf so wide that its 20 and 40 kHz settings still open up the audible top gently.
@@ -14,7 +14,7 @@
 //! - **Skyfire**: the open one – extra-broad bells and shelves, the AIR band a little stronger, clean.
 //! - **Ancient**: vintage passive – broad and gentle, a soft top roll-off, soft saturation.
 //!
-//! [`response_db`] draws the same curve the audio gets (the display uses it).
+//! [`response_db`] gives the curve the audio gets (tests use it).
 
 use super::{Effect, EffectDef, ParamInfo};
 use crate::dsp::{db_to_gain, Biquad, BiquadKind};
@@ -42,13 +42,13 @@ static PARAMS: &[ParamInfo] = &[
 
 pub fn def() -> EffectDef {
     EffectDef {
-        id: "drakesong",
-        name: "Drakesong (character EQ)",
+        id: "jadefang",
+        name: "Jadefang (character EQ)",
         category: "EQ",
         description: "Six voicings of a four-band EQ with a driven input stage, a very broad Sub band and a boost-only Air band.",
         params: PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Drakesong::new(rate)),
+        create: |rate| Box::new(Jadefang::new(rate)),
     }
 }
 
@@ -165,7 +165,7 @@ pub fn response_db(s: &Settings, rate: f32, freq: f32) -> f32 {
 
 const MAX_BANDS: usize = 12;
 
-pub struct Drakesong {
+pub struct Jadefang {
     rate: f32,
     s: Settings,
     dirty: bool,
@@ -179,9 +179,9 @@ pub struct Drakesong {
     even: f32,
 }
 
-impl Drakesong {
+impl Jadefang {
     pub fn new(rate: f32) -> Self {
-        let mut d = Drakesong { rate, s: Settings::default(), dirty: true, filters: Default::default(), used: 0, dc: [(0.0, 0.0); 2], in_gain: 1.0, out_gain: 1.0, sat: 0.0, even: 0.0 };
+        let mut d = Jadefang { rate, s: Settings::default(), dirty: true, filters: Default::default(), used: 0, dc: [(0.0, 0.0); 2], in_gain: 1.0, out_gain: 1.0, sat: 0.0, even: 0.0 };
         d.update();
         d
     }
@@ -215,7 +215,7 @@ impl Drakesong {
     }
 }
 
-impl Effect for Drakesong {
+impl Effect for Jadefang {
     fn set_param(&mut self, id: &str, value: f32) {
         let s = &mut self.s;
         match id {
@@ -274,7 +274,7 @@ impl Effect for Drakesong {
 mod tests {
     use super::*;
 
-    fn tone_gain(e: &mut Drakesong, hz: f32) -> f32 {
+    fn tone_gain(e: &mut Jadefang, hz: f32) -> f32 {
         let rate = 48000.0;
         let n = 9600;
         let mut l: Vec<f32> = (0..n).map(|i| (i as f32 * hz * std::f32::consts::TAU / rate).sin() * 0.05).collect();
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn flat_at_zero_and_the_curve_matches_the_audio() {
-        let mut e = Drakesong::new(48000.0);
+        let mut e = Jadefang::new(48000.0);
         e.set_param("model", 0.0);
         assert!(tone_gain(&mut e, 1000.0).abs() < 0.1, "Clean scale at 0 dB is flat");
         e.set_param("lmf_gain", 9.0);
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn input_drives_the_voicing_but_level_stays_close() {
-        let mut e = Drakesong::new(48000.0);
+        let mut e = Jadefang::new(48000.0);
         e.set_param("model", 1.0);
         e.set_param("input", 12.0);
         let g = tone_gain(&mut e, 1000.0);

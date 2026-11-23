@@ -525,8 +525,13 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         } else {
             egui::Stroke::new(2.0_f32, shade(face, 0.55))
         });
-        let (edits, _) =
-            bezel.show(ui, |ui| super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) })).inner;
+        // Jadefang has its own face (a classic EQ module layout, no display); the others a display.
+        let own_face = super::fx_jade::own_face(def.id);
+        let (edits, _) = if own_face {
+            (super::fx_jade::body(ui, def, &ins.params, ccol, egui::Id::new(("fx.jade", m, i))), false)
+        } else {
+            bezel.show(ui, |ui| super::fx_ui::hero(ui, &super::fx_ui::Hero { def, params: &ins.params, gr, enabled: ins.enabled, color: ccol, time, tele: &tele, key: egui::Id::new(("fx.hero", m, i)) })).inner
+        };
         ui.add_space(8.0);
         if let Some((k, v)) = edits.last() {
             if let Some(prm) = def.params.iter().find(|p| p.id == k.as_str()) {
@@ -544,6 +549,9 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
         }
         if time.is_some() && ins.enabled {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+        }
+        if own_face {
+            return true;
         }
         // The designed panel (fx_panel); the generic grid below only for an effect without one.
         let eq_sel_key = egui::Id::new(("fx.hero", m, i)).with("eq.sel");

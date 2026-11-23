@@ -41,7 +41,7 @@ pub enum Finish {
     Cinnabar,
     /// Dark dragon-scale hide with gold edges (Wyrmdrum, the drum pads).
     Wyrmhide,
-    /// Jade-green enamel with fine scales (Drakesong, the character EQ): black knurled knobs.
+    /// Jade-green enamel with fine scales (Jadefang, the character EQ): black knurled knobs.
     Jade,
 }
 
@@ -165,7 +165,7 @@ pub fn finish_of(id: &str) -> Finish {
         "delay" => Finish::Slate,
         "cinnabar" => Finish::Cinnabar,
         "wyrmdrum" => Finish::Wyrmhide,
-        "drakesong" => Finish::Jade,
+        "jadefang" => Finish::Jade,
         _ => Finish::Copper,
     }
 }
@@ -231,6 +231,12 @@ fn light(c: Color32, k: f32) -> Color32 {
 
 fn tex(ctx: &egui::Context, name: &'static str, bytes: &[u8]) -> Option<TextureHandle> {
     super::guitar_ui::texture(ctx, name, bytes)
+}
+
+/// The faceplate photograph of a finish, as a texture.
+pub fn plate_texture(ctx: &egui::Context, f: Finish) -> Option<TextureHandle> {
+    let (name, bytes) = f.plate()?;
+    tex(ctx, name, bytes)
 }
 
 /// The photographed cap of a knob style (pointer straight up).
