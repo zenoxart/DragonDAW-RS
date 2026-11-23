@@ -384,6 +384,14 @@ impl Effect for Smoothed {
     fn gain_reduction(&self) -> f32 {
         self.inner.gain_reduction()
     }
+    // The wrapped effect's live values – without this every stock display (Dragonforge's input history and
+    // target meter, the EQ curves, the tuner …) would read nothing.
+    fn telemetry(&self) -> &[f32] {
+        self.inner.telemetry()
+    }
+    fn editor_fullscreen(&mut self, on: bool) -> bool {
+        self.inner.editor_fullscreen(on)
+    }
     fn set_position(&mut self, beat: f64, playing: bool) {
         self.inner.set_position(beat, playing)
     }
@@ -424,6 +432,19 @@ pub fn value(def: &EffectDef, params: &BTreeMap<String, f32>, id: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The smoothing wrapper hands the effect's live values through (Dragonforge's input history and
+    /// target meter read them; they stayed flat while it swallowed them).
+    #[test]
+    fn wrapper_passes_telemetry() {
+        let mut e = create("drum_bus", 48_000.0, &BTreeMap::new()).unwrap();
+        let mut l: Vec<f32> = (0..512).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+        let mut r = l.clone();
+        e.process(&mut l, &mut r, None);
+        let t = e.telemetry();
+        assert!(t.len() >= 6, "telemetry lost: {t:?}");
+        assert!(t[0] > 0.3 && t[3] > 0.05, "input peak / RMS missing: {t:?}");
+    }
 
     /// Zipper / click hunt: sweeping any continuous knob of any stock effect over a smooth low tone, the
     /// way the UI does (a new value every ~16 ms, smoothed by the wrapper), must not put sharp

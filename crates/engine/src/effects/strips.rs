@@ -525,7 +525,7 @@ const DRUM_PARAMS: &[ParamInfo] = &[
     ParamInfo::choice("colour", "Drive colour", DRUM_COLOURS, 0.0),
     ParamInfo::log("drive_hp", "Drive high-pass", 10.0, 120.0, 20.0, "Hz"),
     ParamInfo::lin("harmonics", "Harmonics", 0.0, 100.0, 20.0, "%"),
-    ParamInfo::choice("focus", "Harmonics focus", &["50 Hz", "80 Hz"], 0.0),
+    ParamInfo::choice("focus", "Harmonics focus", &["50 Hz", "80 Hz"], 1.0),
     ParamInfo::choice("comp_mode", "Compression mode", &["A (glue)", "B (punch)"], 0.0),
     ParamInfo::lin("comp_mix", "Compression", 0.0, 100.0, 30.0, "%"),
     ParamInfo::lin("lift", "Lift", 0.0, 100.0, 15.0, "%"),

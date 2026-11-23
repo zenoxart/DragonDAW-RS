@@ -228,26 +228,69 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, live: 
         if let Some(ht) = tex(&ctx, "forge-hearth", HEARTH) {
             let fr = fit(&ht, r.shrink(8.0 * s));
             f.p.image(ht.id(), fr, full_uv(), Color32::WHITE);
-            // The hearth's flames, on the coals: taller with more drive, flickering with the level.
+            // The fire inside the hearth: the more drive, the hotter it burns – more and taller flames that
+            // fill the firebox, a colour going from deep red over orange to a yellow-white core, glowing
+            // coals, embers rising and the dragon's eyes catching the heat. It flickers with the level.
+            let (heat, _) = super::analog::spring(&ctx, salt.with("heat"), drive, 2.5, 0.9, motion);
+            let pulse = 0.85 + 0.15 * lvl;
+            let fx = |u: f32| fr.left() + fr.width() * u;
+            let fy = |v: f32| fr.top() + fr.height() * v;
+            // The firebox opening (in the art: 25 … 75 % across, 48 … 78 % down).
+            let firebox = Rect::from_min_max(Pos2::new(fx(0.255), fy(0.49)), Pos2::new(fx(0.745), fy(0.785)));
+            let fp = f.p.with_clip_rect(firebox);
+            let base_y = fy(0.765);
+            // Heat behind the flames.
+            let back = Color32::from_rgb(0xff, (0x50 as f32 + 0x90 as f32 * heat) as u8, (0x10 as f32 + 0x50 as f32 * heat * heat) as u8);
+            super::fx_mod::halo(&fp, Pos2::new(firebox.center().x, base_y), firebox.width() * (0.5 + 0.3 * heat), back, (0.25 + 0.55 * heat) * pulse);
             if let Some(fl) = tex(&ctx, "fx-flame", FLAME) {
-                let heat = (0.25 + 0.75 * drive) * (0.7 + 0.3 * lvl);
-                let base_y = fr.top() + fr.height() * 0.76;
-                for k in 0..5 {
-                    let x = fr.left() + fr.width() * (0.33 + 0.085 * k as f32);
-                    let flick = 0.8 + 0.2 * (t * 7.0 + k as f32 * 1.7).sin() * (t * 3.1 + k as f32).cos();
-                    let hh = fr.height() * 0.2 * heat * flick * if k == 2 { 1.25 } else { 1.0 };
-                    let fw = hh * 0.55;
-                    f.p.image(fl.id(), Rect::from_min_max(Pos2::new(x - fw / 2.0, base_y - hh), Pos2::new(x + fw / 2.0, base_y)), full_uv(), Color32::WHITE);
+                // Outer flames: from a few low tongues at rest to a wall of fire reaching the arch.
+                let count = 5 + (heat * 6.0).round() as usize;
+                for k in 0..count {
+                    let u = if count > 1 { k as f32 / (count - 1) as f32 } else { 0.5 };
+                    let x = firebox.left() + firebox.width() * (0.08 + 0.84 * u);
+                    let ph = k as f32 * 1.37;
+                    let flick = if motion { 0.78 + 0.22 * ((t * 8.3 + ph).sin() * 0.6 + (t * 13.1 + ph * 2.1).sin() * 0.4) } else { 1.0 };
+                    let centre = 1.0 - (u - 0.5).abs() * 0.8;
+                    let hh = firebox.height() * (0.28 + 0.72 * heat) * centre * flick * pulse;
+                    let fw = hh * (0.5 + 0.1 * heat);
+                    let sway = if motion { (t * 3.0 + ph).sin() * 2.0 * s } else { 0.0 };
+                    let tint = Color32::from_rgb(0xff, (0x88 as f32 + 0x60 as f32 * heat) as u8, (0x50 as f32 + 0x70 as f32 * heat) as u8);
+                    fp.image(fl.id(), Rect::from_min_max(Pos2::new(x - fw / 2.0 + sway, base_y - hh), Pos2::new(x + fw / 2.0 + sway, base_y)), full_uv(), tint);
                 }
-                super::fx_mod::halo(&f.p, Pos2::new(fr.center().x, base_y - fr.height() * 0.08), fr.width() * 0.45, EMBER, 0.15 + 0.35 * heat);
+                // The white-hot core once the drive is up.
+                if heat > 0.25 {
+                    let core = ((heat - 0.25) / 0.75).clamp(0.0, 1.0);
+                    for k in 0..3 {
+                        let x = firebox.center().x + (k as f32 - 1.0) * firebox.width() * 0.16;
+                        let flick = if motion { 0.85 + 0.15 * (t * 11.0 + k as f32 * 2.3).sin() } else { 1.0 };
+                        let hh = firebox.height() * 0.55 * core * flick * pulse * if k == 1 { 1.0 } else { 0.75 };
+                        let fw = hh * 0.45;
+                        fp.image(fl.id(), Rect::from_min_max(Pos2::new(x - fw / 2.0, base_y - hh), Pos2::new(x + fw / 2.0, base_y)), full_uv(), Color32::from_rgba_unmultiplied(0xff, 0xf4, 0xd0, (200.0 * core) as u8));
+                    }
+                }
             }
-            // The breath: from the open jaws down into the coals, longer with more drive.
-            if let Some(fl) = tex(&ctx, "fx-flame", FLAME) {
-                let jaw = Pos2::new(fr.center().x, fr.top() + fr.height() * 0.40);
-                let len = fr.height() * (0.12 + 0.34 * drive) * (0.85 + 0.15 * (t * 9.0).sin());
-                let wdt = len * 0.42;
-                super::analog::rotated(&f.p, &fl, jaw + Vec2::new(0.0, len * 0.5), len * 0.5, PI, Color32::from_rgb(255, (200.0 - 60.0 * drive) as u8, 120));
-                let _ = wdt;
+            // The coal bed glows hotter.
+            for k in 0..4 {
+                let x = firebox.left() + firebox.width() * (0.15 + 0.233 * k as f32);
+                let breathe = if motion { 0.8 + 0.2 * (t * 2.2 + k as f32 * 1.9).sin() } else { 1.0 };
+                super::fx_mod::halo(&fp, Pos2::new(x, base_y), 14.0 * s, Color32::from_rgb(0xff, 0x9a, 0x30), (0.2 + 0.5 * heat) * breathe);
+            }
+            // Embers rising out of the fire.
+            if motion {
+                let n_emb = (4.0 + 14.0 * heat) as usize;
+                for k in 0..n_emb {
+                    let seed = (k as f32 * 0.618_034).fract();
+                    let life = 1.2 + seed * 0.8;
+                    let age = ((t + seed * 7.0) % life) / life;
+                    let x = firebox.left() + firebox.width() * (0.12 + 0.76 * seed) + (t * 2.0 + k as f32).sin() * 4.0 * s;
+                    let y = base_y - age * firebox.height() * (0.6 + 0.5 * heat);
+                    let a = ((1.0 - age) * 255.0 * (0.4 + 0.6 * heat)) as u8;
+                    f.p.circle_filled(Pos2::new(x, y), (1.0 + seed) * s, Color32::from_rgba_unmultiplied(0xff, 0xc8, 0x60, a));
+                }
+            }
+            // The dragon's eyes catch the heat.
+            for u in [0.405, 0.595] {
+                super::fx_mod::halo(&f.p, Pos2::new(fx(u), fy(0.215)), 9.0 * s, Color32::from_rgb(0xff, 0x70, 0x20), 0.15 + 0.55 * heat * pulse);
             }
         }
         f.badge(156.0, 350.0, "DRIVE", 17.0);
@@ -313,31 +356,71 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, live: 
         let screen = r.shrink(12.0 * s);
         f.p.rect_filled(screen, 4.0, Color32::from_rgb(0x1a, 0x08, 0x04));
         // The drums as they come in: a history of input peaks, drawn as glowing hot metal.
+        // One column every 1/30 s holding the loudest block since the last one (frame-rate independent).
         let key = salt.with("forge.hist");
-        let mut hist: Vec<f32> = ctx.data(|d| d.get_temp(key)).unwrap_or_else(|| vec![0.0; 90]);
+        let (mut hist, mut last, mut hold): (Vec<f32>, f32, f32) = ctx.data(|d| d.get_temp(key)).unwrap_or_else(|| (vec![0.0; 90], t, 0.0));
         if live.enabled {
-            hist.remove(0);
-            hist.push(pin.min(1.5));
-            ctx.data_mut(|d| d.insert_temp(key, hist.clone()));
+            hold = hold.max(pin.min(1.5));
+            let steps = if motion { ((t - last) * 30.0).floor().clamp(0.0, 90.0) as usize } else { 1 };
+            for _ in 0..steps {
+                hist.remove(0);
+                hist.push(hold);
+                hold = 0.0;
+            }
+            if steps > 0 {
+                last = t;
+            }
+            ctx.data_mut(|d| d.insert_temp(key, (hist.clone(), last, hold)));
         }
-        let mid = screen.center().y - 8.0 * s;
-        let hh = screen.height() * 0.36;
+        let mid = screen.top() + 46.0 * s;
+        let hh = 34.0 * s;
         let step = screen.width() / (hist.len() - 1) as f32;
-        let top: Vec<Pos2> = hist.iter().enumerate().map(|(i, v)| Pos2::new(screen.left() + i as f32 * step, mid - v.min(1.0) * hh)).collect();
-        let bot: Vec<Pos2> = hist.iter().enumerate().map(|(i, v)| Pos2::new(screen.left() + i as f32 * step, mid + v.min(1.0) * hh)).collect();
+        // Drawn on a dB scale (−48 … 0 dBFS), so quiet drums still show.
+        let amp = |v: f32| ((db(v) + 48.0) / 48.0).clamp(0.0, 1.0);
+        let top: Vec<Pos2> = hist.iter().enumerate().map(|(i, v)| Pos2::new(screen.left() + i as f32 * step, mid - amp(*v) * hh)).collect();
+        let bot: Vec<Pos2> = hist.iter().enumerate().map(|(i, v)| Pos2::new(screen.left() + i as f32 * step, mid + amp(*v) * hh)).collect();
         for (k, w) in [(0.18, 7.0_f32), (0.45, 3.5), (1.0, 1.6)] {
             let col = Color32::from_rgba_unmultiplied(0xff, (0x70 as f32 + 0x60 as f32 * k) as u8, 0x20, (255.0 * k) as u8);
             f.p.add(Shape::line(top.clone(), Stroke::new(w * s, col)));
             f.p.add(Shape::line(bot.clone(), Stroke::new(w * s, col)));
         }
-        // The input's gain-staging target (−12 … −8 dB RMS): a strip under the metal.
-        let bar = Rect::from_min_max(Pos2::new(screen.left() + 8.0, screen.bottom() - 14.0 * s), Pos2::new(screen.right() - 8.0, screen.bottom() - 8.0 * s));
-        let xdb = |d: f32| bar.left() + ((d + 40.0) / 40.0).clamp(0.0, 1.0) * bar.width();
-        f.p.rect_filled(bar, 2.0, Color32::from_black_alpha(180));
-        f.p.rect_filled(Rect::from_min_max(Pos2::new(xdb(-12.0), bar.top()), Pos2::new(xdb(-8.0), bar.bottom())), 1.0, GOLD_DIM.gamma_multiply(0.7));
-        let rd = db(rin);
-        f.p.rect_filled(Rect::from_min_max(bar.left_top(), Pos2::new(xdb(rd), bar.bottom())), 1.0, if (-12.0..=-8.0).contains(&rd) { Color32::from_rgb(0x9a, 0xe0, 0x6a) } else { EMBER });
-        f.p.text(Pos2::new(bar.left(), bar.top() - 3.0), egui::Align2::LEFT_BOTTOM, "INPUT  ·  aim for the gold", f.font(9.0), GOLD_DIM);
+        // The input's gain-staging target: the input RMS against the gold zone (−12 … −8 dB), with a scale
+        // and the reading.
+        let bar = Rect::from_min_max(Pos2::new(screen.left() + 10.0 * s, screen.top() + 100.0 * s), Pos2::new(screen.right() - 10.0 * s, screen.top() + 112.0 * s));
+        let xdb = |d: f32| bar.left() + ((d + 36.0) / 36.0).clamp(0.0, 1.0) * bar.width();
+        let rd = if live.enabled { db(rin) } else { -120.0 };
+        let (shown, _) = super::analog::spring(&ctx, salt.with("forge.rms"), rd.max(-40.0), 6.0, 1.0, motion);
+        let in_gold = (-12.0..=-8.0).contains(&rd);
+        f.p.text(Pos2::new(bar.left(), bar.top() - 4.0 * s), egui::Align2::LEFT_BOTTOM, "INPUT  ·  aim for the gold", f.font(10.5), GOLD);
+        let reading = if rd > -60.0 { format!("{rd:.1} dB") } else { "–".to_string() };
+        let rcol = if in_gold {
+            Color32::from_rgb(0x9a, 0xe0, 0x6a)
+        } else if rd > -8.0 {
+            Color32::from_rgb(0xff, 0x6a, 0x40)
+        } else {
+            GOLD_DIM
+        };
+        f.p.text(Pos2::new(bar.right(), bar.top() - 4.0 * s), egui::Align2::RIGHT_BOTTOM, reading, f.font(10.5), rcol);
+        f.p.rect_filled(bar, 3.0, Color32::from_black_alpha(200));
+        let zone = Rect::from_min_max(Pos2::new(xdb(-12.0), bar.top() - 2.0), Pos2::new(xdb(-8.0), bar.bottom() + 2.0));
+        f.p.rect_filled(zone, 2.0, GOLD.gamma_multiply(if in_gold { 0.9 } else { 0.45 }));
+        if shown > -36.0 {
+            let fill = Rect::from_min_max(bar.left_top() + Vec2::new(0.0, 3.0 * s), Pos2::new(xdb(shown), bar.bottom() - 3.0 * s));
+            f.p.rect_filled(fill, 2.0, if in_gold { Color32::from_rgb(0x9a, 0xe0, 0x6a) } else { EMBER });
+            f.p.line_segment([Pos2::new(xdb(shown), bar.top() - 3.0), Pos2::new(xdb(shown), bar.bottom() + 3.0)], Stroke::new(2.0_f32, Color32::from_rgb(0xff, 0xe8, 0xb0)));
+        }
+        for (d, l) in [(-36.0, "-36"), (-24.0, "-24"), (-12.0, "-12"), (-8.0, "-8"), (0.0, "0")] {
+            let x = xdb(d);
+            f.p.line_segment([Pos2::new(x, bar.bottom() + 1.0), Pos2::new(x, bar.bottom() + 4.0 * s)], Stroke::new(1.0_f32, GOLD_DIM));
+            let al = if d <= -36.0 {
+                egui::Align2::LEFT_TOP
+            } else if d >= 0.0 {
+                egui::Align2::RIGHT_TOP
+            } else {
+                egui::Align2::CENTER_TOP
+            };
+            f.p.text(Pos2::new(x, bar.bottom() + 5.0 * s), al, l, f.font(9.0), GOLD_DIM);
+        }
         // The anvil, sparks on every hit.
         let ar = f.rect(300.0, 266.0, 514.0, 356.0);
         if let Some(at) = tex(&ctx, "forge-anvil", ANVIL) {
@@ -391,37 +474,74 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, live: 
             f.p.image(dt.id(), fit(&dt, er.shrink(8.0 * s)), full_uv(), Color32::WHITE);
             super::fx_mod::halo(&f.p, er.center(), er.width() * 0.5, GOLD, 0.05 + 0.1 * lvl);
         }
-        // Harmonic EQ: tongs in glowing slots.
+        // Harmonic EQ: tongs in glowing slots. Each is a real fader in whole dB: click or drag anywhere in
+        // its column and the tongs go to the pointer, the wheel steps by 1 dB, double-click resets.
         let qr = f.rect(542.0, 308.0, 802.0, 500.0);
         f.panel(qr);
         f.badge(672.0, 328.0, "HARMONIC EQ", 15.0);
+        // The scale beside the first slot.
+        for (d, l) in [(0.0, "0"), (5.0, "5"), (10.0, "10")] {
+            f.p.text(f.pt(553.0, 448.0 - 9.0 * d), egui::Align2::CENTER_CENTER, l, f.font(9.0), GOLD_DIM);
+        }
         for (k, hz) in HEQ_FREQS.iter().enumerate() {
             let id = format!("heq{}", k + 1);
-            let x = 572.0 + 50.0 * k as f32;
-            let slot = f.rect(x - 4.0, 350.0, x + 4.0, 466.0);
-            f.p.rect_filled(slot, 3.0, Color32::from_rgb(0x0a, 0x06, 0x05));
+            let x = 580.0 + 46.0 * k as f32;
             let prm = f.prm(&id);
-            let v = f.v(&id);
-            let hit_r = f.rect(x - 18.0, 344.0, x + 18.0, 472.0);
-            let mut resp = f.ui.interact(hit_r, salt.with(id.as_str()), Sense::click_and_drag());
-            let n = fx_panel::knob_input(f.ui, &mut resp, prm.normalize(v), prm.normalize(prm.default), slot.height().max(60.0));
-            let fill = Rect::from_min_max(Pos2::new(slot.left(), slot.bottom() - slot.height() * n), slot.max);
-            f.p.rect_filled(fill, 3.0, Color32::from_rgb(0xff, 0x7a, 0x20));
-            super::fx_mod::halo(&f.p, fill.center_top(), 10.0 * s, EMBER, 0.2 + 0.4 * n);
+            let v = f.v(&id).round().clamp(0.0, 10.0);
+            // Slot: 0 dB at the bottom (y 448), 10 dB at the top (y 358) – 9 px per dB.
+            let slot = f.rect(x - 5.0, 354.0, x + 5.0, 452.0);
+            let ydb = |d: f32| f.o.y + (448.0 - 9.0 * d) * f.s;
+            let col_r = f.rect(x - 22.0, 342.0, x + 22.0, 462.0);
+            let resp = f.ui.interact(col_r, salt.with(id.as_str()), Sense::click_and_drag());
+            let active = resp.hovered() || resp.dragged();
+            let mut nv = v;
+            if resp.is_pointer_button_down_on() || resp.clicked() || resp.dragged() {
+                if let Some(pp) = resp.interact_pointer_pos() {
+                    nv = ((f.o.y + 448.0 * f.s - pp.y) / (9.0 * f.s)).round().clamp(0.0, 10.0);
+                }
+            }
+            if resp.hovered() {
+                let wheel = f.ui.input(|i| i.raw_scroll_delta.y);
+                if wheel != 0.0 {
+                    nv = (v + wheel.signum()).clamp(0.0, 10.0);
+                }
+            }
+            if resp.double_clicked() {
+                nv = prm.default;
+            }
+            if nv != v {
+                f.out.push((id.clone(), nv));
+            }
+            if active {
+                f.p.rect_filled(col_r, 4.0, Color32::from_rgba_unmultiplied(0xff, 0x9a, 0x3c, 18));
+                f.ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
+            f.p.rect_filled(slot, 4.0, Color32::from_rgb(0x0a, 0x06, 0x05));
+            f.p.rect_stroke(slot, 4.0, Stroke::new(1.0_f32, GOLD_DIM.gamma_multiply(0.5)), egui::StrokeKind::Outside);
+            // A notch per dB.
+            for d in 0..=10 {
+                let y = ydb(d as f32);
+                let w = if d % 5 == 0 { 9.0 } else { 6.0 } * f.s;
+                f.p.line_segment([Pos2::new(slot.right() + 2.0, y), Pos2::new(slot.right() + 2.0 + w, y)], Stroke::new(1.0_f32, GOLD_DIM.gamma_multiply(if d as f32 <= nv { 1.0 } else { 0.5 })));
+            }
+            let hy = ydb(nv);
+            if nv > 0.0 {
+                let fill = Rect::from_min_max(Pos2::new(slot.left() + 2.0, hy), Pos2::new(slot.right() - 2.0, ydb(0.0)));
+                f.p.rect_filled(fill, 3.0, Color32::from_rgb(0xff, (0x6a as f32 + 8.0 * nv) as u8, 0x20));
+                super::fx_mod::halo(&f.p, Pos2::new(slot.center().x, hy), 12.0 * f.s, EMBER, 0.2 + 0.05 * nv);
+            }
             if let Some(tt) = tex(&ctx, "forge-tongs", TONGS) {
-                let hy = slot.bottom() - slot.height() * n;
-                let hrr = fit(&tt, Rect::from_center_size(Pos2::new(slot.center().x, hy), Vec2::new(40.0, 56.0) * s));
-                f.p.image(tt.id(), hrr, full_uv(), Color32::WHITE);
+                let hrr = fit(&tt, Rect::from_center_size(Pos2::new(slot.center().x, hy + 10.0 * f.s), Vec2::new(30.0, 42.0) * f.s));
+                f.p.image(tt.id(), hrr, full_uv(), if active { Color32::WHITE } else { Color32::from_gray(225) });
             }
             let label = if *hz >= 1000.0 { format!("{}k", hz / 1000.0) } else { format!("{hz:.0}") };
-            let lr = Rect::from_center_size(f.pt(x, 486.0), Vec2::new(36.0, 16.0) * s);
+            let lr = Rect::from_center_size(f.pt(x, 474.0), Vec2::new(36.0, 15.0) * f.s);
             f.p.rect_filled(lr, 3.0, Color32::from_rgb(0x1c, 0x16, 0x12));
             f.p.rect_stroke(lr, 3.0, Stroke::new(1.0_f32, GOLD_DIM), egui::StrokeKind::Inside);
-            f.p.text(lr.center(), egui::Align2::CENTER_CENTER, label, f.font(10.5), GOLD);
-            if resp.changed() {
-                f.out.push((id.clone(), prm.denormalize(n).round()));
-            }
-            resp.on_hover_text(format!("{} {} – drag up / down, double-click resets", prm.name, prm.format(prm.denormalize(n).round())));
+            f.p.text(lr.center(), egui::Align2::CENTER_CENTER, label, f.font(10.0), GOLD);
+            let vcol = if nv > 0.0 { Color32::from_rgb(0xff, 0xb0, 0x50) } else { GOLD_DIM };
+            f.p.text(f.pt(x, 490.0), egui::Align2::CENTER_CENTER, format!("+{nv:.0} dB"), f.font(10.0), vcol);
+            resp.on_hover_text(format!("{} – click or drag to set, wheel ±1 dB, double-click resets", prm.name));
         }
         // Parallels.
         let pr = f.rect(542.0, 508.0, 802.0, 640.0);
@@ -499,5 +619,27 @@ mod tests {
         }
         // (The test never feeds the value back, so every step moves it from the default.)
         assert!(all.iter().any(|(k, v)| k == "drive" && *v > 21.0), "{all:?}");
+    }
+
+    /// The harmonic EQ faders go to where they're clicked or dragged, in whole dB, and the
+    /// harmonics focus starts on 80 Hz.
+    #[test]
+    fn harmonic_eq_faders_follow_the_pointer() {
+        let ctx = egui::Context::default();
+        let params = dragon_engine::effects::find("drum_bus").unwrap().defaults();
+        assert_eq!(params.get("focus"), Some(&1.0), "80 Hz by default");
+        frame(&ctx, &params, vec![]);
+        let at = |x: f32, y: f32| Pos2::new(8.0 + x, 8.0 + y);
+        // 3.5 kHz column (x 718), 6 dB = y 448 - 54.
+        assert!(click(&ctx, &params, at(718.0, 394.0)).contains(&("heq4".to_string(), 6.0)), "click sets 6 dB");
+        // Dragging the 60 Hz fader to the top gives 10 dB, step by step.
+        let start = at(580.0, 446.0);
+        frame(&ctx, &params, vec![egui::Event::PointerMoved(start)]);
+        frame(&ctx, &params, vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+        let mut all = Vec::new();
+        for k in 1..=12 {
+            all.extend(frame(&ctx, &params, vec![egui::Event::PointerMoved(start - Vec2::new(0.0, 9.0 * k as f32))]));
+        }
+        assert!(all.contains(&("heq1".to_string(), 10.0)), "{all:?}");
     }
 }
