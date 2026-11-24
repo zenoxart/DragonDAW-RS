@@ -944,7 +944,8 @@ mod tests {
         assert_eq!(copy.inserts.len(), 1);
         assert_ne!(copy.inserts[0].id, iid, "own effect ids");
         assert_eq!(copy.inserts[0].mix, 0.7);
-        assert!(clone_mixer_channel(&mut p, p.mixer.master.id).is_none());
+        let master = p.mixer.master.id;
+        assert!(clone_mixer_channel(&mut p, master).is_none());
     }
 
     /// A drum-pads channel splits into one channel per played pad, each with its pad and notes; the song
