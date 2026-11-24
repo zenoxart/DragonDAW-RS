@@ -90,8 +90,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("rack.delete", "Delete selected channels", "", 0, "Alt+Delete"),
     ("rack.up", "Select channel above", "", 0, "Up"),
     ("rack.down", "Select channel below", "", 0, "Down"),
-    ("nav.left", "Playlist: move the selected clips left (or scroll left)", "", 0, "Left"),
-    ("nav.right", "Playlist: move the selected clips right (or scroll right)", "", 0, "Right"),
+    ("nav.left", "Playlist: move the selected clips left (or, with nothing selected, the playhead back – faster the longer you hold)", "", 0, "Left"),
+    ("nav.right", "Playlist: move the selected clips right (or, with nothing selected, the playhead forward – faster the longer you hold)", "", 0, "Right"),
     ("ctx.ctrl_enter", "Focus playlist (rack) / select time around the selection (playlist)", "", 0, "Ctrl+Enter"),
     ("pl.time_prev", "Select time before the selection", "", 0, "Ctrl+Left"),
     ("pl.time_next", "Select time after the selection", "", 0, "Ctrl+Right"),
@@ -429,12 +429,39 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         // they scroll the view (a bar left/right, a track up/down).
         "rack.up" | "rack.down" | "nav.left" | "nav.right" if st.ui.editor == Ed::Playlist => {
             if st.ui.clips.is_empty() {
-                let bar = st.session.project.beats_per_bar(st.ui.pl_x);
                 let row = 56.0 * st.ui.pl_vzoom;
                 st.ui.pl_anim = None;
                 match id {
-                    "nav.left" => st.ui.pl_x = (st.ui.pl_x - bar).max(0.0),
-                    "nav.right" => st.ui.pl_x += bar,
+                    "nav.left" | "nav.right" => {
+                        // The playhead moves; held down, it speeds up: beats, then bars, then 4 and 8 bars.
+                        // (While held, from the position the last press asked for – the engine seeks a moment later.)
+                        let now = std::time::Instant::now();
+                        let (held, pos) = match st.ui.nav_hold {
+                            Some((k, since, last, at)) if k == id && now.duration_since(last).as_secs_f32() < 0.6 => (now.duration_since(since).as_secs_f32(), at),
+                            _ => (0.0, st.beat_now()),
+                        };
+                        let since = if held > 0.0 { now - std::time::Duration::from_secs_f32(held) } else { now };
+                        let bar = st.session.project.beats_per_bar(pos);
+                        let step = if held < 0.5 {
+                            1.0
+                        } else if held < 1.5 {
+                            bar
+                        } else if held < 3.0 {
+                            bar * 4.0
+                        } else {
+                            bar * 8.0
+                        };
+                        // Steps land on the grid of their size.
+                        let to = if id == "nav.left" { ((pos - 1e-6) / step).floor() * step } else { ((pos + 1e-6) / step).floor() * step + step };
+                        let to = to.max(0.0);
+                        st.seek(to);
+                        st.ui.nav_hold = Some((if id == "nav.left" { "nav.left" } else { "nav.right" }, since, now, to));
+                        // Keep it in view.
+                        let visible = (st.ui.pl_timeline_w.max(200.0) / st.ui.playlist_zoom) as f64;
+                        if to < st.ui.pl_x || to > st.ui.pl_x + visible * 0.9 {
+                            st.ui.pl_x = (to - visible * 0.3).max(0.0);
+                        }
+                    }
                     "rack.up" => st.ui.pl_y = (st.ui.pl_y - row).max(0.0),
                     _ => st.ui.pl_y += row,
                 }

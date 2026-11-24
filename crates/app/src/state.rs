@@ -170,6 +170,10 @@ pub struct UiState {
     /// The snap restored when Backspace turns snapping back on.
     pub snap_saved: f64,
     pub playlist_zoom: f32,
+    /// The playlist timeline's width last frame (for zoom to fit).
+    pub pl_timeline_w: f32,
+    /// The arrow key held in the playlist: (command, held since, last press, position asked for).
+    pub nav_hold: Option<(&'static str, std::time::Instant, std::time::Instant, f64)>,
     pub piano_zoom: f32,
     pub key_height: f32,
     pub scale_root: u8,
@@ -325,6 +329,8 @@ impl UiState {
             snap: 0.25,
             snap_saved: 0.25,
             playlist_zoom: 28.0,
+            pl_timeline_w: 0.0,
+            nav_hold: None,
             piano_zoom: 96.0,
             key_height: 14.0,
             scale_root: 0,

@@ -199,7 +199,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     match nav::area_zoom(ui, timeline, "playlist") {
         Some(AreaZoom::To(r)) => {
             let (b0, b1) = (beat_of(r.left(), st.ui.pl_x), beat_of(r.right(), st.ui.pl_x));
-            let nz = (timeline.width() as f64 / (b1 - b0).max(1e-3)).clamp(3.0, 400.0);
+            let nz = (timeline.width() as f64 / (b1 - b0).max(1e-3)).clamp(MIN_ZOOM as f64, 400.0);
             let vz = st.ui.pl_vzoom;
             let vs = if r.height() > 24.0 { (vz * timeline.height() / r.height()).clamp(0.4, 4.0) } else { vz };
             let content_y = r.top() - timeline.top() + st.ui.pl_y;
@@ -207,7 +207,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
         Some(AreaZoom::Out(at)) => {
             let b = beat_of(at.x, st.ui.pl_x);
-            let nz = (zoom / 2.0).clamp(3.0, 400.0);
+            let nz = (zoom / 2.0).clamp(MIN_ZOOM as f64, 400.0);
             let vz = st.ui.pl_vzoom;
             let vs = if vz > 1.0 { (vz / 2.0).max(1.0) } else { vz };
             st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: vs, y: (st.ui.pl_y * vs / vz).max(0.0) });
@@ -256,7 +256,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             st.ui.pl_vzoom = nv;
         } else if zoom_d != 1.0 {
             let mouse_beat = ui.input(|i| i.pointer.hover_pos()).map(|p| beat_of(p.x, st.ui.pl_x)).unwrap_or(st.ui.pl_x);
-            st.ui.playlist_zoom = (st.ui.playlist_zoom * zoom_d).clamp(3.0, 400.0);
+            st.ui.playlist_zoom = (st.ui.playlist_zoom * zoom_d).clamp(MIN_ZOOM, 400.0);
             let nz = st.ui.playlist_zoom as f64;
             if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
                 st.ui.pl_x = (mouse_beat - (p.x - timeline.left()) as f64 / nz).max(0.0);
@@ -333,15 +333,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     // ----- grid
     let end_beat = beat_of(timeline.right(), sx);
     let bpb = p.beats_per_bar(0.0);
-    let step = if zoom < 6.0 {
-        bpb * 4.0
-    } else if zoom < 14.0 {
-        bpb
-    } else if zoom < 60.0 {
-        1.0
-    } else {
-        0.25
-    };
+    // Grid lines at least ~7 px apart (quarter beats, beats, then bars, doubling) – readable at any zoom.
+    let step = grid_step(zoom, bpb, 7.0);
+    // Bar numbers at least ~34 px apart.
+    let label_step = grid_step(zoom, bpb, 34.0).max(bpb);
+    st.ui.pl_timeline_w = timeline.width();
     let mut b = snap_floor(sx, step);
     let tgrid = painter.with_clip_rect(timeline);
     while b <= end_beat {
@@ -428,13 +424,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let ruler = Rect::from_min_max(Pos2::new(timeline.left(), rect.top()), Pos2::new(rect.right(), timeline.top()));
     let rp = painter.with_clip_rect(ruler);
     rp.rect_filled(ruler, 0.0, theme::PANEL);
-    let mut b = snap_floor(sx, bpb.max(step));
+    let mut b = snap_floor(sx, label_step);
     while b <= end_beat {
         let x = x_of(b, sx);
         let bar = (b / bpb).round() as i64 + 1;
         rp.line_segment([Pos2::new(x, ruler.bottom() - 8.0), Pos2::new(x, ruler.bottom())], Stroke::new(1.0_f32, theme::GRID_BAR));
         rp.text(Pos2::new(x + 3.0, ruler.bottom() - 2.0), egui::Align2::LEFT_BOTTOM, bar.to_string(), egui::FontId::monospace(10.0), theme::TEXT_DIM);
-        b += bpb.max(step);
+        b += label_step;
     }
     if let Some(r) = p.loop_range {
         let lr = Rect::from_x_y_ranges(x_of(r.start, sx)..=x_of(r.end, sx), ruler.top()..=ruler.top() + 7.0);
@@ -897,7 +893,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 painter.rect_stroke(r, 2.0, Stroke::new(1.0_f32, theme::ACCENT), egui::StrokeKind::Inside);
                 if !ui.input(|i| i.pointer.any_down()) && r.width() > 6.0 {
                     let (b0, b1) = (beat_of(r.left(), sx), beat_of(r.right(), sx));
-                    let nz = (timeline.width() as f64 / (b1 - b0).max(1e-3)).clamp(3.0, 400.0);
+                    let nz = (timeline.width() as f64 / (b1 - b0).max(1e-3)).clamp(MIN_ZOOM as f64, 400.0);
                     let vz = st.ui.pl_vzoom;
                     let vs = if r.height() > 24.0 { (vz * timeline.height() / r.height()).clamp(0.4, 4.0) } else { vz };
                     let content_y = r.top() - timeline.top() + st.ui.pl_y;
@@ -995,7 +991,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     if tool == Tool::Zoom && resp.secondary_clicked() {
         if let Some(at) = resp.interact_pointer_pos() {
             let b = beat_of(at.x, sx);
-            let nz = (zoom / 2.0).clamp(3.0, 400.0);
+            let nz = (zoom / 2.0).clamp(MIN_ZOOM as f64, 400.0);
             st.ui.pl_anim = Some(ViewTarget { zoom: nz, x: (b - (at.x - timeline.left()) as f64 / nz).max(0.0), vscale: st.ui.pl_vzoom, y: st.ui.pl_y });
         }
     }
@@ -1533,15 +1529,13 @@ fn toolbar(ui: &mut Ui, st: &mut State) {
         });
         ui.separator();
         if ui.small_button("−").clicked() {
-            st.ui.playlist_zoom = (st.ui.playlist_zoom / 1.25).max(3.0);
+            st.ui.playlist_zoom = (st.ui.playlist_zoom / 1.25).max(MIN_ZOOM);
         }
         if ui.small_button("+").clicked() {
             st.ui.playlist_zoom = (st.ui.playlist_zoom * 1.25).min(400.0);
         }
         if ui.small_button("Fit").on_hover_text("Zoom to the whole song").clicked() {
-            let len = st.session.project.song_length().max(16.0);
-            st.ui.playlist_zoom = ((ui.available_width() + 400.0) / len as f32).clamp(3.0, 400.0);
-            st.ui.pl_x = 0.0;
+            fit_song(st);
         }
         let marker = match crate::brand::icon_image(ui.ctx(), crate::brand::icon::MARKER, 16.0) {
             Some(img) => ui.add(egui::Button::image_and_text(img, RichText::new("Marker").small().color(theme::ACCENT_2))),
@@ -1581,4 +1575,29 @@ pub fn wave_disp(a: f32) -> f32 {
 /// An audio track: made to record (or armed), or holding only audio clips.
 pub fn is_audio_track(t: &Track) -> bool {
     t.audio || t.armed || (!t.clips.is_empty() && t.clips.iter().all(|c| matches!(c.kind, ClipKind::Audio(_))))
+}
+
+/// The furthest the playlist zooms out (pixels per beat): far enough for any song to fit.
+pub const MIN_ZOOM: f32 = 0.05;
+
+/// The smallest grid step (quarter beat, beat, then bars doubling) whose lines are at least `min_px` apart.
+fn grid_step(zoom: f64, bpb: f64, min_px: f64) -> f64 {
+    for st in [0.25, 1.0] {
+        if st * zoom >= min_px {
+            return st;
+        }
+    }
+    let mut st = bpb;
+    while st * zoom < min_px && st < 1e6 {
+        st *= 2.0;
+    }
+    st
+}
+
+/// Zooms the playlist so the whole song (and a little room after it) fits the timeline.
+pub fn fit_song(st: &mut State) {
+    let len = st.session.project.song_length().max(16.0) * 1.05;
+    let w = if st.ui.pl_timeline_w > 50.0 { st.ui.pl_timeline_w } else { 1000.0 };
+    st.ui.playlist_zoom = (w / len as f32).clamp(MIN_ZOOM, 400.0);
+    st.ui.pl_x = 0.0;
 }
