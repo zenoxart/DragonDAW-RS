@@ -1386,8 +1386,13 @@ impl Project {
             match &c.instrument {
                 Instrument::Sampler(s) => v.push(s.path.clone()),
                 Instrument::DrumPads(pads) => v.extend(pads.iter().flat_map(|p| p.layers.iter().map(|l| l.path.clone()))),
+                Instrument::Native(n) => v.extend(n.file.clone()),
                 _ => {}
             }
+        }
+        // Impulse responses and other files loaded into stock effects.
+        for m in std::iter::once(&self.mixer.master).chain(&self.mixer.channels) {
+            v.extend(m.inserts.iter().filter_map(|i| i.file.clone()));
         }
         v.retain(|p| !p.as_os_str().is_empty());
         v.sort();

@@ -15,7 +15,7 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Channel rack and step sequencer | ✅ | `views/rack.rs`; drop a sample (browser or desktop) on a channel to replace its sound |
 | Patterns: clone, make unique, split by channel, split at a bar, source pattern, delete | ✅ | the rack's Pattern menu and the ▼ menu of pattern clips (`edit::make_unique`, `split_by_channel`, `split_pattern_at`) |
 | Piano roll | ✅ | `views/piano_roll.rs`; drag selected notes (grabbed note snaps, Shift = copy, Alt = no snap), draw-and-drag, arrow-key nudge, Ctrl + right-drag zoom |
-| Sampler, synth, drum pads | ✅ | `engine/instruments` |
+| Sampler, synth, drum pads | ✅ | `engine/instruments` (plus wavetable, guitar, piano, FM, organ, 808, ensemble and granular – see P2) |
 | Built-in sounds | ✅ | Dragon Kit, synthesised on first run |
 | Audio recording of armed tracks with latency compensation | ✅ | `device.rs` (recorder thread), Transport › Record |
 | MIDI input (controllers, keyboards) and typing keyboard | ✅ | `device.rs` (`MidiInputs`), `views/keyboard.rs` |
@@ -47,7 +47,7 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Real-time safety | ✅ | no allocation on the audio thread (`tests/realtime.rs`), old songs freed on a GC thread, constant-cost loudness meter, insert chains spread over all cores; 200 stock plugins run in real time on a 4-core machine; knob moves reach the effects every frame and effects retune without resetting their filters (no zipper or "downsampled" sound) |
 | Audio output watchdog | ✅ | a stream error or a callback that stops for 2 s restarts the device and resumes playback at the same spot; a lost device is retried every 5 s |
 | Takes and comping | ✅ | take lanes, `edit::comp_promote` |
-| Loop recording into takes | 🟡 | each new recording pass moves the existing clips into a take lane; several loop cycles in one pass are kept as one long file |
+| Loop recording into takes | ✅ | recording across an active loop splits the file into its passes: each pass is a take ("Pass 1", "Pass 2" …), the last whole pass plays on the main lane; over existing audio everything goes onto a new grouped track (`edit::loop_passes`, `state.rs`) |
 | Punch in / out | ✅ | ruler `Shift`+drag, transport |
 | Quantize, legato, transpose, humanize | ✅ | piano roll |
 | Scale highlighting and snap | ✅ | piano roll: key (C … B) and scale (26 scales and modes) picked separately; in-scale rows lit, roots marked |
@@ -97,6 +97,10 @@ master at all; P4 = nice to have). ✅ = implemented and covered by tests or che
 | Stock effects with pro-grade handling: EQ analyzer, band add / remove / shape menu, compressor level history, typed values, Ctrl+click reset, full screen | ✅ | `views/fx_ui.rs`, `dsp/spectrum.rs` |
 | Native plugin editors resize with the plugin and can go full screen | ✅ Linux (X11) / Windows | `plugins/window.rs`, `clap.rs`, `vst3.rs` |
 | Clean Voice, Class-A Strip, Drum Bus, Alter, tube saturator, transient designer, phase meter | ✅ | `effects/voice.rs`, `strips.rs`, `alter.rs`, `dsp/tube.rs`, `dynamics.rs`, `color.rs` |
+| Convolution reverb, volume shaper, analyzer, tuner, amp & cabinet, vocoder, frequency shifter, stutter, tape stop, granular, lo-fi, exciter, auto-filter, shimmer reverb, spectral freeze | ✅ | Reliquary (uniformly partitioned convolution, 10 built-in spaces or your own IR file, swapped without a click), Tidecaller, Scrying Glass, Siren's Fork, Wyrmstack, Mandrake, Mercury Wheel, Hex, Petrify, Sandglass, Codex, Wisp, Familiar, Seraph, Rime – each with its themed panel, live display, emblem, 200 factory presets and manual pages (`effects/convolver.rs`, `shaper.rs`, `meters.rs`, `amp.rs`, `voxfx.rs`, `timefx.rs`, `colorfx.rs`, `spacefx.rs`) |
+| Mid / side compression | ✅ | the compressor's Channels switch: Stereo, Mid or Side (the other part delayed to match the look-ahead) |
+| MIDI effects | ✅ | a chain per channel in its instrument window: arpeggiator (synced, up / down / random / chords, octaves, gate, swing, latch), chord, note repeat, scale; allocation-free (`midifx.rs`) |
+| More instruments | ✅ | Hearthfire (4-operator FM, 8 algorithms), Basilica (tonewheel organ: drawbars, percussion, scanner vibrato, rotary speaker), Wyrmbass (808 bass with glide), Chorale (strings, choirs, pads, brass), Sandstorm (granular instrument on any sample); themed panels, live displays, factory presets (`instruments/native.rs`). The slicer is the existing Shardcutter |
 
 ## Comparison with the shortcuts
 
@@ -194,7 +198,7 @@ Checked against the manufacturers' manuals and spec sheets (tests in `effects/st
 | Stem master | ✅ | start screen: Drums, Melody, All vocals, SFX group buses and a mastering chain |
 | Master chain in the Mastering tab | ✅ | signal flow (IN → effects with their gain reduction → OUT with true peak; click opens, the switch bypasses) and the full slot list |
 | Audio Repair | ✅ | double-click an audio clip › Audio repair…: spectrogram with time and time × frequency selection; de-noise (learned profile, decision-directed Wiener), de-hum (auto 50 / 60 Hz, zero-phase notches), de-click (LPC interpolation), de-clip, distortion repair (soft-clipped peaks), de-reverb (Lebart), spectral attenuate, gain; every repair renders to a new file, Ctrl+Z goes back – `repair.rs`, `views/repair.rs` |
-| Note editing  | ✅ (monophonic) | Audio repair › Notes: detected notes as blobs with pitch curves, drag to move (semitones / free), pitch centre, flatten drift and vibrato. Note timing, formants and polyphonic (DNA) editing are not there |
+| Note editing  | ✅ (monophonic) | Audio repair › Notes: detected notes as blobs with pitch curves, drag to move (semitones / free), pitch centre, flatten drift and vibrato; Timing tool and Shape controls move a note in time, change its length (the gaps around it stretch) and shift its formants, by offline pitch-synchronous resynthesis (`repair::placement`, `resynth_note`). Polyphonic editing is not there |
 | Hammerstein graph of an effect | ✅ | every effect editor › Hammerstein: kernels G1–G5, THD and the static curve from a synchronised sweep (Novak), re-measured on every change; time-varying and adaptive effects are flagged – `hammerstein.rs` |
 | Drag a cut clip into a new grouped track | ✅ | drag clips below the last track: a new track grouped with theirs, same mixer channel; grouped tracks mute / solo together |
 | Hint bar (control and value at the top left) | ✅ | stock panels and displays, plugin parameter lists, plugins' own windows, mixer faders |

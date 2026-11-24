@@ -89,7 +89,8 @@ pub fn missing_files(p: &Project) -> Vec<PathBuf> {
     p.referenced_files().into_iter().filter(|f| crate::trust::may_read(f) && !f.exists()).collect()
 }
 
-/// Replaces every file path in the project (clips, takes, samplers, drum pads).
+/// Replaces every file path in the project (clips, takes, samplers, drum pads, instruments' samples,
+/// effects' impulse responses).
 pub fn rewrite_paths(p: &mut Project, mut f: impl FnMut(&Path) -> PathBuf) {
     if let Some(v) = &mut p.video {
         v.path = f(&v.path);
@@ -112,7 +113,19 @@ pub fn rewrite_paths(p: &mut Project, mut f: impl FnMut(&Path) -> PathBuf) {
                     l.path = f(&l.path);
                 }
             }
+            Instrument::Native(n) => {
+                if let Some(x) = &mut n.file {
+                    *x = f(x);
+                }
+            }
             _ => {}
+        }
+    }
+    for m in std::iter::once(&mut p.mixer.master).chain(p.mixer.channels.iter_mut()) {
+        for i in &mut m.inserts {
+            if let Some(x) = &mut i.file {
+                *x = f(x);
+            }
         }
     }
 }
@@ -298,9 +311,32 @@ mod tests {
         crate::samples::write_wav(&wav, &[0.1; 100], &[0.1; 100], 44100, crate::samples::BitDepth::Int16, false, false).unwrap();
         let mut p = Project::new_default();
         p.add_channel("Kick", Instrument::Sampler(SamplerParams { path: wav.clone(), ..Default::default() }));
+        // A granular instrument's sample and a convolution reverb's impulse response are collected too.
+        let pad = outside.path().join("pad.wav");
+        let ir = outside.path().join("hall.wav");
+        for f in [&pad, &ir] {
+            crate::samples::write_wav(f, &[0.2; 100], &[0.2; 100], 44100, crate::samples::BitDepth::Int16, false, false).unwrap();
+        }
+        let mut np = crate::instruments::native::NativeParams::new("granular_inst");
+        np.file = Some(pad.clone());
+        p.add_channel("Grains", Instrument::Native(Box::new(np)));
+        let id = p.next_id();
+        p.mixer.master.inserts.push(Insert {
+            id,
+            effect: "convolver".into(),
+            enabled: true,
+            mix: 1.0,
+            params: Default::default(),
+            sidechain: None,
+            plugin: None,
+            preset: String::new(),
+            mods: Vec::new(),
+            file: Some(ir.clone()),
+        });
         let path = dir.path().join("song").join("song.dragon");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        assert_eq!(collect_files(&mut p, &path).unwrap(), 1);
+        assert_eq!(collect_files(&mut p, &path).unwrap(), 3);
+        assert!(p.mixer.master.inserts[0].file.as_ref().unwrap().starts_with(dir.path()));
         save(&p, &path, 3).unwrap();
         save(&p, &path, 3).unwrap();
         assert!(backup_path(&path, 1).exists());
@@ -310,7 +346,8 @@ mod tests {
         assert!(!text.contains(&dir.path().display().to_string()));
         let back = load(&path).unwrap();
         assert!(missing_files(&back).is_empty());
-        assert_eq!(back.channels.len(), 1);
+        assert_eq!(back.channels.len(), 2);
+        assert!(back.referenced_files().iter().all(|f| f.exists()));
     }
 
     #[test]
