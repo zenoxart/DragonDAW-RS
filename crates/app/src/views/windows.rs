@@ -1218,6 +1218,7 @@ fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
             });
         }
     });
+    midi_fx_section(ui, st, cid, &ch.midi_fx, ccol);
     ui.separator();
     match ch.instrument.clone() {
         Instrument::Sampler(s) => sampler_editor(ui, st, cid, s, ch.envelope),
@@ -1476,6 +1477,95 @@ fn ir_file_cell(ui: &mut Ui, file: Option<&std::path::Path>, key: egui::Id) {
             }
             if file.is_some() && ui.button("Built-in").on_hover_text("Go back to the built-in spaces").clicked() {
                 ui.data_mut(|d| d.insert_temp(key, 2u8));
+            }
+        });
+    });
+}
+
+/// The channel's MIDI effects: notes pass through them, top to bottom, before the instrument.
+fn midi_fx_section(ui: &mut Ui, st: &mut State, cid: Id, fx: &[MidiFx], ccol: egui::Color32) {
+    use dragon_engine::midifx;
+    let set = |st: &mut State, label: &str, f: &dyn Fn(&mut Vec<MidiFx>)| {
+        st.session.edit(label, |p| with_channel(p, cid, |c| f(&mut c.midi_fx)));
+    };
+    let title = if fx.is_empty() { "MIDI effects".to_string() } else { format!("MIDI effects ({})", fx.iter().filter(|f| f.enabled).count()) };
+    egui::CollapsingHeader::new(RichText::new(title).strong()).id_salt(("midi_fx", cid)).default_open(!fx.is_empty()).show(ui, |ui| {
+        ui.label(RichText::new("Notes pass through these, top to bottom, before the instrument.").small().color(theme::TEXT_DIM));
+        for (k, f) in fx.iter().enumerate() {
+            let Some(def) = midifx::find(&f.id) else { continue };
+            egui::Frame::NONE.fill(theme::PANEL_2).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let mut on = f.enabled;
+                    if ui.checkbox(&mut on, RichText::new(def.name).strong().color(ccol)).on_hover_text(def.description).changed() {
+                        set(st, if on { "Enable MIDI effect" } else { "Bypass MIDI effect" }, &|v| v[k].enabled = on);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Remove").clicked() {
+                            set(st, "Remove MIDI effect", &|v| {
+                                v.remove(k);
+                            });
+                        }
+                        if k + 1 < fx.len() && ui.small_button("Down").on_hover_text("Later in the chain").clicked() {
+                            set(st, "Move MIDI effect", &|v| v.swap(k, k + 1));
+                        }
+                        if k > 0 && ui.small_button("Up").on_hover_text("Earlier in the chain").clicked() {
+                            set(st, "Move MIDI effect", &|v| v.swap(k, k - 1));
+                        }
+                    });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for prm in def.params {
+                        let v = def.value(&f.params, prm.id);
+                        let key = prm.id.to_string();
+                        match prm.kind {
+                            ParamKind::Choice(names) => {
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(prm.name).small());
+                                    let mut sel = v.round() as usize;
+                                    egui::ComboBox::from_id_salt(("midi_fx_c", cid, k, prm.id)).width(96.0).selected_text(names.get(sel).copied().unwrap_or("?")).show_ui(ui, |ui| {
+                                        for (i, n) in names.iter().enumerate() {
+                                            ui.selectable_value(&mut sel, i, *n);
+                                        }
+                                    });
+                                    if sel != v.round() as usize {
+                                        set(st, prm.name, &|x| {
+                                            x[k].params.insert(key.clone(), sel as f32);
+                                        });
+                                    }
+                                });
+                            }
+                            ParamKind::Toggle => {
+                                let mut b = v >= 0.5;
+                                if ui.checkbox(&mut b, prm.name).changed() {
+                                    set(st, prm.name, &|x| {
+                                        x[k].params.insert(key.clone(), if b { 1.0 } else { 0.0 });
+                                    });
+                                }
+                            }
+                            _ => {
+                                let mut val = v;
+                                let r = knob(ui, &mut val, prm.min, prm.max, prm.default, prm.name, |x| prm.format(x));
+                                let target = key.clone();
+                                widgets::apply(st, &r, prm.name, |p| {
+                                    with_channel(p, cid, |c| {
+                                        if let Some(m) = c.midi_fx.get_mut(k) {
+                                            m.params.insert(target.clone(), val);
+                                        }
+                                    })
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.label("Add:");
+            for def in midifx::registry() {
+                if ui.button(def.name).on_hover_text(def.description).clicked() {
+                    let new = MidiFx { id: def.id.to_string(), enabled: true, params: def.defaults() };
+                    set(st, "Add MIDI effect", &|v| v.push(new.clone()));
+                }
             }
         });
     });

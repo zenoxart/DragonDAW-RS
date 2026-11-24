@@ -92,6 +92,8 @@ pub struct Pool {
     inboxes: HashMap<Id, (Arc<Inbox>, ParamSent)>,
     /// Per channel: the instrument settings last applied (an unchanged instrument is not locked).
     applied: HashMap<Id, (Instrument, Envelope)>,
+    /// Per channel: the MIDI effects last configured.
+    midi_applied: HashMap<Id, Vec<crate::model::MidiFx>>,
     /// Per insert: its dry signal delayed by its latency (for the mix).
     dry: HashMap<Id, SharedDry>,
 }
@@ -314,9 +316,13 @@ impl Pool {
             Instrument::Plugin(p) => self.plugins.as_mut()?.create_instrument(p, rate, 4096)?,
             m => instruments::create(m, rate, cache)?,
         };
-        let shared = Arc::new(Mutex::new(i));
+        // Every instrument sits behind its channel's MIDI-effect chain (empty: notes pass straight through).
+        let mut chain: Box<dyn InstrumentVoice> = Box::new(crate::midifx::MidiChain::new(i, rate));
+        chain.configure_midi(&ch.midi_fx);
+        let shared = Arc::new(Mutex::new(chain));
         self.instruments.insert(ch.id, (key, shared.clone()));
         self.applied.remove(&ch.id);
+        self.midi_applied.insert(ch.id, ch.midi_fx.clone());
         Some(shared)
     }
 
@@ -334,6 +340,7 @@ impl Pool {
         self.dry.retain(|k, _| effects.contains(k));
         self.instruments.retain(|k, _| instruments.contains(k));
         self.applied.retain(|k, _| instruments.contains(k));
+        self.midi_applied.retain(|k, _| instruments.contains(k));
     }
 
     /// Closes every plugin's own editor window (on close: while the host window still exists, so the
@@ -802,6 +809,12 @@ impl Song {
             }
             if changed && inst.is_some() {
                 cx.pool.applied.insert(c.id, (c.instrument.clone(), c.envelope));
+            }
+            if let Some(i) = &inst {
+                if cx.pool.midi_applied.get(&c.id) != Some(&c.midi_fx) {
+                    i.lock().unwrap_or_else(std::sync::PoisonError::into_inner).configure_midi(&c.midi_fx);
+                    cx.pool.midi_applied.insert(c.id, c.midi_fx.clone());
+                }
             }
             channels.push(CChannel {
                 id: c.id,
@@ -1301,6 +1314,10 @@ pub struct Renderer {
     bufs: Vec<(Vec<f32>, Vec<f32>)>,
     pre_fader: Vec<(Vec<f32>, Vec<f32>)>,
     chan_buf: (Vec<f32>, Vec<f32>),
+    /// The segment being rendered: (first frame, its beat, beats per frame, playing) – the song position the
+    /// MIDI effects see. Stopped, a free-running beat (`free_beat`) stands in.
+    seg: (usize, f64, f64, bool),
+    free_beat: f64,
     scratch: Scratch,
     /// `route`'s copy of the source (kept between calls).
     route_tmp: (Vec<f32>, Vec<f32>),
@@ -1383,6 +1400,8 @@ impl Renderer {
             bufs: Vec::new(),
             pre_fader: Vec::new(),
             chan_buf: (vec![0.0; AUTOMATION_BLOCK], vec![0.0; AUTOMATION_BLOCK]),
+            seg: (0, 0.0, 0.0, false),
+            free_beat: 0.0,
             scratch: Scratch::default(),
             route_tmp: (Vec::with_capacity(AUTOMATION_BLOCK), Vec::with_capacity(AUTOMATION_BLOCK)),
             strip_meters: None,
@@ -1645,6 +1664,10 @@ impl Renderer {
                 self.schedule_segment(&song, f0, f1, sb0, sb1);
             }
         } else {
+            // Stopped: the MIDI effects run on a free beat at the song's tempo.
+            let bpf = song.base_bpm / 60.0 / self.rate as f64;
+            self.seg = (0, self.free_beat, bpf, false);
+            self.free_beat += n as f64 * bpf;
             self.render_instruments_until(&song, 0, n, &[]);
         }
 
@@ -2247,6 +2270,7 @@ impl Renderer {
 
     /// Schedules the pattern events of `[sb0, sb1)` at frames `[f0, f1)` and renders instruments.
     fn schedule_segment(&mut self, song: &Song, f0: usize, f1: usize, sb0: f64, sb1: f64) {
+        self.seg = (f0, sb0, (sb1 - sb0) / (f1 - f0).max(1) as f64, true);
         let events: &[SEvent] = match self.transport.mode {
             PlayMode::Song => &song.events,
             PlayMode::Pattern(id) => song.pattern_events.get(&id).map(|e| e.0.as_slice()).unwrap_or(&[]),
@@ -2361,8 +2385,11 @@ impl Renderer {
                 if g.active_voices() == 0 {
                     continue;
                 }
-                // Tempo for synced LFOs (instruments that don't use it ignore it).
+                // Tempo for synced LFOs (instruments that don't use it ignore it), and the song position for the
+                // MIDI effects.
                 g.set_param("__bpm", song.base_bpm as f32);
+                let (seg_f0, seg_b0, bpf, playing) = self.seg;
+                g.set_transport(song.base_bpm, seg_b0 + (f0 as f64 - seg_f0 as f64) * bpf, playing);
                 g.process(cl, cr);
             }
             let (gl, gr) = balance(c.pan);

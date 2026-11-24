@@ -160,6 +160,13 @@ fn instruments_launcher_and_monitoring_do_not_allocate() {
     let launch_pat = p.add_pattern();
     for (k, ins) in kinds.into_iter().enumerate() {
         let ch = p.add_channel(&format!("I{k}"), ins);
+        // The synth and the wavetable play through MIDI effects (arpeggiator into chord; note repeat).
+        let fx = |id: &str| dragon_engine::model::MidiFx { id: id.into(), enabled: true, params: dragon_engine::midifx::find(id).unwrap().defaults() };
+        match k {
+            2 => p.channel_mut(ch).unwrap().midi_fx = vec![fx("arp"), fx("chord")],
+            3 => p.channel_mut(ch).unwrap().midi_fx = vec![fx("scale"), fx("repeat")],
+            _ => {}
+        }
         for pid in [pat, launch_pat] {
             let pt = p.patterns.iter_mut().find(|x| x.id == pid).unwrap();
             let notes =

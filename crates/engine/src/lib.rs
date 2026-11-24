@@ -38,6 +38,7 @@ pub mod hammerstein;
 pub mod history;
 pub mod instruments;
 pub mod midi;
+pub mod midifx;
 pub mod mixpool;
 pub mod model;
 pub mod pno;

@@ -83,6 +83,11 @@ pub trait InstrumentVoice: Send {
     fn take_param_edits(&mut self) -> Vec<(u32, f64)> {
         Vec::new()
     }
+    /// The channel's MIDI effects (only the chain in front of the instrument uses them). Called off the
+    /// audio thread when they change.
+    fn configure_midi(&mut self, _fx: &[crate::model::MidiFx]) {}
+    /// Tempo and song position at the start of the next block, and whether the transport plays.
+    fn set_transport(&mut self, _bpm: f64, _beat: f64, _playing: bool) {}
 }
 
 /// Creates the engine instrument for a model (plugins are created by the plugin host).

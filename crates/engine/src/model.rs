@@ -585,6 +585,18 @@ pub struct RackChannel {
     /// Zipped (Alt+Z): the row is shown collapsed.
     #[serde(default)]
     pub zipped: bool,
+    /// MIDI effects in front of the instrument, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_fx: Vec<MidiFx>,
+}
+
+/// A MIDI effect on a channel (see `midifx`): its type, whether it is on, and its parameter values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiFx {
+    pub id: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub params: BTreeMap<String, f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1303,6 +1315,7 @@ impl Project {
             cut_self: false,
             group: String::new(),
             zipped: false,
+            midi_fx: Vec::new(),
         });
         id
     }

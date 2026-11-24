@@ -45,4 +45,44 @@ string's length.
 **Sampler.** Playback rate $r = 2^{(n - n_0)/12 + c/1200}$ for note $n$, root $n_0$ and fine tune $c$ cents; slide notes
 move $r$ towards the new note's with a one-pole of the glide time, $r \leftarrow r + (r^* - r)(1 - e^{-1/(t_g f_s)})$.
 
+## MIDI effects
+
+Every channel has a chain of MIDI effects in its instrument window (**MIDI effects › Add**): notes pass through
+them, top to bottom, before the instrument. Each can be bypassed, moved or removed, and is saved with the channel.
+
+| Effect | What it does |
+|---|---|
+| Arpeggiator | Plays the held notes one after another in time with the song: up, down, up-down, down-up, as played, random, or as repeated chords; rate 1/4 … 1/64 (with triplets), 1 – 4 octaves, gate, swing, fixed or played velocity, latch. |
+| Chord | Turns every note into a chord (major, minor, 7, maj7, min7, sus2, sus4, power, octave, add9, dim, aug), with inversions, open voicing, strum and a softer velocity for the upper notes. |
+| Note repeat | Retriggers held notes at a note value, each repeat quieter (velocity decay) and optionally higher or lower (pitch step), up to a number of repeats. |
+| Scale | Transposes, then moves every note onto a scale (11 scales, any root): the nearest scale note at or below. |
+
+### How it works
+
+The chain sits in front of the instrument and is itself an instrument to the engine. A played note goes through
+the effects at once; notes the effects make themselves (arpeggio steps, strummed chord notes, repeats) are
+scheduled at exact sample times, and the instrument is rendered in pieces split at those times – so an arpeggio is
+sample-accurate whatever the buffer size.
+
+**Time.** While the song plays, steps lock to the song's grid: the first step falls on the first grid line at or
+after the current position, $t = t_0 + (\lceil b/\lambda\rceil\lambda - b)\cdot\frac{60 f_s}{\text{bpm}}$ for position $b$ and
+step $\lambda$ beats; stopped, they start at once and run at the song's tempo.
+
+**Arpeggiator.** The held notes (in pitch order, or in the order played) are repeated over the octaves,
+$n_{k,o} = n_k + 12o$; *up-down* walks the sequence with period $2N - 2$ (the ends not repeated). Each step plays for
+$\gamma\lambda$ (gate $\gamma$). Swing delays every second step by $s\lambda/2$ and brings the next one forward by the same,
+so pairs keep their total length.
+
+**Chord.** Intervals from the root; inversion $i$ moves the lowest note up an octave $i$ times; open voicing drops
+the second note from the bottom by an octave; strum starts note $k$ after $k\cdot\tau$ ms.
+
+**Note repeat.** Repeat $k$ of a held note plays at $n + k\,\Delta$ semitones with velocity $v(1 - d)^k$, every
+$\lambda$ beats, each for $\gamma\lambda$.
+
+**Scale.** $n' = \max\{m \le n + t : (m - r) \bmod 12 \in S\}$ for transpose $t$, root $r$ and scale steps $S$; each
+note's mapping is remembered so its note-off matches.
+
+All buffers are fixed in size and the chain is configured off the audio thread, so nothing is allocated while
+playing (checked by the real-time test with an arpeggiator, a chord, a scale and a note repeat in it).
+
 [Channel rack](../channel-rack/README.md) · [Manual](../README.md)
