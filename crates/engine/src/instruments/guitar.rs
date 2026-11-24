@@ -976,6 +976,49 @@ mod tests {
         (10.0 * best.max(1e-12).log10(), peak, jump)
     }
 
+    fn category_features(cat: crate::gtr_library::Category, n: usize) -> Vec<[f32; 5]> {
+        let ps: Vec<_> = crate::gtr_library::library().iter().filter(|p| p.category == cat).take(n).collect();
+        std::thread::scope(|sc| {
+            let hs: Vec<_> = ps
+                .chunks(ps.len().div_ceil(4).max(1))
+                .map(|c| {
+                    sc.spawn(move || {
+                        c.iter()
+                            .map(|p| {
+                                let rate = 48000.0;
+                                let mut g = Guitar::new(rate);
+                                let mut q = p.params.clone();
+                                // One plucked note, whatever the preset's play mode.
+                                q.mode = PlayMode::Solo;
+                                g.update(&Model::Guitar(Box::new(q.clone())), &SampleCache::default());
+                                g.set_param("__bpm", 120.0);
+                                let note = crate::gtr_library::audition(&q).into_iter().max().unwrap_or(52);
+                                g.note_on(NoteOn { note, velocity: 0.8, pan: 0.0, detune: 0.0, slide: false });
+                                let len = (4.0 * rate) as usize;
+                                let (mut l, mut r) = (vec![0.0; len], vec![0.0; len]);
+                                for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                                    g.process(a, b);
+                                }
+                                crate::instruments::diversity::features(&l, &r, rate)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        })
+    }
+
+    #[test]
+    #[ignore]
+    fn report_preset_diversity() {
+        use crate::instruments::diversity::{diversity, nearest};
+        for cat in crate::gtr_library::Category::ALL {
+            let f = category_features(cat, 24);
+            println!("GUITAR {:<22} spread {:.2}  nearest {:.2}", cat.name(), diversity(&f), nearest(&f));
+        }
+    }
+
     const TARGET_DB: f32 = -17.0;
 
     #[test]

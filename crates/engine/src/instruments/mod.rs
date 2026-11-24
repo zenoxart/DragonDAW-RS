@@ -1,6 +1,8 @@
 //! Instruments of the Channel Rack: sampler (with slices), subtractive synth and drum pads. Plugin
 //! instruments implement the same trait in [`crate::plugins`].
 
+#[cfg(test)]
+pub(crate) mod diversity;
 mod drums;
 mod guitar;
 pub mod kit;

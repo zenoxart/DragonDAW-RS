@@ -793,6 +793,49 @@ mod tests {
         (10.0 * best.max(1e-12).log10(), peak, jump)
     }
 
+    fn category_features(cat: crate::wt_library::Category, n: usize) -> Vec<[f32; 5]> {
+        let ps: Vec<_> = crate::wt_library::library().iter().filter(|p| p.category == cat).take(n).collect();
+        std::thread::scope(|sc| {
+            let hs: Vec<_> = ps
+                .chunks(ps.len().div_ceil(4).max(1))
+                .map(|c| {
+                    sc.spawn(move || {
+                        c.iter()
+                            .map(|p| {
+                                let rate = 48000.0;
+                                let mut s = Wavetable::new(rate);
+                                s.set_param("__bpm", 120.0);
+                                s.update(&Model::Wavetable(Box::new(p.params.clone())), &SampleCache::default());
+                                s.note_on(NoteOn { note: 72, velocity: 0.8, pan: 0.0, detune: 0.0, slide: false });
+                                let len = (4.0 * rate) as usize;
+                                let (mut l, mut r) = (vec![0.0; len], vec![0.0; len]);
+                                let off = (1.0 * rate) as usize;
+                                for (k, (a, b)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+                                    if k * 256 >= off && (k - 1) * 256 < off {
+                                        s.note_off(72);
+                                    }
+                                    s.process(a, b);
+                                }
+                                crate::instruments::diversity::features(&l, &r, rate)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        })
+    }
+
+    #[test]
+    #[ignore]
+    fn report_preset_diversity() {
+        use crate::instruments::diversity::{diversity, nearest};
+        for cat in crate::wt_library::Category::ALL {
+            let f = category_features(cat, 24);
+            println!("SYNTH {:<22} spread {:.2}  nearest {:.2}", cat.name(), diversity(&f), nearest(&f));
+        }
+    }
+
     const TARGET_DB: f32 = -17.0;
 
     fn audition_secs(c: crate::wt_library::Category) -> f32 {

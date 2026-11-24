@@ -543,7 +543,7 @@ fn recipe(cat: Category, r: &mut R, i: usize) -> Recipe {
         Category::Pad => pad(r, i),
         Category::Pluck => pluck(r, i),
         Category::Keys => keys(r, i),
-        Category::Bells => bells(r),
+        Category::Bells => bells(r, i),
         Category::Arp => arp(r, i),
         Category::Stab => stab(r, i),
         Category::Atmosphere => atmos(r, i),
@@ -964,20 +964,132 @@ fn keys(r: &mut R, i: usize) -> Recipe {
     (res.0, res.1, p)
 }
 
-fn bells(r: &mut R) -> Recipe {
-    let amp = env(0.001, r.lg(1.0, 4.0), 0.0, r.lg(0.8, 3.0));
-    let mut p = base(amp);
+/// Bells: twelve kinds of struck metal and glass, each its own sound – not one bell in different rooms.
+fn bells(r: &mut R, i: usize) -> Recipe {
+    let sine = |pos: f32| osc("Basic Shapes", pos);
+    let mut p;
+    let res: (&str, &[&str]) = match i % 12 {
+        0 => {
+            // Tubular / church bell: deep, inharmonic (frequency modulation at an odd ratio), very long.
+            p = base(env(0.001, r.lg(5.0, 8.0), 0.0, r.lg(3.0, 5.0)));
+            p.osc[0] = WtOsc { octave: -1, warp: Warp::Fm, warp_amount: r.f(0.35, 0.55), ..osc("FM Bells", r.f(0.6, 0.9)) };
+            p.osc[1] = WtOsc { semi: 15, fine: r.f(30.0, 45.0), level: 0.12, ..sine(0.0) };
+            p.filters[0] = filt(FilterKind::Lp24, r.lg(2500.0, 4000.0), 0.1);
+            p.fx.push(fx("reverb", &[("mode", 4.0), ("decay", r.f(6.0, 9.0)), ("mix", 0.42), ("size", 1.0)]));
+            ("Church Bell", &["Church Bell", "Tubular", "Campanile", "Toll", "Belfry"])
+        }
+        1 => {
+            // Glockenspiel: bright, high, short, a sharp mallet.
+            p = base(env(0.001, r.lg(0.8, 1.4), 0.0, r.lg(0.6, 1.0)));
+            p.osc[0] = WtOsc { octave: 1, ..sine(0.0) };
+            p.osc[1] = WtOsc { semi: 31, fine: r.f(-15.0, 0.0), level: 0.3, ..sine(0.0) };
+            p.env[1] = env(0.001, 0.08, 0.0, 0.05);
+            p.matrix.push(slot(ModSource::Env(1), ModDest::OscLevel(1), 0.6));
+            p.fx.push(fx("reverb", &[("mode", 3.0), ("decay", 1.8), ("mix", 0.22), ("size", 0.6)]));
+            ("Glockenspiel", &["Glockenspiel", "Glock", "Mallet", "Orchestra Bells", "Lyre"])
+        }
+        2 => {
+            // Music box: tiny, very short, ticking, with an echo.
+            p = base(env(0.001, r.lg(0.3, 0.5), 0.0, 0.3));
+            p.osc[0] = WtOsc { octave: 1, ..sine(r.f(0.0, 0.1)) };
+            p.osc[1] = WtOsc { octave: 2, level: 0.4, ..sine(0.0) };
+            p.filters[0] = filt(FilterKind::Hp12, r.lg(500.0, 900.0), 0.1);
+            p.fx.push(fx("delay", &[("sync", 3.0), ("feedback", 0.3), ("mix", 0.2)]));
+            p.fx.push(fx("reverb", &[("mode", 0.0), ("decay", 0.8), ("mix", 0.2), ("size", 0.3)]));
+            ("Music Box", &["Music Box", "Clockwork", "Jewel Box", "Ballerina", "Wind-Up"])
+        }
+        3 => {
+            // Crystal glass: glassy, shimmering, chorused, a bright plate.
+            p = base(env(0.001, r.lg(2.5, 4.0), 0.0, r.lg(2.0, 3.0)));
+            p.osc[0] = WtOsc { warp: Warp::Fm, warp_amount: r.f(0.6, 0.8), ..osc("FM Bells", r.f(0.2, 0.4)) };
+            p.osc[1] = WtOsc { semi: 19, fine: r.f(5.0, 10.0), level: 0.2, ..sine(0.0) };
+            p.filters[0] = filt(FilterKind::Hp12, r.lg(700.0, 1200.0), 0.1);
+            p.fx.push(fx("chorus", &[("rate", 1.2), ("depth", 0.8), ("mix", 0.5)]));
+            p.fx.push(fx("reverb", &[("mode", 3.0), ("decay", r.f(4.0, 6.0)), ("mix", 0.45), ("size", 0.9)]));
+            ("Crystal", &["Crystal", "Wine Glass", "Prism", "Ice", "Diamond"])
+        }
+        4 => {
+            // Singing bowl: blooms in, beats slowly, rings for ages.
+            p = base(env(r.lg(0.06, 0.15), 8.0, 0.55, r.lg(5.0, 8.0)));
+            p.osc[0] = WtOsc { unison: 2, detune: r.f(0.02, 0.04), ..sine(0.0) };
+            p.osc[1] = WtOsc { semi: 24, fine: r.f(10.0, 20.0), level: 0.25, ..sine(0.0) };
+            p.lfo[0] = free(LfoShape::Sine, r.lg(0.2, 0.5));
+            p.matrix.push(slot(ModSource::Lfo(0), ModDest::OscLevel(1), 0.45));
+            p.fx.push(fx("reverb", &[("mode", 2.0), ("decay", 5.0), ("mix", 0.35), ("size", 0.9)]));
+            ("Singing Bowl", &["Singing Bowl", "Temple Bowl", "Om", "Meditation", "Monastery"])
+        }
+        5 => {
+            // Gamelan: bronze, inharmonic, a little nasal.
+            p = base(env(0.001, r.lg(1.6, 2.6), 0.0, r.lg(1.0, 1.8)));
+            p.osc[0] = WtOsc { warp: Warp::Fm, warp_amount: r.f(0.4, 0.6), ..osc("Odd Even", r.f(0.4, 0.6)) };
+            p.osc[1] = WtOsc { semi: 10, fine: r.f(20.0, 40.0), level: 0.35, ..sine(0.0) };
+            p.filters[0] = filt(FilterKind::Bp, r.lg(1000.0, 2000.0), r.f(0.2, 0.35));
+            p.fx.push(fx("reverb", &[("mode", 0.0), ("decay", 1.5), ("mix", 0.25), ("size", 0.5)]));
+            ("Gamelan", &["Gamelan", "Gong", "Bonang", "Bronze", "Kempul"])
+        }
+        6 => {
+            // Soft celesta: round, a felt mallet, the velocity opens it.
+            p = base(env(r.lg(0.003, 0.006), r.lg(1.2, 1.8), 0.0, 1.0));
+            p.osc[0] = osc("FM Bells", r.f(0.1, 0.2));
+            p.filters[0] = filt(FilterKind::Lp12, r.lg(1800.0, 3000.0), 0.1);
+            p.matrix.push(slot(ModSource::Velocity, ModDest::FilterCutoff(0), 0.3));
+            p.fx.push(fx("reverb", &[("mode", 1.0), ("decay", 2.0), ("mix", 0.25), ("size", 0.6)]));
+            ("Soft Celesta", &["Celesta", "Snow Keys", "Felt Bell", "Lullaby", "Nursery"])
+        }
+        7 => {
+            // Vibraphone: pure, warm, the motor's tremolo.
+            p = base(env(0.002, r.lg(2.5, 4.0), 0.0, r.lg(0.8, 1.4)));
+            p.osc[0] = sine(0.0);
+            p.osc[1] = WtOsc { semi: 24, level: 0.18, ..sine(0.0) };
+            p.lfo[0] = free(LfoShape::Sine, r.f(4.5, 6.5));
+            p.matrix.push(slot(ModSource::Lfo(0), ModDest::Master, r.f(0.25, 0.4)));
+            p.fx.push(fx("reverb", &[("mode", 0.0), ("decay", 1.2), ("mix", 0.22), ("size", 0.5)]));
+            ("Vibraphone", &["Vibes", "Vibraphone", "Lounge Vibes", "Motor Vibes", "Cool Vibes"])
+        }
+        8 => {
+            // Wind chimes: sparkling, every strike a little different, echoes far away.
+            p = base(env(0.001, r.lg(2.0, 3.0), 0.0, 2.5));
+            p.osc[0] = WtOsc { octave: 1, ..osc("FM Bells", r.f(0.8, 1.0)) };
+            p.lfo[0] = synced(LfoShape::Random, 0.25);
+            p.matrix.push(slot(ModSource::Lfo(0), ModDest::OscPos(0), 0.4));
+            p.matrix.push(slot(ModSource::Random, ModDest::OscPan(0), 0.8));
+            p.fx.push(fx("delay", &[("sync", 6.0), ("feedback", 0.55), ("mix", 0.35), ("width", 1.0)]));
+            p.fx.push(fx("reverb", &[("mode", 4.0), ("decay", 7.0), ("mix", 0.45), ("size", 1.0)]));
+            ("Wind Chimes", &["Wind Chimes", "Sparkle", "Fairy Dust", "Starfall", "Breeze"])
+        }
+        9 => {
+            // Dark FM bell: folded, filtered low, a little tape grit.
+            p = base(env(0.001, r.lg(3.0, 5.0), 0.0, r.lg(2.0, 3.5)));
+            p.osc[0] = WtOsc { warp: Warp::Fold, warp_amount: r.f(0.25, 0.4), ..osc("Fold", r.f(0.3, 0.5)) };
+            p.osc[1] = WtOsc { octave: -1, semi: 7, level: 0.3, ..sine(0.0) };
+            p.filters[0] = filt(FilterKind::Lp24, r.lg(600.0, 1100.0), 0.2);
+            p.env[1] = env(0.001, 0.4, 0.0, 0.3);
+            p.matrix.push(slot(ModSource::Env(1), ModDest::FilterCutoff(0), 0.35));
+            p.fx.push(fx("saturator", &[("mode", 1.0), ("drive", 6.0), ("mix", 0.5)]));
+            p.fx.push(fx("reverb", &[("mode", 2.0), ("decay", 4.0), ("mix", 0.3), ("size", 0.8)]));
+            ("Dark Bell", &["Dark Bell", "Cloister", "Iron Bell", "Dungeon", "Requiem"])
+        }
+        10 => {
+            // 8-bit bell: stepped, crushed, a game's pickup sound.
+            p = base(env(0.001, r.lg(0.5, 0.9), 0.0, 0.4));
+            p.osc[0] = osc("Digital Steps", r.f(0.4, 0.7));
+            p.osc[1] = WtOsc { octave: 1, level: 0.35, ..osc("Pulse Width", 0.5) };
+            p.fx.push(fx("bitcrusher", &[("bits", r.f(5.0, 7.0)), ("downsample", 2.0), ("mix", 0.8)]));
+            p.fx.push(fx("delay", &[("sync", 5.0), ("feedback", 0.35), ("mix", 0.2)]));
+            ("8-Bit Bell", &["Chip Bell", "Coin", "Pixel", "Arcade", "Power-Up"])
+        }
+        _ => {
+            // Reverse bell: swells in from nothing and stops.
+            p = base(env(r.lg(0.8, 1.5), 0.3, 0.0, 0.25));
+            p.osc[0] = WtOsc { warp: Warp::Fm, warp_amount: 0.4, ..osc("FM Bells", r.f(0.5, 0.8)) };
+            p.osc[1] = WtOsc { semi: 12, level: 0.3, ..sine(0.0) };
+            p.fx.push(fx("reverb", &[("mode", 4.0), ("decay", 6.0), ("mix", 0.5), ("size", 1.0)]));
+            ("Reverse Bell", &["Reverse", "Backwards", "Inhale", "Rewind", "Swell"])
+        }
+    };
     p.polyphony = 16;
-    p.osc[0] = osc("FM Bells", r.f(0.4, 1.0));
-    p.osc[1] = WtOsc { semi: r.pick(&[7, 12, 19, 24, 31]), fine: r.f(-8.0, 8.0), level: r.f(0.2, 0.45), ..osc(r.pick(&["FM Bells", "Basic Shapes"]), r.f(0.0, 0.6)) };
-    p.env[1] = env(0.001, r.lg(0.2, 1.2), 0.0, 0.3);
-    p.matrix.push(slot(ModSource::Env(1), ModDest::OscPos(0), r.f(0.2, 0.5)));
-    if r.chance(0.4) {
-        p.filters[0] = filt(FilterKind::Hp12, r.lg(200.0, 600.0), 0.1);
-    }
-    space(r, &mut p, 0.9);
     std_macros(&mut p, r, ("Metal", ModDest::OscLevel(1)));
-    ("Bell", &["Bell", "Chime", "Bells", "Carillon", "Glock", "Tingle"], p)
+    (res.0, res.1, p)
 }
 
 fn arp(r: &mut R, i: usize) -> Recipe {
@@ -1234,5 +1346,12 @@ mod tests {
             assert!(w.osc.iter().any(|o| o.on) || w.noise.on || w.sub.on, "{} makes sound", p.name);
             assert_eq!(w.preset, p.name);
         }
+    }
+
+    #[test]
+    fn categories_cycle_through_distinct_characters() {
+        // The first presets of a category are different kinds of sound, not one sound varied.
+        let kinds: HashSet<&str> = library().iter().filter(|p| p.category == Category::Bells).take(24).map(|p| p.kind).collect();
+        assert!(kinds.len() >= 8, "Bells: only {} kinds: {kinds:?}", kinds.len());
     }
 }

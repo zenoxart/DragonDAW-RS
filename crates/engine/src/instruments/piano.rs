@@ -1121,6 +1121,52 @@ mod levels {
         (10.0 * best.max(1e-12).log10(), peak)
     }
 
+    /// One note (or the audition chord for arpeggios) rendered for the diversity features.
+    pub(crate) fn render_for_features(p: &PianoParams, secs: f32) -> (Vec<f32>, Vec<f32>) {
+        let rate = 48000.0;
+        let mut pn = Piano::new(rate);
+        pn.update(&Model::Piano(Box::new(p.clone())), &SampleCache::default());
+        pn.set_param("__bpm", 120.0);
+        let (lo, hi) = p.model.range();
+        pn.note_on(NoteOn { note: 60u8.clamp(lo, hi), velocity: 0.75, pan: 0.0, detune: 0.0, slide: false });
+        let len = (secs * rate) as usize;
+        let (mut l, mut r) = (vec![0.0; len], vec![0.0; len]);
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            pn.process(a, b);
+        }
+        (l, r)
+    }
+
+    fn category_features(cat: crate::pno_library::Category, n: usize) -> Vec<[f32; 5]> {
+        let ps: Vec<_> = crate::pno_library::library().iter().filter(|p| p.category == cat).take(n).collect();
+        std::thread::scope(|sc| {
+            let hs: Vec<_> = ps
+                .chunks(ps.len().div_ceil(4).max(1))
+                .map(|c| {
+                    sc.spawn(move || {
+                        c.iter()
+                            .map(|p| {
+                                let (l, r) = render_for_features(&p.params, 4.0);
+                                crate::instruments::diversity::features(&l, &r, 48000.0)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        })
+    }
+
+    #[test]
+    #[ignore]
+    fn report_preset_diversity() {
+        use crate::instruments::diversity::{diversity, nearest};
+        for cat in crate::pno_library::Category::ALL {
+            let f = category_features(cat, 24);
+            println!("PIANO {:<22} spread {:.2}  nearest {:.2}", cat.name(), diversity(&f), nearest(&f));
+        }
+    }
+
     const TARGET_DB: f32 = -17.0;
 
     #[test]

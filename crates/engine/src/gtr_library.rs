@@ -134,7 +134,11 @@ fn build() -> Vec<LibPreset> {
                 r.0.next_u64();
             }
             let (kind, nouns, mut p) = recipe(cat, &mut r, i);
-            let mut name = format!("{} {}", r.pick(adjectives(cat)), r.pick(nouns));
+            // The character goes in front of the play style in the name ("Piezo Fingerpick").
+            let (kind, mut name) = match character(cat, &mut r, i, &mut p) {
+                Some(c) => (c.0, format!("{} {}", r.pick(c.1), r.pick(nouns))),
+                None => (kind, format!("{} {}", r.pick(adjectives(cat)), r.pick(nouns))),
+            };
             if used.contains(&name.to_lowercase()) {
                 let base = name.clone();
                 for k in 2.. {
@@ -577,6 +581,184 @@ fn harp(r: &mut R) -> Recipe {
     ("Harp", &["Harp", "Glissando", "Lyre", "Strings", "Arpa"], p)
 }
 
+// ------------------------------------------------------------------------------------------- characters
+//
+// Presets of a category used to vary only a little around one instrument, so they sounded alike. Each
+// category now cycles through characters – clearly different instruments, strings, pickups and rooms – on
+// top of its play styles (fingerstyle, strum, palm mute …), so neighbouring presets differ in both.
+
+type Character = (&'static str, &'static [&'static str]);
+
+/// Moves `x` most of the way to `target`.
+fn to(r: &mut R, x: &mut f32, target: f32) {
+    *x = *x * 0.15 + target * 0.85 + r.f(-0.04, 0.04) * target.abs().max(0.2);
+}
+
+fn no_space(p: &mut GuitarParams) {
+    p.fx.retain(|f| !matches!(f.id.as_str(), "reverb" | "delay" | "chorus"));
+}
+
+fn character(cat: Category, r: &mut R, i: usize, p: &mut GuitarParams) -> Option<Character> {
+    use Category::*;
+    // How many play styles the recipe cycles through.
+    let styles = match cat {
+        Acoustic | TwelveString => 6,
+        Nylon | Clean | Drive => 4,
+        Banjo | Mandolin | Ukulele | World => 3,
+        _ => 1,
+    };
+    // Character and play style both change from one preset to the next, and every pairing comes round.
+    let k = i + i / styles;
+    match cat {
+        Clean => Some(electric_character(r, [0, 1, 2, 3, 7, 8, 9, 6][k % 8], p)),
+        Drive => Some(electric_character(r, [4, 5, 6, 3, 7, 8, 9, 1][k % 8], p)),
+        Acoustic | Nylon | TwelveString | Banjo | Mandolin | Ukulele | World | Harp => Some(acoustic_character(r, k % 10, p)),
+        Bass | Rhythm => None,
+    }
+}
+
+fn acoustic_character(r: &mut R, k: usize, p: &mut GuitarParams) -> Character {
+    match k {
+        0 => {
+            to(r, &mut p.body_size, 1.35);
+            to(r, &mut p.body, 0.95);
+            p.brightness = (p.brightness - 0.15).max(0.1);
+            ("Big Body", &["Dreadnought", "Jumbo", "Boom", "Big Box", "Thunder"])
+        }
+        1 => {
+            to(r, &mut p.body_size, 0.7);
+            to(r, &mut p.body, 0.75);
+            p.brightness = (p.brightness + 0.1).min(1.0);
+            ("Parlor", &["Parlor", "Small Body", "Travel", "Bedroom", "Porch"])
+        }
+        2 => {
+            to(r, &mut p.body, 0.15);
+            to(r, &mut p.brightness, 0.9);
+            no_space(p);
+            p.fx.push(fx("compressor", &[("threshold", -24.0), ("ratio", 5.0), ("makeup", 6.0)]));
+            p.fx.push(fx("reverb", &[("mode", 3.0), ("decay", 1.2), ("mix", 0.12), ("size", 0.5)]));
+            ("Piezo Stage", &["Piezo", "Stage", "Plugged In", "Live", "DI"])
+        }
+        3 => {
+            to(r, &mut p.brightness, 0.15);
+            p.sustain *= 0.4;
+            to(r, &mut p.noise, 0.6);
+            ("Old Strings", &["Dead Strings", "Worn", "Old Strings", "Thud", "Vintage"])
+        }
+        4 => {
+            to(r, &mut p.brightness, 0.95);
+            p.sustain *= 1.4;
+            to(r, &mut p.pick_position, 0.1);
+            ("New Strings", &["New Strings", "Zing", "Sparkle", "Fresh", "Shine"])
+        }
+        5 => {
+            no_space(p);
+            p.width = 1.0;
+            to(r, &mut p.noise, 0.5);
+            p.fx.push(fx("reverb", &[("mode", 0.0), ("decay", r.f(0.8, 1.3)), ("mix", r.f(0.3, 0.4)), ("size", 0.5)]));
+            ("Room Mic", &["Room", "Living Room", "Kitchen", "Wood Room", "Studio Room"])
+        }
+        6 => {
+            no_space(p);
+            p.fx.push(fx("saturator", &[("mode", 1.0), ("drive", r.f(4.0, 8.0)), ("mix", 0.7)]));
+            p.fx.push(fx("chorus", &[("rate", r.f(0.1, 0.3)), ("depth", 0.6), ("mix", 0.35)]));
+            p.fx.push(fx("filter", &[("type", 0.0), ("cutoff", r.f(2500.0, 4000.0))]));
+            p.fx.push(fx("bitcrusher", &[("bits", r.f(10.0, 12.0)), ("mix", 0.3)]));
+            ("Cassette", &["Cassette", "Tape", "Lo-Fi", "Dusty", "Demo"])
+        }
+        7 => {
+            no_space(p);
+            p.fx.push(fx("chorus", &[("rate", 0.4), ("depth", 0.5), ("mix", 0.3)]));
+            p.fx.push(fx("delay", &[("sync", 6.0), ("feedback", r.f(0.45, 0.6)), ("mix", r.f(0.25, 0.35)), ("highcut", 4000.0)]));
+            p.fx.push(fx("reverb", &[("mode", 4.0), ("decay", r.f(5.0, 8.0)), ("mix", r.f(0.4, 0.5)), ("size", 1.0)]));
+            ("Ambient", &["Ambient", "Cloud", "Horizon", "Drift", "Ether"])
+        }
+        8 => {
+            p.doubling = r.f(0.55, 0.7);
+            p.doubling_detune = r.f(8.0, 14.0);
+            p.width = 1.0;
+            ("Doubled", &["Double", "Twin", "Wide", "Stacked", "Layered"])
+        }
+        _ => {
+            no_space(p);
+            p.width = 0.3;
+            to(r, &mut p.pick_hardness, 0.15);
+            to(r, &mut p.noise, 0.75);
+            ("Intimate", &["Close", "Whisper", "Fingers", "Breath", "Hushed"])
+        }
+    }
+}
+
+fn electric_character(r: &mut R, k: usize, p: &mut GuitarParams) -> Character {
+    no_space(p);
+    match k {
+        0 => {
+            p.pickup = 0.0;
+            to(r, &mut p.brightness, 0.9);
+            p.fx.push(fx("tremolo", &[("rate", r.f(5.0, 7.0)), ("depth", 0.4)]));
+            p.fx.push(fx("reverb", &[("mode", 3.0), ("decay", 2.5), ("mix", 0.38), ("size", 0.6)]));
+            ("Surf", &["Surf", "Wave", "Pipeline", "Spring", "Beach"])
+        }
+        1 => {
+            p.pickup = 0.0;
+            to(r, &mut p.brightness, 0.95);
+            to(r, &mut p.tone, 0.9);
+            p.fx.push(fx("compressor", &[("threshold", -28.0), ("ratio", 6.0), ("makeup", 7.0)]));
+            p.fx.push(fx("delay", &[("sync", 5.0), ("feedback", 0.15), ("mix", 0.15)]));
+            ("Twang", &["Twang", "Chicken Pick", "Nashville", "Telecaster", "Honky"])
+        }
+        2 => {
+            p.pickup = 1.0;
+            to(r, &mut p.tone, 0.15);
+            to(r, &mut p.brightness, 0.3);
+            p.drive = p.drive.min(0.05);
+            p.fx.push(fx("reverb", &[("mode", 0.0), ("decay", 0.9), ("mix", 0.18), ("size", 0.4)]));
+            ("Jazz Neck", &["Archtop", "Jazz Box", "Neck Pickup", "Smoky", "Bebop"])
+        }
+        3 => {
+            p.fx.push(fx("compressor", &[("threshold", -20.0), ("ratio", 4.0), ("makeup", 4.0)]));
+            p.fx.push(fx("chorus", &[("rate", r.f(0.6, 1.0)), ("depth", 0.8), ("mix", 0.5)]));
+            p.fx.push(fx("delay", &[("sync", 6.0), ("feedback", 0.35), ("mix", 0.2)]));
+            p.fx.push(fx("reverb", &[("mode", 3.0), ("decay", 2.0), ("mix", 0.25), ("size", 0.7)]));
+            ("80s Chorus", &["Eighties", "Neon", "Chorus", "Synthwave", "Arena"])
+        }
+        4 => {
+            p.drive = 1.0;
+            to(r, &mut p.tone, 0.35);
+            p.fx.push(fx("saturator", &[("mode", 4.0), ("drive", r.f(10.0, 16.0)), ("mix", 0.6), ("output", -6.0)]));
+            ("Fuzz", &["Fuzz", "Buzzsaw", "Velcro", "Muff", "Sludge"])
+        }
+        5 => {
+            p.drive = r.f(0.9, 1.0);
+            to(r, &mut p.brightness, 0.7);
+            p.fx.push(fx("compressor", &[("threshold", -18.0), ("ratio", 6.0), ("makeup", 3.0)]));
+            p.fx.push(fx("filter", &[("type", 1.0), ("cutoff", 90.0)]));
+            ("High Gain", &["Metal", "Djent", "Thrash", "Wall", "Chug"])
+        }
+        6 => {
+            p.drive = r.f(0.35, 0.5);
+            to(r, &mut p.tone, 0.6);
+            p.fx.push(fx("reverb", &[("mode", 0.0), ("decay", 1.0), ("mix", 0.2), ("size", 0.45)]));
+            ("Blues Crunch", &["Blues", "Crunch", "Juke Joint", "Delta", "Whiskey"])
+        }
+        7 => {
+            p.fx.push(fx("tremolo", &[("rate", r.f(4.0, 8.0)), ("depth", r.f(0.7, 0.9))]));
+            p.fx.push(fx("reverb", &[("mode", 1.0), ("decay", 1.8), ("mix", 0.25), ("size", 0.6)]));
+            ("Tremolo", &["Tremolo", "Pulse", "Throb", "Shimmer", "Vibrato"])
+        }
+        8 => {
+            p.fx.push(fx("phaser", &[("rate", r.f(0.3, 1.5)), ("depth", 0.8), ("mix", 0.5)]));
+            p.fx.push(fx("delay", &[("sync", 5.0), ("feedback", 0.2), ("mix", 0.12)]));
+            ("Phaser", &["Phase", "Swirl", "Jet", "Funk Phase", "Whoosh"])
+        }
+        _ => {
+            p.fx.push(fx("delay", &[("sync", 6.0), ("feedback", r.f(0.5, 0.65)), ("mix", r.f(0.3, 0.4)), ("highcut", 3500.0)]));
+            p.fx.push(fx("reverb", &[("mode", 4.0), ("decay", r.f(6.0, 10.0)), ("mix", 0.5), ("size", 1.0)]));
+            ("Ambient Wash", &["Ambient", "Shoegaze", "Wash", "Cathedral", "Ocean"])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +778,15 @@ mod tests {
             assert!(!g.tuning.is_empty() && g.tuning.len() <= 8, "{}", p.name);
             assert!(g.pattern < PATTERNS.len() && g.sustain > 0.0 && g.master > 0.0, "{}", p.name);
             assert_eq!(g.preset, p.name);
+        }
+    }
+
+    #[test]
+    fn categories_cycle_through_distinct_characters() {
+        // The first presets of a category are different kinds of sound, not one sound varied.
+        for c in [Category::Acoustic, Category::Nylon, Category::Clean, Category::Drive, Category::Ukulele] {
+            let kinds: HashSet<&str> = library().iter().filter(|p| p.category == c).take(24).map(|p| p.kind).collect();
+            assert!(kinds.len() >= 8, "{c:?}: only {} kinds: {kinds:?}", kinds.len());
         }
     }
 }
