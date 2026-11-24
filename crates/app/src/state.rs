@@ -54,6 +54,10 @@ pub struct Settings {
     pub mcu_input: Option<String>,
     #[serde(alias = "mackie_output")]
     pub mcu_output: Option<String>,
+    /// The control surface speaks HUI (keyboard controllers in their "other DAW" mode) instead of MCU.
+    pub surface_hui: bool,
+    /// Learned DAW buttons of a keyboard controller (Record, Play, Stop, Undo, Redo, Metronome, Quantize).
+    pub controller_buttons: Vec<(dragon_engine::midi::ControllerButton, dragon_engine::midi::ButtonBinding)>,
 }
 
 impl Default for Settings {
@@ -81,6 +85,8 @@ impl Default for Settings {
             follow_playhead: true,
             mcu_input: None,
             mcu_output: None,
+            surface_hui: false,
+            controller_buttons: Vec::new(),
         }
     }
 }
@@ -327,6 +333,8 @@ pub struct UiState {
     /// The stock effect editor shown full screen (mixer insert, effect).
     pub fx_fullscreen: Option<(Id, Id)>,
     pub midi_learn: Option<Target>,
+    /// A controller button waiting for its first press to be learned.
+    pub button_learn: Option<dragon_engine::midi::ControllerButton>,
     pub last_note_len: u32,
     pub tap_times: Vec<Instant>,
     pub record_started: Option<Instant>,
@@ -436,6 +444,7 @@ impl UiState {
             note_tools: Default::default(),
             fx_fullscreen: None,
             midi_learn: None,
+            button_learn: None,
             last_note_len: PPQ,
             tap_times: Vec::new(),
             record_started: None,
@@ -527,6 +536,8 @@ pub struct Mcu {
     pub out: Option<dragon_engine::device::MidiOutput>,
     sent_faders: [f32; 9],
     sent_leds: std::collections::HashMap<u8, bool>,
+    /// HUI zone state (when the surface speaks HUI instead of MCU).
+    pub hui: dragon_engine::midi::HuiDecoder,
 }
 
 /// The built-in drum kit (synthesised on first run into the app's data folder).
@@ -1365,12 +1376,27 @@ impl State {
             }
             A::Loop => self.ctx.run("dragon.transport.loop", serde_json::Value::Null),
             A::Click => self.ctx.run("dragon.transport.metronome", serde_json::Value::Null),
+            A::Undo => self.ctx.run("edit.undo", serde_json::Value::Null),
             A::BankLeft => self.mcu.bank = self.mcu.bank.saturating_sub(8),
             A::BankRight => self.mcu.bank = (self.mcu.bank + 8).min(n_tracks.saturating_sub(1) / 8 * 8),
             A::ChannelLeft => self.mcu.bank = self.mcu.bank.saturating_sub(1),
             A::ChannelRight => self.mcu.bank = (self.mcu.bank + 1).min(n_tracks.saturating_sub(1)),
         }
         false
+    }
+
+    /// Runs a keyboard controller's DAW button.
+    pub fn controller_button(&mut self, b: dragon_engine::midi::ControllerButton) {
+        use dragon_engine::midi::ControllerButton as B;
+        match b {
+            B::Play => self.toggle_play(),
+            B::Stop => self.stop(),
+            B::Record => self.ctx.run("dragon.transport.record", serde_json::Value::Null),
+            B::Undo => self.ctx.run("edit.undo", serde_json::Value::Null),
+            B::Redo => self.ctx.run("edit.redo", serde_json::Value::Null),
+            B::Metronome => self.ctx.run("dragon.transport.metronome", serde_json::Value::Null),
+            B::Quantize => self.ctx.run("edit.quick_quantize", serde_json::Value::Null),
+        }
     }
 
     /// Sends motor-fader positions and button LEDs that changed to the control surface.
@@ -1677,11 +1703,52 @@ impl State {
     pub fn handle_midi(&mut self) {
         let Some(m) = &self.midi else { return };
         let msgs: Vec<_> = m.rx.try_iter().map(|t| (t, m.all_ports.get(t.port).cloned())).collect();
+        self.midi_messages(msgs);
+    }
+
+    /// Acts on incoming MIDI (from `handle_midi`, or a test).
+    pub fn midi_messages(&mut self, msgs: Vec<(dragon_engine::device::TimedMidi, Option<String>)>) {
         let mut mapped = false;
         for (t, port) in msgs {
             use dragon_engine::midi::MidiMessage as M;
+            // Controller buttons: learning one, then any learned press runs its command (and is not
+            // played as a note).
+            if let Some(b) = self.ui.button_learn {
+                if let Some(bind) = dragon_engine::midi::ButtonBinding::learn(t.message) {
+                    self.settings.controller_buttons.retain(|(k, x)| *k != b && *x != bind);
+                    self.settings.controller_buttons.push((b, bind));
+                    self.ui.button_learn = None;
+                    self.save_settings();
+                    self.toast(format!("{} → {}", b.label(), bind.describe()), Severity::Success);
+                    continue;
+                }
+            }
+            if let Some((b, press)) = self.settings.controller_buttons.iter().find_map(|(k, x)| x.hit(t.message).map(|p| (*k, p))) {
+                if press {
+                    self.controller_button(b);
+                }
+                continue;
+            }
             if port.is_some() && port == self.settings.mcu_input {
-                if let Some(a) = dragon_engine::midi::mcu(t.message) {
+                if self.settings.surface_hui {
+                    use dragon_engine::midi::{HuiButton as H, McuAction as A};
+                    let a = match self.mcu.hui.feed(t.message) {
+                        Some(H::Play) => Some(A::Play),
+                        Some(H::Stop) => Some(A::Stop),
+                        Some(H::Record) => Some(A::Record),
+                        Some(H::Rewind) => Some(A::Rewind),
+                        Some(H::Forward) => Some(A::Forward),
+                        Some(H::Loop) => Some(A::Loop),
+                        Some(H::ReturnToZero) => {
+                            self.seek(0.0);
+                            None
+                        }
+                        None => None,
+                    };
+                    if let Some(a) = a {
+                        mapped |= self.apply_mcu(a);
+                    }
+                } else if let Some(a) = dragon_engine::midi::mcu(t.message) {
                     mapped |= self.apply_mcu(a);
                 }
                 continue;
@@ -2149,6 +2216,29 @@ mod tests {
         let window = |s: usize| mix.l[s..s + 2000].iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(window(0) > 0.2 && window(clap_at) > 0.1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn learned_controller_buttons_run_daw_commands() {
+        use dragon_engine::device::TimedMidi;
+        use dragon_engine::midi::{parse, ControllerButton};
+        let mut st = State::new(redhive_client_framework::AppContext::new("en"), Settings { show_splash: false, ..Settings::default() });
+        let msg = |b: &[u8]| (TimedMidi { message: parse(b), beat: 0.0, seconds: 0.0, port: 0 }, None);
+        st.ui.button_learn = Some(ControllerButton::Undo);
+        st.midi_messages(vec![msg(&[0xBF, 0x76, 0x7F])]);
+        assert!(st.ui.button_learn.is_none());
+        st.ui.button_learn = Some(ControllerButton::Metronome);
+        st.midi_messages(vec![msg(&[0x9F, 0x30, 0x7F]), msg(&[0x8F, 0x30, 0x00])]);
+        assert_eq!(st.settings.controller_buttons.len(), 2);
+        st.ctx.pending_commands.clear();
+        st.midi_messages(vec![msg(&[0xBF, 0x76, 0x7F]), msg(&[0xBF, 0x76, 0x00]), msg(&[0x9F, 0x30, 0x7F])]);
+        let ids: Vec<String> = st.ctx.pending_commands.iter().map(|(id, _)| id.clone()).collect();
+        assert_eq!(ids, ["edit.undo", "dragon.transport.metronome"], "one command per press, releases ignored");
+        // Learning the same physical button for another function moves it there.
+        st.ui.button_learn = Some(ControllerButton::Redo);
+        st.midi_messages(vec![msg(&[0xBF, 0x76, 0x7F])]);
+        assert!(!st.settings.controller_buttons.iter().any(|(k, _)| *k == ControllerButton::Undo));
+        let _ = std::fs::remove_file(st.ctx.paths.config.join("settings.json"));
     }
 
     #[test]

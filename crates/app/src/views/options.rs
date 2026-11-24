@@ -234,8 +234,49 @@ fn surface(ui: &mut Ui, st: &mut State) {
         st.save_settings();
     }
     if st.settings.mcu_input.is_some() {
+        ui.horizontal(|ui| {
+            ui.label("Protocol");
+            let mut hui = st.settings.surface_hui;
+            ui.selectable_value(&mut hui, false, "MCU");
+            ui.selectable_value(&mut hui, true, "HUI").on_hover_text("Keyboard controllers in their \"other DAW\" mode often speak HUI: transport, loop, return to zero");
+            if hui != st.settings.surface_hui {
+                st.settings.surface_hui = hui;
+                st.save_settings();
+            }
+        });
         ui.label(format!("Bank: tracks {}–{}", st.mcu.bank + 1, st.mcu.bank + 8));
     }
+    controller_buttons(ui, st);
+}
+
+/// The DAW buttons of a keyboard controller (FLkey-style): press Learn, then the button on the keyboard.
+fn controller_buttons(ui: &mut Ui, st: &mut State) {
+    use dragon_engine::midi::ControllerButton;
+    ui.add_space(8.0);
+    ui.heading("Controller buttons");
+    ui.label(
+        RichText::new("Learn the transport and function buttons of your keyboard (Record, Play, Stop, Undo, Redo, Metronome, Quantize): click Learn, then press the button. MIDI Start / Stop from a keyboard's Play and Stop buttons works without learning.")
+            .small()
+            .color(theme::TEXT_DIM),
+    );
+    egui::Grid::new("controller_buttons").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+        for b in ControllerButton::ALL {
+            ui.label(b.label());
+            let bound = st.settings.controller_buttons.iter().find(|(k, _)| *k == b).map(|(_, x)| x.describe());
+            let learning = st.ui.button_learn == Some(b);
+            ui.label(RichText::new(if learning { "press the button…".to_string() } else { bound.clone().unwrap_or("–".into()) }).color(if learning { theme::ACCENT } else { theme::TEXT_DIM }));
+            ui.horizontal(|ui| {
+                if ui.selectable_label(learning, "Learn").clicked() {
+                    st.ui.button_learn = if learning { None } else { Some(b) };
+                }
+                if bound.is_some() && ui.small_button("✖").on_hover_text("Forget this button").clicked() {
+                    st.settings.controller_buttons.retain(|(k, _)| *k != b);
+                    st.save_settings();
+                }
+            });
+            ui.end_row();
+        }
+    });
 }
 
 /// Autosave, undo, interface.

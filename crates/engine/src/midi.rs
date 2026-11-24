@@ -255,6 +255,7 @@ pub enum McuAction {
     Forward,
     Loop,
     Click,
+    Undo,
     BankLeft,
     BankRight,
     ChannelLeft,
@@ -279,6 +280,7 @@ pub fn mcu(m: MidiMessage) -> Option<McuAction> {
             0x2F => BankRight,
             0x30 => ChannelLeft,
             0x31 => ChannelRight,
+            0x51 => Undo,
             0x56 => Loop,
             0x59 => Click,
             0x5B => Rewind,
@@ -327,8 +329,141 @@ pub fn mcu_led_message(note: u8, on: bool) -> [u8; 3] {
     [0x90, note, if on { 0x7F } else { 0 }]
 }
 
+// ------------------------------------------------------------------------------ controller buttons
+
+/// The DAW buttons a keyboard controller can trigger (FLkey-style transport and function buttons).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ControllerButton {
+    Record,
+    Play,
+    Stop,
+    Undo,
+    Redo,
+    Metronome,
+    Quantize,
+}
+
+impl ControllerButton {
+    pub const ALL: [ControllerButton; 7] = [Self::Record, Self::Play, Self::Stop, Self::Undo, Self::Redo, Self::Metronome, Self::Quantize];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Record => "Record",
+            Self::Play => "Play / pause",
+            Self::Stop => "Stop",
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
+            Self::Metronome => "Metronome",
+            Self::Quantize => "Quantize",
+        }
+    }
+}
+
+/// What a learned controller button sends: a note or a controller on one channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ButtonBinding {
+    /// `true` for a note, `false` for a control change.
+    pub note: bool,
+    pub channel: u8,
+    pub number: u8,
+}
+
+impl ButtonBinding {
+    /// The binding a button press would make (notes with velocity, controllers above zero).
+    pub fn learn(m: MidiMessage) -> Option<ButtonBinding> {
+        match m {
+            MidiMessage::NoteOn { channel, note, velocity } if velocity > 0 => Some(ButtonBinding { note: true, channel, number: note }),
+            MidiMessage::Control { channel, controller, value } if value > 0 => Some(ButtonBinding { note: false, channel, number: controller }),
+            _ => None,
+        }
+    }
+    /// `Some(true)` for a press of this button, `Some(false)` for its release, `None` for anything else.
+    pub fn hit(&self, m: MidiMessage) -> Option<bool> {
+        match m {
+            MidiMessage::NoteOn { channel, note, velocity } if self.note && channel == self.channel && note == self.number => Some(velocity > 0),
+            MidiMessage::NoteOff { channel, note } if self.note && channel == self.channel && note == self.number => Some(false),
+            MidiMessage::Control { channel, controller, value } if !self.note && channel == self.channel && controller == self.number => Some(value > 0),
+            _ => None,
+        }
+    }
+    pub fn describe(&self) -> String {
+        if self.note {
+            format!("note {} · ch {}", self.number, self.channel + 1)
+        } else {
+            format!("CC {} · ch {}", self.number, self.channel + 1)
+        }
+    }
+}
+
+// --------------------------------------------------------------------------------------------- HUI
+
+/// A transport button decoded from the HUI protocol (the mode many keyboard controllers use for
+/// DAWs other than their own: a "zone" controller followed by a "port" controller).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HuiButton {
+    Rewind,
+    Forward,
+    Stop,
+    Play,
+    Record,
+    ReturnToZero,
+    Loop,
+}
+
+/// Keeps the selected HUI zone between messages.
+#[derive(Debug, Default, Clone)]
+pub struct HuiDecoder {
+    zone: u8,
+}
+
+impl HuiDecoder {
+    /// Feeds one message; returns a button on its press.
+    pub fn feed(&mut self, m: MidiMessage) -> Option<HuiButton> {
+        let MidiMessage::Control { channel: 0, controller, value } = m else { return None };
+        match controller {
+            0x0F => {
+                self.zone = value;
+                None
+            }
+            0x2F if value & 0x40 != 0 => match (self.zone, value & 0x0F) {
+                (0x0E, 1) => Some(HuiButton::Rewind),
+                (0x0E, 2) => Some(HuiButton::Forward),
+                (0x0E, 3) => Some(HuiButton::Stop),
+                (0x0E, 4) => Some(HuiButton::Play),
+                (0x0E, 5) => Some(HuiButton::Record),
+                (0x0F, 0) => Some(HuiButton::ReturnToZero),
+                (0x0F, 3) => Some(HuiButton::Loop),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn controller_buttons_learn_and_match() {
+        let b = ButtonBinding::learn(parse(&[0xBF, 0x76, 0x7F])).unwrap();
+        assert_eq!(b, ButtonBinding { note: false, channel: 15, number: 0x76 });
+        assert_eq!(b.hit(parse(&[0xBF, 0x76, 0x7F])), Some(true));
+        assert_eq!(b.hit(parse(&[0xBF, 0x76, 0x00])), Some(false));
+        assert_eq!(b.hit(parse(&[0xB0, 0x76, 0x7F])), None);
+        let n = ButtonBinding::learn(parse(&[0x90, 0x5E, 0x7F])).unwrap();
+        assert_eq!(n.hit(parse(&[0x80, 0x5E, 0x00])), Some(false));
+        assert!(ButtonBinding::learn(parse(&[0xB0, 0x10, 0x00])).is_none());
+    }
+
+    #[test]
+    fn hui_transport_decodes() {
+        let mut h = HuiDecoder::default();
+        assert_eq!(h.feed(parse(&[0xB0, 0x0F, 0x0E])), None);
+        assert_eq!(h.feed(parse(&[0xB0, 0x2F, 0x44])), Some(HuiButton::Play));
+        assert_eq!(h.feed(parse(&[0xB0, 0x2F, 0x04])), None, "release");
+        h.feed(parse(&[0xB0, 0x0F, 0x0E]));
+        assert_eq!(h.feed(parse(&[0xB0, 0x2F, 0x45])), Some(HuiButton::Record));
+        assert_eq!(mcu(parse(&[0x90, 0x51, 0x7F])), Some(McuAction::Undo));
+    }
+
     use super::*;
     use crate::model::{PatternChannel, Rgb};
 
