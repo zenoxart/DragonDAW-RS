@@ -339,6 +339,8 @@ fn math(id: &str) -> Option<(String, std::collections::BTreeMap<String, String>)
         "utility" => include_str!("../docs_math/utility.md"),
         _ => return None,
     };
+    // A Windows checkout turns these files' line endings into CRLF; the pages are written with LF.
+    let text = text.replace("\r\n", "\n");
     let mut parts = text.split("<!-- knob: ");
     let overview = parts.next().unwrap_or_default().to_string();
     let knobs = parts
