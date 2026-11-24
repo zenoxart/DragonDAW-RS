@@ -388,6 +388,25 @@ fn strip_menu(ui: &mut Ui, st: &mut State, m: &MixerChannel, is_master: bool) {
     });
     ui.separator();
     let ids = if st.ui.mixer_sel.contains(&id) && st.ui.mixer_sel.len() > 1 { st.ui.mixer_sel.clone() } else { vec![id] };
+    if ui.button("Reset fader").on_hover_text(if is_master { "Back to 0 dB" } else { "Back to the default level" }).clicked() {
+        let ids = ids.clone();
+        st.session.edit("Reset fader", |p| {
+            for id in &ids {
+                let master = *id == p.mixer.master.id;
+                if let Some(c) = p.mixer.get_mut(*id) {
+                    c.volume = if master { 1.0 } else { 0.8 };
+                }
+            }
+        });
+        ui.close_menu();
+    }
+    if !is_master && ui.button("Clone mixer channel (with effects)").clicked() {
+        let new: Vec<Id> = st.session.edit("Clone mixer channel", |p| ids.iter().filter_map(|id| dragon_engine::edit::clone_mixer_channel(p, *id)).collect());
+        if let Some(&c) = new.first() {
+            st.ui.mixer = c;
+        }
+        ui.close_menu();
+    }
     let mut sticky = m.is_sticky();
     if ui.checkbox(&mut sticky, "Sticky (stays in view while scrolling)").changed() {
         let ids = ids.clone();
@@ -460,6 +479,10 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
     let resp = frame.show(ui, |ui| {
         ui.set_width(width);
         ui.set_min_height(height);
+        // Right-click anywhere on the strip's background: its menu (registered first, so the controls
+        // drawn over it keep their own clicks).
+        let bg = ui.interact(Rect::from_min_size(ui.cursor().min, Vec2::new(width, height)), egui::Id::new(("mixer.strip.bg", id)), Sense::click());
+        bg.context_menu(|ui| strip_menu(ui, st, m, is_master));
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             // Number, colour bar and name.

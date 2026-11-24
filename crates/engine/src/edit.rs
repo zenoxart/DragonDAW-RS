@@ -658,6 +658,24 @@ pub fn split_by_channel(p: &mut Project, pat: Id) -> Vec<Id> {
     new_ids
 }
 
+/// Clones mixer channel `id` with its effects (settings, plugin states), sends, routing and look, right
+/// after it; returns the copy. The master can't be cloned.
+pub fn clone_mixer_channel(p: &mut Project, id: Id) -> Option<Id> {
+    if id == p.mixer.master.id {
+        return None;
+    }
+    let k = p.mixer.channels.iter().position(|c| c.id == id)?;
+    let mut c = p.mixer.channels[k].clone();
+    c.id = p.next_id();
+    c.name = format!("{} copy", c.name);
+    for ins in c.inserts.iter_mut() {
+        ins.id = p.next_id();
+    }
+    let new = c.id;
+    p.mixer.channels.insert(k + 1, c);
+    Some(new)
+}
+
 /// "Split pads into channels": a drum-pads channel becomes one channel per pad that is played anywhere
 /// (notes in any pattern, or steps – they play note 60). Each new channel is a drum-pads instrument with
 /// just that pad (its layers, gain, pan, pitch), plays into the same mixer channel with the source's
@@ -907,6 +925,26 @@ mod tests {
         assert_eq!(p.tracks[0].clips.len(), 1);
         assert_eq!(p.tracks[1].clips.len(), 1, "second part on the next track");
         assert_eq!(heard(&p), before, "the song plays the same notes");
+    }
+
+    #[test]
+    fn clone_mixer_channel_copies_effects_with_new_ids() {
+        use super::*;
+        let mut p = Project::new_default();
+        let m = p.tracks[0].mixer;
+        let iid = p.next_id();
+        let params = crate::effects::find("eq").unwrap().defaults();
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: "eq".into(), enabled: true, mix: 0.7, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(m).unwrap().volume = 0.42;
+        let c = clone_mixer_channel(&mut p, m).unwrap();
+        let k = p.mixer.channels.iter().position(|x| x.id == m).unwrap();
+        assert_eq!(p.mixer.channels[k + 1].id, c, "right after the original");
+        let copy = p.mixer.get(c).unwrap();
+        assert_eq!(copy.volume, 0.42);
+        assert_eq!(copy.inserts.len(), 1);
+        assert_ne!(copy.inserts[0].id, iid, "own effect ids");
+        assert_eq!(copy.inserts[0].mix, 0.7);
+        assert!(clone_mixer_channel(&mut p, p.mixer.master.id).is_none());
     }
 
     /// A drum-pads channel splits into one channel per played pad, each with its pad and notes; the song
