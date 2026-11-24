@@ -146,7 +146,10 @@ impl Face<'_> {
         if resp.changed() {
             self.out.push((id.to_string(), prm.denormalize(n)));
         }
-        resp.on_hover_text(format!("{} {} – drag, Shift = fine, double-click resets", prm.name, prm.format(prm.denormalize(n))));
+        let resp = resp.on_hover_text(format!("{} {} – drag, Shift = fine, double-click resets, right-click for the menu", prm.name, prm.format(prm.denormalize(n))));
+        if let Some(x) = crate::docs::knob_menu(&resp, self.def, prm, prm.denormalize(n)) {
+            self.out.push((id.to_string(), x));
+        }
     }
     /// A brass toggle between two choices (a choice parameter with two options).
     fn toggle(&mut self, id: &str, x: f32, y: f32, left: &str, right: &str) {

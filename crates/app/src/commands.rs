@@ -223,6 +223,8 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("tools.to_midi_melody", "Convert selected clip to MIDI (melody)", "Tools", 2, ""),
     ("tools.to_midi_drums", "Convert selected clip to MIDI (drums)", "Tools", 2, ""),
     ("tools.separate", "Separate selected clip into stems (drums / harmonic / centre)", "Tools", 2, ""),
+    ("help.docs", "Documentation (online manual)", "Help", 0, ""),
+    ("help.docs_view", "Manual for the focused view", "Help", 0, "F1"),
     ("help.tour", "Take the tour", "Help", 0, ""),
     ("track.freeze", "Freeze / unfreeze the selected track's channel", "Tools", 0, ""),
     ("help.audio_tour", "Set up audio (driver, buffer)", "Help", 0, ""),
@@ -1341,6 +1343,19 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "tools.separate" => st.separate_selected(),
         "help.about" => st.ui.about = true,
+        "help.docs" => ctx.open_url(egui::OpenUrl::new_tab(crate::docs::index_url())),
+        "help.docs_view" => {
+            use crate::state::Editor;
+            let section = match st.ui.editor {
+                Editor::Playlist => "playlist",
+                Editor::PianoRoll => "piano-roll",
+                Editor::Rack => "channel-rack",
+                Editor::Mixer => "mixer",
+                Editor::Repair => "audio-repair",
+                Editor::Browser => "browser",
+            };
+            ctx.open_url(egui::OpenUrl::new_tab(crate::docs::section_url(section)));
+        }
         "view.compact_tracks" => {
             st.settings.compact_tracks = !st.settings.compact_tracks;
             st.save_settings();

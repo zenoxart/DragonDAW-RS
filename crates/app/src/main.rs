@@ -12,6 +12,7 @@ mod brand;
 mod chains;
 mod commands;
 mod crash;
+mod docs;
 mod gif_anim;
 mod modes;
 mod session;

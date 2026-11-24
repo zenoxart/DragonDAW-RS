@@ -62,7 +62,10 @@ fn knob(ui: &mut Ui, salt: egui::Id, prm: &ParamInfo, v: f32, c: Pos2, rad: f32,
     let active = r.hovered() || r.dragged();
     fx_panel::draw_knob(ui.painter(), c, rad, n, style, accent, active);
     let changed = r.changed();
-    r.on_hover_text(format!("{} {} – drag, Shift = fine, double-click resets", prm.name, prm.format(nv)));
+    let r = r.on_hover_text(format!("{} {} – drag, Shift = fine, double-click resets, right-click for the menu", prm.name, prm.format(nv)));
+    if let Some(x) = dragon_engine::effects::find("jadefang").and_then(|d| crate::docs::knob_menu(&r, d, prm, nv)) {
+        return Some(x);
+    }
     changed.then_some(nv)
 }
 

@@ -939,14 +939,17 @@ fn param_menu(r: &egui::Response, st: &mut State, m: Id, i: Id, prm: &effects::P
             ui.data_mut(|d| d.remove::<String>(buf_id));
             ui.close_menu();
         }
-        if ui.button("Reset to default").clicked() {
-            let key = key.clone();
-            st.session.edit(prm.name, |p| {
-                with_insert(p, m, i, |ins| {
-                    ins.params.insert(key, prm.default);
-                })
-            });
-            ui.close_menu();
+        // Reset, copy, paste and the knob's manual page.
+        let def = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).and_then(|x| effects::find(&x.effect));
+        if let Some(def) = def {
+            if let Some(x) = crate::docs::knob_menu_items(ui, def, prm, v) {
+                let key = key.clone();
+                st.session.edit(prm.name, |p| {
+                    with_insert(p, m, i, |ins| {
+                        ins.params.insert(key, x);
+                    })
+                });
+            }
         }
         ui.separator();
         if ui.button("MIDI learn").clicked() {

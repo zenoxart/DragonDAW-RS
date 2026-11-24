@@ -120,6 +120,9 @@ impl Face<'_> {
         let n = pi.normalize(self.v(id));
         let r = self.rect(x, y - 6.0, x + w, y + 6.0);
         let resp = self.ui.interact(r.expand(6.0 * self.s), self.salt.with(id), Sense::click_and_drag()).on_hover_text(tip);
+        if let Some(x) = crate::docs::knob_menu(&resp, self.def, pi, self.v(id)) {
+            self.set(id, x);
+        }
         if let Some(pp) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
             let nn = ((pp.x - r.left()) / r.width()).clamp(0.0, 1.0);
             self.set(id, pi.denormalize(nn));
@@ -138,7 +141,10 @@ impl Face<'_> {
         let v = self.v(id);
         let rr = 52.0;
         let r = self.rect(cx - rr, cy - rr, cx + rr, cy + rr);
-        let resp = self.ui.interact(r, self.salt.with(id), Sense::click_and_drag()).on_hover_text(format!("{name}: drag up / down (Shift: fine), double-click: default"));
+        let resp = self.ui.interact(r, self.salt.with(id), Sense::click_and_drag()).on_hover_text(format!("{name}: drag up / down (Shift: fine), double-click: default, right-click for the menu"));
+        if let Some(x) = crate::docs::knob_menu(&resp, self.def, pi, v) {
+            self.set(id, x);
+        }
         let mut n = pi.normalize(v);
         if resp.dragged() {
             let fine = if self.ui.input(|i| i.modifiers.shift) { 0.2 } else { 1.0 };

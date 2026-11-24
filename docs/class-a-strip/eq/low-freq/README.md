@@ -1,0 +1,13 @@
+# Golem Strip (class-A channel strip) › Eq › EQ low freq
+
+[Back to Eq](../README.md) · [Golem Strip (class-A channel strip)](../../README.md)
+
+The frequency the effect works around. Drag it to move the effect through the spectrum.
+
+Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fader noise suppressor, Class-A transformer mic preamp with stepped inductor-style EQ into a tube opto compressor (program-dependent opto attack, two-stage release with memory, fixed or manual timing). Zero latency – track through it.
+
+**Range:** Options: 35 Hz, 60 Hz, 110 Hz, 220 Hz (default: 110 Hz)
+
+Right-click the control for its menu: type a value, **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
+
+Drag up / down to turn it (Shift: fine), turn the mouse wheel over it, double-click or Ctrl+click to reset.
