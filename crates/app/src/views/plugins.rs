@@ -143,7 +143,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     let iid = st.session.edit("Add plugin", |x| {
                         let iid = x.next_id();
                         if let Some(c) = x.mixer.get_mut(m) {
-                            c.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(r), preset: String::new(), mods: Vec::new() });
+                            c.inserts.push(Insert {
+                                id: iid,
+                                effect: "plugin".into(),
+                                enabled: true,
+                                mix: 1.0,
+                                params: Default::default(),
+                                sidechain: None,
+                                plugin: Some(r),
+                                preset: String::new(),
+                                mods: Vec::new(),
+                                file: None,
+                            });
                         }
                         iid
                     });

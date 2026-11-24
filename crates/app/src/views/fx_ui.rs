@@ -49,7 +49,7 @@ pub(super) fn freq_at(r: Rect, x: f32) -> f32 {
 
 /// A filled curve: a glowing line over a vertical gradient that fades towards `base_y` (the look of the
 /// reference sheet).
-fn filled_curve(p: &egui::Painter, pts: &[Pos2], base_y: f32, col: Color32) {
+pub(super) fn filled_curve(p: &egui::Painter, pts: &[Pos2], base_y: f32, col: Color32) {
     use egui::epaint::{Mesh, Vertex, WHITE_UV};
     let mut mesh = Mesh::default();
     let top = col.gamma_multiply(0.42);
@@ -68,12 +68,12 @@ fn filled_curve(p: &egui::Painter, pts: &[Pos2], base_y: f32, col: Color32) {
 
 /// The graph area inside a display, leaving room for the value axis (left) and the frequency /
 /// time axis (bottom).
-fn plot(r: Rect) -> Rect {
+pub(super) fn plot(r: Rect) -> Rect {
     Rect::from_min_max(r.min + Vec2::new(32.0, 10.0), r.max - Vec2::new(10.0, 18.0))
 }
 
 /// Labels down the left edge: `(value, text)` placed with `y_of`.
-fn y_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, &str)], y_of: impl Fn(f32) -> f32) {
+pub(super) fn y_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, &str)], y_of: impl Fn(f32) -> f32) {
     for (v, t) in marks {
         let y = y_of(*v);
         p.line_segment([Pos2::new(pr.left(), y), Pos2::new(pr.right(), y)], Stroke::new(1.0_f32, Color32::from_white_alpha(if *v == 0.0 { 28 } else { 10 })));
@@ -82,7 +82,7 @@ fn y_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, &str)], y_of: impl Fn(f32)
 }
 
 /// Labels along the bottom edge: `(value, text)` placed with `x_of`.
-fn x_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, String)], x_of: impl Fn(f32) -> f32) {
+pub(super) fn x_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, String)], x_of: impl Fn(f32) -> f32) {
     for (v, t) in marks {
         let x = x_of(*v);
         p.line_segment([Pos2::new(x, pr.top()), Pos2::new(x, pr.bottom())], Stroke::new(1.0_f32, Color32::from_white_alpha(10)));
@@ -90,7 +90,7 @@ fn x_axis(p: &egui::Painter, pr: Rect, marks: &[(f32, String)], x_of: impl Fn(f3
     }
 }
 
-fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
+pub(super) fn grid(p: &egui::Painter, r: Rect, log_freq: bool) {
     super::fx_mod::screen(p, r, 6.0);
     let pr = plot(r);
     if log_freq {
@@ -118,6 +118,8 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "orbit" => 220.0,
         "drum_bus" => 200.0,
         "dragon_particle" => 200.0,
+        "analyzer" => 210.0,
+        "tuner" | "amp" | "convolver" => 190.0,
         _ => 170.0,
     };
     let height = hero_height(h.def.id, base, w, ui.available_height(), ui.ctx().screen_rect().height());
@@ -166,6 +168,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "drum_bus" => drum_bus(&p, r, h, col),
         "alter" => alter(&p, r, h, col),
         "orbit" => orbit(&p, r, h, col),
+        id if super::fx_extra::draws(id) => super::fx_extra::draw(&p, r, h, col),
         _ => {
             grid(&p, r, false);
             let pts: Vec<Pos2> = (0..=96).map(|k| Pos2::new(r.left() + r.width() * k as f32 / 96.0, r.center().y + (k as f32 * 0.25 + h.t() * 3.0).sin() * r.height() * 0.3)).collect();
@@ -626,6 +629,12 @@ pub fn xy_params(id: &str) -> Option<(Option<&'static str>, Option<&'static str>
         "imager" => (Some("width"), Some("mono_below")),
         "tune" => (Some("amount"), Some("speed")),
         "clean_voice" => (Some("presence"), Some("comp")),
+        "convolver" => (Some("size"), Some("mix")),
+        "volume_shaper" => (Some("offset"), Some("depth")),
+        "amp" => (Some("drive"), Some("master")),
+        // The meters: dragging zooms the dB range / moves the reference pitch.
+        "analyzer" => (None, Some("range")),
+        "tuner" => (Some("reference"), None),
         _ => return None,
     })
 }

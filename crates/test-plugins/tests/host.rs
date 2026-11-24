@@ -292,7 +292,18 @@ fn plugins_render_inside_a_project() {
             let mut r = vgain.to_ref();
             r.params.insert(0, g);
             let iid = p.next_id();
-            p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(r), preset: String::new(), mods: Vec::new() });
+            p.mixer.master.inserts.push(Insert {
+                id: iid,
+                effect: "plugin".into(),
+                enabled: true,
+                mix: 1.0,
+                params: Default::default(),
+                sidechain: None,
+                plugin: Some(r),
+                preset: String::new(),
+                mods: Vec::new(),
+                file: None,
+            });
         }
         let cache = SampleCache::default();
         let mut pool = Pool::with_plugins(Box::new(dragon_engine::plugins::Host));

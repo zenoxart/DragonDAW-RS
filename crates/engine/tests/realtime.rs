@@ -84,7 +84,18 @@ fn busy_project(dir: &std::path::Path, tracks: usize, per: usize) -> Project {
             let def = defs[k % defs.len()];
             k += 1;
             let iid = p.next_id();
-            p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            p.mixer.get_mut(m).unwrap().inserts.push(Insert {
+                id: iid,
+                effect: def.id.into(),
+                enabled: true,
+                mix: 1.0,
+                params: def.defaults(),
+                sidechain: None,
+                plugin: None,
+                preset: String::new(),
+                mods: Vec::new(),
+                file: None,
+            });
         }
     }
     p
@@ -470,6 +481,7 @@ fn a_panicking_effect_is_caught_and_named() {
             plugin: Some(plugin),
             preset: String::new(),
             mods: Vec::new(),
+            file: None,
         });
         let (tx, rx) = std::sync::mpsc::channel();
         let dir = dir.path().to_path_buf();
@@ -613,7 +625,18 @@ fn recompiles_while_playing_do_not_click() {
     for fx in ["eq", "compressor", "delay"] {
         let iid = p.next_id();
         let def = dragon_engine::effects::find(fx).unwrap();
-        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: fx.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert {
+            id: iid,
+            effect: fx.into(),
+            enabled: true,
+            mix: 1.0,
+            params: def.defaults(),
+            sidechain: None,
+            plugin: None,
+            preset: String::new(),
+            mods: Vec::new(),
+            file: None,
+        });
     }
     let cache = SampleCache::default();
     let stretch = dragon_engine::render::StretchCache::default();

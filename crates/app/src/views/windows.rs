@@ -655,7 +655,10 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                     }
                 }
             };
+            let ir_file = ins.file.clone();
+            let ir_key = egui::Id::new(("fx.ir", m, i));
             let mut custom = |ui: &mut Ui, name: &str| match name {
+                "conv.file" => ir_file_cell(ui, ir_file.as_deref(), ir_key),
                 "reverb.er" => reverb_part_curve(ui, &params, "er"),
                 "reverb.late" => reverb_part_curve(ui, &params, "late"),
                 n if n.starts_with("mb.gr") => {
@@ -664,7 +667,18 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                 }
                 _ => {}
             };
-            super::fx_panel::show(ui, super::fx_panel::View { def, params: &params, accent: ccol, salt: egui::Id::new(("fx.panel", m, i)) }, &mut band, &mut touch, &mut custom)
+            let shown = super::fx_panel::show(ui, super::fx_panel::View { def, params: &params, accent: ccol, salt: egui::Id::new(("fx.panel", m, i)) }, &mut band, &mut touch, &mut custom);
+            // The impulse-response cell asked for a file (or to drop it): handled here, where the project is.
+            match ui.data_mut(|d| d.remove_temp::<u8>(ir_key)) {
+                Some(1) => {
+                    if let Some(f) = rfd::FileDialog::new().set_title("Load impulse response").add_filter("Audio", dragon_engine::samples::EXTENSIONS).pick_file() {
+                        st.session.edit("Load impulse response", |p| with_insert(p, m, i, |x| x.file = Some(f.clone())));
+                    }
+                }
+                Some(2) => st.session.edit("Built-in space", |p| with_insert(p, m, i, |x| x.file = None)),
+                _ => {}
+            }
+            shown
         };
         ui.data_mut(|d| d.insert_temp(band_key, band));
         shown
@@ -1442,4 +1456,27 @@ fn presets_row(ui: &mut Ui, st: &mut State, pl: &PluginRef, inst: &Result<dragon
         }
         Err(e) => st.toast(format!("Preset not loaded: {e}"), redhive_contracts::ui::Severity::Warning),
     }
+}
+
+/// Reliquary's impulse-response cell: the loaded file's name with Load / Built-in buttons. A click leaves a
+/// request under `key` (1 = load, 2 = back to the built-in spaces) for the editor to carry out.
+fn ir_file_cell(ui: &mut Ui, file: Option<&std::path::Path>, key: egui::Id) {
+    ui.vertical(|ui| {
+        ui.set_width(170.0);
+        ui.label(RichText::new("IMPULSE RESPONSE").small());
+        let name = match file {
+            Some(f) if f.exists() => f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            Some(f) => format!("missing: {}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+            None => "Built-in space".to_string(),
+        };
+        ui.add(egui::Label::new(RichText::new(name).strong()).truncate());
+        ui.horizontal(|ui| {
+            if ui.button("Load IR…").on_hover_text("Use an impulse-response file (WAV, FLAC, AIFF, …): rooms, halls, cabinets, anything recorded").clicked() {
+                ui.data_mut(|d| d.insert_temp(key, 1u8));
+            }
+            if file.is_some() && ui.button("Built-in").on_hover_text("Go back to the built-in spaces").clicked() {
+                ui.data_mut(|d| d.insert_temp(key, 2u8));
+            }
+        });
+    });
 }

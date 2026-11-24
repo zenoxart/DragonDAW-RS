@@ -454,7 +454,18 @@ mod tests {
         let mixer = t.mixer;
         let iid = p.next_id();
         if let Some(m) = p.mixer.get_mut(mixer) {
-            m.inserts.push(crate::model::Insert { id: iid, effect: "compressor".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            m.inserts.push(crate::model::Insert {
+                id: iid,
+                effect: "compressor".into(),
+                enabled: true,
+                mix: 1.0,
+                params: Default::default(),
+                sidechain: None,
+                plugin: None,
+                preset: String::new(),
+                mods: Vec::new(),
+                file: None,
+            });
         }
         let before = p.clone();
         let cache = SampleCache::default();

@@ -309,12 +309,15 @@ pub fn pages() -> Vec<(String, String)> {
 fn math(id: &str) -> Option<(String, std::collections::BTreeMap<String, String>)> {
     let text = match id {
         "alter" => include_str!("../docs_math/alter.md"),
+        "amp" => include_str!("../docs_math/amp.md"),
+        "analyzer" => include_str!("../docs_math/analyzer.md"),
         "bitcrusher" => include_str!("../docs_math/bitcrusher.md"),
         "chorus" => include_str!("../docs_math/chorus.md"),
         "class_a_strip" => include_str!("../docs_math/class_a_strip.md"),
         "clean_voice" => include_str!("../docs_math/clean_voice.md"),
         "clipper" => include_str!("../docs_math/clipper.md"),
         "compressor" => include_str!("../docs_math/compressor.md"),
+        "convolver" => include_str!("../docs_math/convolver.md"),
         "deesser" => include_str!("../docs_math/deesser.md"),
         "delay" => include_str!("../docs_math/delay.md"),
         "dragon_particle" => include_str!("../docs_math/dragon_particle.md"),
@@ -336,7 +339,9 @@ fn math(id: &str) -> Option<(String, std::collections::BTreeMap<String, String>)
         "transient" => include_str!("../docs_math/transient.md"),
         "tremolo" => include_str!("../docs_math/tremolo.md"),
         "tune" => include_str!("../docs_math/tune.md"),
+        "tuner" => include_str!("../docs_math/tuner.md"),
         "utility" => include_str!("../docs_math/utility.md"),
+        "volume_shaper" => include_str!("../docs_math/volume_shaper.md"),
         _ => return None,
     };
     // A Windows checkout turns these files' line endings into CRLF; the pages are written with LF.

@@ -41,19 +41,24 @@ Every section page ends with **How it works** (the algorithms and formulas behin
 | [Talon (transient shaper)](transient/README.md) | Dynamics | Transient designer: attack (Needle / Nail / Blunt) and sustain (Linear / Non-linear / Soft linear) sections with level, sensitivity, duration and shape, mix, output, and a guard (Off / Clip / Limit / Soft clip) after the output. |
 | [Draconic Ghost (resonance suppressor)](ghost/README.md) | Dynamics | Dynamic resonance suppressor: finds the frequencies that stick out right now and pulls only those down, only while they're there |
 | [Dragon's Lair (reverb)](reverb/README.md) | Space | Room/hall/plate reverb (8-line FDN) with pre-delay, damping and width; early reflections and late reverb each have their own level and EQ. |
+| [Reliquary (convolution reverb)](convolver/README.md) | Space | Convolution reverb |
 | [Echo Cavern (delay)](delay/README.md) | Delay | Delay: tempo-synced or free, stereo / ping-pong / tape, cross feedback, resonant filters, drive and diffusion in the loop, pitch-shifted repeats, ducking, freeze, width, and a modulation matrix (two LFOs and an envelope follower routed through four slots to time, feedback, filters, drive, pitch, width or mix). |
 | [Coven (chorus)](chorus/README.md) | Modulation | Stereo chorus with quadrature LFOs. |
 | [Quicksilver (flanger)](flanger/README.md) | Modulation | Through-zero style flanger with positive or negative feedback. |
 | [Moonphase (phaser)](phaser/README.md) | Modulation | 2–12 stage all-pass phaser with feedback. |
 | [Wingbeat (tremolo / auto-pan)](tremolo/README.md) | Modulation | Tempo-synced volume or pan modulation. |
 | [Ouroboros (auto-panner)](orbit/README.md) | Modulation | Auto-panner: moves the sound across the stereo field locked to the bars, at a free rate, or one step per hit (Trigger, with glide) |
+| [Tidecaller (volume shaper)](volume-shaper/README.md) | Modulation | Volume shaper and ducker |
 | [Crucible (saturator)](saturator/README.md) | Distortion | Tube (12AX7, 12AT7, 12AU7, 6SN7, EF86, EL34, 6L6, KT88, 300B models with bias, blocking and sag), tape, soft/hard clip, foldback and asymmetric waveshaping with tone and parallel mix, plus three parallel tube ingredients to blend into the brew: a warm 6SN7, a hot 12AX7 and a crisp EF86 pentode. |
 | [Athanor (multiband saturator)](multisat/README.md) | Distortion | Multiband saturation: up to four bands (Linkwitz–Riley crossovers), each with a style (clean / warm tube, tape, transformer, soft / hard clip, foldback, rectify), drive, dynamics, tone, level, mix and a resonant feedback loop. |
 | [Corroder (bit crusher)](bitcrusher/README.md) | Distortion | Bit depth and sample-rate reduction. |
 | [Obsidian (soft clipper)](clipper/README.md) | Distortion | Soft clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen. |
+| [Wyrmstack (amp & cabinet)](amp/README.md) | Distortion | Guitar and bass amplifier with speaker cabinet for direct input: five amps (clean, crunch, lead, bass, fuzz), gate, tone stack, presence, power-amp sag, four cabinets and three microphone positions. |
 | [Alembic (filter)](filter/README.md) | Filter | Filter: two filters (serial or parallel), low / high / band pass, notch, peak and shelves, 12 / 24 / 48 dB slopes, styles (clean, smooth, ram, hack), drive, stereo spread, LFO and envelope follower. |
 | [Phial (utility)](utility/README.md) | Utility | Gain, balance, stereo width, polarity per side, swap, mono and DC filter. |
 | [Wingspan (stereo imager)](imager/README.md) | Utility | Widens the stereo image and keeps the bass mono; a goniometer and correlation meter show the phase relation of the result. |
+| [Scrying Glass (analyzer)](analyzer/README.md) | Utility | Analyzer insert: spectrum, peak and RMS levels, momentary and short-term loudness, true peak, stereo correlation and a vectorscope |
+| [Siren's Fork (tuner)](tuner/README.md) | Utility | Chromatic tuner: the played note, how many cents it is off, a needle or a strobe |
 | [Philosopher's Stone (one-knob mastering)](dragon-particle/README.md) | Mastering | One-knob mastering: tone EQ with character, transient punch, glue compression, tube colour, widening, a soft clipper and a true-peak limiter, with auto gain for honest A/B. |
 | [Aurum Tune (pitch correction)](tune/README.md) | Pitch | Real-time, zero-latency pitch correction for tracking: snaps a monophonic voice to a key (retune speed, humanize, flex-tune, natural vibrato) |
 | [Purify (voice cleanup)](clean-voice/README.md) | Vocal | Post-production vocal chain in one plugin (after zenoxart/CleanVoice): valve vari-mu, leveller, vari-mu, de-esser, two 4-band multibands, parallel presence, oversampled saturation and a resonance suppressor. |

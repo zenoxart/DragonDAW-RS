@@ -5,18 +5,22 @@
 mod color;
 pub use color::{shape as saturation_curve, DragonParticle, INGREDIENTS as CRUCIBLE_INGREDIENTS};
 pub mod alter;
+pub mod amp;
 pub mod clipper;
+pub mod convolver;
 pub mod dynamics;
 pub mod eq;
 pub mod factory;
 pub mod ghost;
 pub mod jadefang;
+pub mod meters;
 mod modulation;
 pub use modulation::DELAY_SYNC_BEATS;
 pub mod multisat;
 pub mod panner;
 pub mod pitch;
 pub mod reverb;
+pub mod shaper;
 pub mod strips;
 pub mod voice;
 
@@ -147,6 +151,12 @@ pub trait Effect: Send {
     fn save_state(&mut self) -> Option<Vec<u8>> {
         None
     }
+    /// Gives the effect the audio of the file its insert names (an impulse response), already decoded and
+    /// at the session rate; `None` takes it away. Called off the audio thread before the effect runs.
+    /// Returns whether the effect uses files.
+    fn load_file(&mut self, _audio: Option<&crate::samples::AudioData>) -> bool {
+        false
+    }
     /// Loads a state saved by [`save_state`](Self::save_state) (a preset) into the running plugin;
     /// returns whether it took it.
     fn load_state(&mut self, _data: &[u8]) -> bool {
@@ -220,19 +230,24 @@ pub fn registry() -> &'static [EffectDef] {
             dynamics::transient_def(),
             ghost::def(),
             reverb::reverb_def(),
+            convolver::convolver_def(),
             modulation::delay_def(),
             modulation::chorus_def(),
             modulation::flanger_def(),
             modulation::phaser_def(),
             modulation::tremolo_def(),
             panner::orbit_def(),
+            shaper::volume_shaper_def(),
             color::saturator_def(),
             multisat::multiband_saturator_def(),
             color::bitcrusher_def(),
             clipper::soft_clipper_def(),
+            amp::amp_def(),
             color::filter_def(),
             color::utility_def(),
             color::imager_def(),
+            meters::analyzer_def(),
+            meters::tuner_def(),
             color::dragon_particle_def(),
             pitch::pitch_correct_def(),
             voice::clean_voice_def(),
@@ -406,6 +421,9 @@ impl Effect for Smoothed {
     }
     fn plugin_param(&self, id: u32) -> Option<f64> {
         self.inner.plugin_param(id)
+    }
+    fn load_file(&mut self, audio: Option<&crate::samples::AudioData>) -> bool {
+        self.inner.load_file(audio)
     }
     fn save_state(&mut self) -> Option<Vec<u8>> {
         self.inner.save_state()

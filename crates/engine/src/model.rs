@@ -689,6 +689,9 @@ pub struct Insert {
     /// Modulation (style): LFOs and envelope followers moving the effect's parameters.
     #[serde(default)]
     pub mods: Vec<Modulation>,
+    /// A file the effect loads (Reliquary's impulse response).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
 }
 
 /// A modulation source.

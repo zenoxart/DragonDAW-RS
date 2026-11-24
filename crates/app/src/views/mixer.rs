@@ -1351,7 +1351,7 @@ pub fn add_effect_menu_sized(ui: &mut Ui, st: &mut State, mixer: Id, label: &str
         let iid = st.session.edit(if replace.is_some() { "Replace effect" } else { "Add effect" }, |p| {
             let iid = p.next_id();
             if let Some(c) = p.mixer.get_mut(mixer) {
-                let new = Insert { id: iid, effect, enabled: true, mix: 1.0, params, sidechain: None, plugin, preset: String::new(), mods: Vec::new() };
+                let new = Insert { id: iid, effect, enabled: true, mix: 1.0, params, sidechain: None, plugin, preset: String::new(), mods: Vec::new(), file: None };
                 match replace.and_then(|r| c.inserts.iter().position(|i| i.id == r)) {
                     Some(k) => {
                         let old = &c.inserts[k];

@@ -43,6 +43,12 @@ pub enum Finish {
     Wyrmhide,
     /// Jade-green enamel with fine scales (Jadefang, the character EQ): black knurled knobs.
     Jade,
+    /// Black amplifier tolex (Wyrmstack): cream ink, chicken-head knobs.
+    Tolex,
+    /// Bronze under green verdigris (the spectral voice units: Mandrake, Mercury Wheel, Rime).
+    Verdigris,
+    /// Black-violet lacquer with magenta crackle (the time-bending units: Hex, Petrify, Sandglass).
+    Nightshade,
 }
 
 impl Finish {
@@ -64,6 +70,9 @@ impl Finish {
             Finish::Cinnabar => Color32::from_rgb(0x46, 0x0e, 0x0c),
             Finish::Wyrmhide => Color32::from_rgb(0x2a, 0x2a, 0x1c),
             Finish::Jade => Color32::from_rgb(0x1e, 0x4e, 0x2a),
+            Finish::Tolex => Color32::from_rgb(0x16, 0x16, 0x16),
+            Finish::Verdigris => Color32::from_rgb(0x1c, 0x4a, 0x38),
+            Finish::Nightshade => Color32::from_rgb(0x1e, 0x12, 0x1e),
         }
     }
 
@@ -80,6 +89,9 @@ impl Finish {
             Finish::Oxblood | Finish::Cinnabar => Color32::from_rgb(0xf1, 0xe4, 0xc8),
             Finish::Wyrmhide => Color32::from_rgb(0xec, 0xd6, 0x9a),
             Finish::Jade => Color32::from_rgb(0xf4, 0xf6, 0xf0),
+            Finish::Tolex => Color32::from_rgb(0xf0, 0xe2, 0xbe),
+            Finish::Verdigris => Color32::from_rgb(0xe8, 0xf4, 0xe6),
+            Finish::Nightshade => Color32::from_rgb(0xf2, 0xd8, 0xf4),
             Finish::Amethyst => Color32::from_rgb(0xe6, 0xdc, 0xff),
             Finish::Slate => Color32::from_rgb(0xd6, 0xf2, 0xec),
             Finish::Copper => Color32::from_rgb(0xf0, 0xc8, 0x98),
@@ -107,6 +119,9 @@ impl Finish {
             Finish::Jade => Some(Color32::from_rgb(0xff, 0xd8, 0x80)),
             Finish::Amethyst => Some(Color32::from_rgb(0xb4, 0x7c, 0xff)),
             Finish::Slate => Some(Color32::from_rgb(0x52, 0xf0, 0xd8)),
+            Finish::Tolex => Some(Color32::from_rgb(0xff, 0x9c, 0x3a)),
+            Finish::Verdigris => Some(Color32::from_rgb(0x7c, 0xf2, 0xc0)),
+            Finish::Nightshade => Some(Color32::from_rgb(0xff, 0x5c, 0xd8)),
             f if f.gnostic() => Some(GNOSTIC_GOLD),
             _ => None,
         }
@@ -136,6 +151,9 @@ impl Finish {
             Finish::Oxblood | Finish::Cinnabar => KnobStyle::Cream,
             Finish::Wyrmhide => KnobStyle::Metal,
             Finish::Jade => KnobStyle::Black,
+            Finish::Tolex => KnobStyle::Chicken,
+            Finish::Verdigris => KnobStyle::Metal,
+            Finish::Nightshade => KnobStyle::Black,
             Finish::Basalt | Finish::Forged | Finish::Lapis | Finish::Obsidian => KnobStyle::Brass,
         }
     }
@@ -152,7 +170,13 @@ pub const GNOSTIC_GOLD: Color32 = Color32::from_rgb(0xe2, 0xc0, 0x76);
 /// The finish of a stock effect.
 pub fn finish_of(id: &str) -> Finish {
     match id {
-        "eq" | "filter" | "utility" | "imager" | "tune" => Finish::Aluminium,
+        "eq" | "filter" | "utility" | "imager" | "tune" | "analyzer" | "tuner" => Finish::Aluminium,
+        "amp" => Finish::Tolex,
+        "vocoder" | "freqshift" | "freeze" => Finish::Verdigris,
+        "stutter" | "tape_stop" | "granular" => Finish::Nightshade,
+        "convolver" | "shimmer" => Finish::Amethyst,
+        "lofi" => Finish::Copper,
+        "exciter" => Finish::Cream,
         "compressor" | "limiter" | "gate" | "deesser" | "transient" | "multiband" => Finish::Black,
         "class_a_strip" => Finish::Basalt,
         "drum_bus" => Finish::Forged,
@@ -160,7 +184,7 @@ pub fn finish_of(id: &str) -> Finish {
         "dragon_particle" => Finish::Obsidian,
         "saturator" | "multisat" | "alter" => Finish::Cream,
         "clipper" => Finish::Gold,
-        "chorus" | "flanger" | "phaser" | "tremolo" | "orbit" => Finish::Oxblood,
+        "chorus" | "flanger" | "phaser" | "tremolo" | "orbit" | "volume_shaper" | "autofilter" => Finish::Oxblood,
         "reverb" => Finish::Amethyst,
         "delay" | "ghost" => Finish::Slate,
         "cinnabar" => Finish::Cinnabar,
@@ -208,6 +232,9 @@ mod plates {
             Finish::Cinnabar => ("fx-plate-cinnabar", include_bytes!("../../assets/fx/plate_cinnabar.jpg")),
             Finish::Wyrmhide => ("fx-plate-wyrmhide", include_bytes!("../../assets/fx/plate_wyrmhide.jpg")),
             Finish::Jade => ("fx-plate-jade", include_bytes!("../../assets/fx/plate_jade.jpg")),
+            Finish::Tolex => ("fx-plate-tolex", include_bytes!("../../assets/fx/plate_tolex.jpg")),
+            Finish::Verdigris => ("fx-plate-verdigris", include_bytes!("../../assets/fx/plate_verdigris.jpg")),
+            Finish::Nightshade => ("fx-plate-nightshade", include_bytes!("../../assets/fx/plate_nightshade.jpg")),
         })
     }
 }

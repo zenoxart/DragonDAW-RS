@@ -76,7 +76,10 @@ enum Role {
 fn role(p: &ParamInfo) -> Role {
     let id = p.id;
     let last = id.rsplit('_').next().unwrap_or(id);
-    const KEEP: [&str; 31] = [
+    const KEEP: [&str; 34] = [
+        "mute",
+        "master",
+        "reference",
         "output",
         "trim",
         "post",
@@ -263,7 +266,9 @@ mod tests {
             let mut distinct = v.iter().map(|p| format!("{:?}", p.params)).collect::<Vec<_>>();
             distinct.sort();
             distinct.dedup();
-            assert!(distinct.len() >= 190, "{}: only {} distinct settings", def.id, distinct.len());
+            // The analyzer and the tuner only have view switches (they do not change the sound).
+            let need = if matches!(def.id, "analyzer" | "tuner") { 8 } else { 190 };
+            assert!(distinct.len() >= need, "{}: only {} distinct settings", def.id, distinct.len());
             for p in &v {
                 for prm in def.params {
                     let x = p.params[prm.id];

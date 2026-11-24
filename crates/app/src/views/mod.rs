@@ -10,6 +10,7 @@ pub mod envelope;
 pub mod export;
 pub mod fx_cave;
 pub mod fx_crucible;
+pub mod fx_extra;
 pub mod fx_forge;
 pub mod fx_gallery;
 pub mod fx_ghost;

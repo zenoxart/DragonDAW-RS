@@ -586,7 +586,7 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
     let ins = p.next_id();
     if let Some(m) = p.mixer.get_mut(bus) {
         let def = dragon_engine::effects::find("reverb").unwrap();
-        m.inserts.push(Insert { id: ins, effect: "reverb".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        m.inserts.push(Insert { id: ins, effect: "reverb".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
     }
     let lim = p.next_id();
     p.mixer.master.inserts.push(Insert {
@@ -599,6 +599,7 @@ pub fn starter_project(kit: &[(String, u8, PathBuf)]) -> Project {
         plugin: None,
         preset: String::new(),
         mods: Vec::new(),
+        file: None,
     });
     // The beat on the first track, four bars.
     if let Some(t) = p.tracks.first().map(|t| t.id) {
@@ -2199,7 +2200,18 @@ impl State {
         let m = self.session.project.mixer.master.id;
         let iid = self.session.edit("Add plugin", |p| {
             let iid = p.next_id();
-            p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(r), preset: String::new(), mods: Vec::new() });
+            p.mixer.master.inserts.push(Insert {
+                id: iid,
+                effect: "plugin".into(),
+                enabled: true,
+                mix: 1.0,
+                params: Default::default(),
+                sidechain: None,
+                plugin: Some(r),
+                preset: String::new(),
+                mods: Vec::new(),
+                file: None,
+            });
             iid
         });
         self.ui.effect_windows.push((m, iid));
@@ -2210,7 +2222,7 @@ impl State {
         let m = self.session.project.mixer.master.id;
         let iid = self.session.edit("Add effect", |p| {
             let iid = p.next_id();
-            p.mixer.master.inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            p.mixer.master.inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
             iid
         });
         self.ui.effect_windows.push((m, iid));

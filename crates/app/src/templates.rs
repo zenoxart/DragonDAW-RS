@@ -55,7 +55,7 @@ fn insert(p: &mut Project, ch: Id, effect: &str, set: &[(&str, f32)]) {
     for (k, v) in set {
         params.insert((*k).into(), *v);
     }
-    let ins = Insert { id: iid, effect: effect.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() };
+    let ins = Insert { id: iid, effect: effect.into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None };
     if let Some(c) = p.mixer.get_mut(ch) {
         c.inserts.push(ins);
     }

@@ -195,9 +195,10 @@ impl Pool {
 
     /// The insert's effect and whether it was just created (not yet seen by the audio thread).
     fn effect(&mut self, ins: &Insert, rate: f32) -> Option<(SharedEffect, bool)> {
-        let key = match &ins.plugin {
-            Some(p) => format!("plugin:{}:{}", p.path.display(), p.id),
-            None => ins.effect.clone(),
+        let key = match (&ins.plugin, &ins.file) {
+            (Some(p), _) => format!("plugin:{}:{}", p.path.display(), p.id),
+            (None, Some(f)) => format!("{}#{}", ins.effect, f.display()),
+            (None, None) => ins.effect.clone(),
         };
         if let Some((k, e)) = self.effects.get(&ins.id) {
             if *k == key {
@@ -208,6 +209,14 @@ impl Pool {
             Some(p) => self.plugins.as_mut()?.create_effect(p, rate, 4096)?,
             None => effects::create(&ins.effect, rate, &ins.params)?,
         };
+        let mut e = e;
+        if let Some(path) = &ins.file {
+            // A file that cannot be read leaves the effect on its built-in material (the editor says so).
+            if let Ok(a) = crate::samples::decode(path) {
+                let a = if a.rate != rate as u32 { crate::samples::resample(&a, rate as u32) } else { a };
+                e.load_file(Some(&a));
+            }
+        }
         let shared = Arc::new(Mutex::new(e));
         self.effects.insert(ins.id, (key, shared.clone()));
         self.inboxes.remove(&ins.id);
@@ -2864,6 +2873,7 @@ mod tests {
                     plugin: None,
                     preset: String::new(),
                     mods: Vec::new(),
+                    file: None,
                 });
             }
         }
@@ -2906,7 +2916,7 @@ mod tests {
         let m = p.tracks[0].mixer;
         let iid = p.next_id();
         let params = crate::effects::find("reverb").unwrap().defaults();
-        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: "reverb".into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: "reverb".into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
         p.bpm = 120.0;
         let (l, _) = render_secs(&p, 8.0);
         let rms = |a: usize, b: usize| (l[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt();
@@ -3015,7 +3025,18 @@ mod tests {
         params.insert("threshold".into(), -30.0);
         params.insert("ratio".into(), 8.0);
         params.insert("sidechain".into(), 1.0);
-        p.mixer.get_mut(tone_ch).unwrap().inserts.push(Insert { id: iid, effect: "compressor".into(), enabled: true, mix: 1.0, params, sidechain: Some(kick_ch), plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(tone_ch).unwrap().inserts.push(Insert {
+            id: iid,
+            effect: "compressor".into(),
+            enabled: true,
+            mix: 1.0,
+            params,
+            sidechain: Some(kick_ch),
+            plugin: None,
+            preset: String::new(),
+            mods: Vec::new(),
+            file: None,
+        });
         let ducked = level(&p);
         assert!(ducked < alone * 0.6, "ducked by the kick: {ducked} vs {alone}");
     }
@@ -3043,6 +3064,7 @@ mod tests {
             plugin: None,
             preset: String::new(),
             mods: vec![Modulation { source: ModSource::Lfo { rate: 4.0, shape: 3, sync: false }, target: "gain".into(), depth: 0.5, slew: 0.0 }],
+            file: None,
         });
         let (l, _) = render_secs(&p, 1.0);
         // RMS in 20 ms windows: two clearly different levels.
@@ -3072,7 +3094,7 @@ mod tests {
                 params.insert("phase".into(), phase);
                 let m1 = p.tracks[0].mixer;
                 let ins = p.next_id();
-                p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "eq".into(), enabled: true, mix, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+                p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "eq".into(), enabled: true, mix, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
             }
             let (l, _) = render_secs(&p, 2.0);
             let seg = &l[44100..88200];
@@ -3112,7 +3134,7 @@ mod tests {
                 params.insert("phase".into(), 1.0);
                 let m1 = p.tracks[0].mixer;
                 let ins = p.next_id();
-                p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "eq".into(), enabled: true, mix, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+                p.mixer.get_mut(m1).unwrap().inserts.push(Insert { id: ins, effect: "eq".into(), enabled: true, mix, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
             }
             render_secs(&p, 2.0).0
         };
@@ -3150,6 +3172,7 @@ mod tests {
                 plugin: None,
                 preset: String::new(),
                 mods: vec![Modulation { source: ModSource::MidiVelocity, target: "gain".into(), depth: -0.3, slew }],
+                file: None,
             });
             let cache = SampleCache::default();
             let mut pool = Pool::new();
@@ -3200,6 +3223,7 @@ mod tests {
                 plugin: None,
                 preset: String::new(),
                 mods: vec![Modulation { source: ModSource::Xy { axis: 0 }, target: "gain".into(), depth: 0.3, slew: 0.0 }],
+                file: None,
             });
             let (l, _) = render_secs(&p, 0.5);
             l[4410..].iter().fold(0.0f32, |m, v| m.max(v.abs()))
@@ -3232,6 +3256,7 @@ mod tests {
             plugin: None,
             preset: String::new(),
             mods: Vec::new(),
+            file: None,
         });
         let (l, _) = render_secs(&p, 0.1);
         let peaks: Vec<usize> = l.iter().enumerate().filter(|(_, x)| x.abs() > 0.05).map(|(i, _)| i).collect();

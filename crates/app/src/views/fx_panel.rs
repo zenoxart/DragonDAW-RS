@@ -403,6 +403,35 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
             ],
         },
+        "convolver" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Space", vec![Ctl::Custom("conv.file"), p("space", "Space"), big("size", "Size"), k("damping", "Damping"), p("reverse", "Reverse")]),
+                sec("Tone", vec![k("predelay", "Pre-delay"), k("low_cut", "Low cut"), k("high_cut", "High cut"), k("width", "Width")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "volume_shaper" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Shape", vec![p("mode", "Mode"), p("shape", "Shape"), p("rate", "Rate"), big("depth", "Depth"), k("tension", "Tension"), k("offset", "Phase"), k("smooth", "Smooth")]),
+                sec("Sidechain duck", vec![k("threshold", "Threshold"), k("attack", "Attack"), k("hold", "Hold"), k("release", "Release")]),
+                sec("Output", vec![k("output", "Output")]),
+            ],
+        },
+        "analyzer" => Panel { skin: STUDIO, bands: None, sections: vec![sec("View", vec![p("channel", "Channel"), p("speed", "Speed"), p("slope", "Slope"), p("range", "Range"), p("hold", "Peak hold")])] },
+        "tuner" => Panel { skin: STUDIO, bands: None, sections: vec![sec("Tuner", vec![big("reference", "A4"), p("range", "Range"), p("display", "Display"), p("mute", "Mute")])] },
+        "amp" => Panel {
+            skin: CONSOLE,
+            bands: None,
+            sections: vec![
+                sec("Amp", vec![p("model", "Amp"), k("gate", "Gate"), big("drive", "Gain")]),
+                sec("Tone", vec![k("bass", "Bass"), k("mid", "Middle"), k("treble", "Treble"), k("presence", "Presence"), k("sag", "Sag")]),
+                sec("Cabinet", vec![p("cab", "Cabinet"), p("mic", "Mic"), big("master", "Master")]),
+            ],
+        },
         _ => return None,
     };
     // Every stock effect is an analog unit in its own finish.

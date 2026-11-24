@@ -934,7 +934,7 @@ mod tests {
         let m = p.tracks[0].mixer;
         let iid = p.next_id();
         let params = crate::effects::find("eq").unwrap().defaults();
-        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: "eq".into(), enabled: true, mix: 0.7, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: "eq".into(), enabled: true, mix: 0.7, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
         p.mixer.get_mut(m).unwrap().volume = 0.42;
         let c = clone_mixer_channel(&mut p, m).unwrap();
         let k = p.mixer.channels.iter().position(|x| x.id == m).unwrap();

@@ -131,7 +131,7 @@ mod tests {
             let id = p.next_id();
             let mut params = dragon_engine::effects::find(n).unwrap().defaults();
             params.insert("output".into(), -3.5);
-            p.mixer.get_mut(m).unwrap().inserts.push(Insert { id, effect: n.to_string(), enabled: true, mix: 0.7, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            p.mixer.get_mut(m).unwrap().inserts.push(Insert { id, effect: n.to_string(), enabled: true, mix: 0.7, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
         }
         (p, m)
     }

@@ -355,7 +355,18 @@ fn plugin_harness(allow: bool) -> (Harness, Arc<FakeGui>, Id, Id) {
     let iid = h.st.session.edit("add", |p| {
         let iid = p.next_id();
         let plugin = PluginRef { format: PluginFormat::Vst3, path: "/plugins/Fake.vst3".into(), id: "00".into(), name: "Fake Synth FX".into(), state: Vec::new(), params: Default::default() };
-        p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(plugin), preset: String::new(), mods: Vec::new() });
+        p.mixer.master.inserts.push(Insert {
+            id: iid,
+            effect: "plugin".into(),
+            enabled: true,
+            mix: 1.0,
+            params: Default::default(),
+            sidechain: None,
+            plugin: Some(plugin),
+            preset: String::new(),
+            mods: Vec::new(),
+            file: None,
+        });
         iid
     });
     h.st.session.compile(48000.0);
@@ -1118,7 +1129,7 @@ fn every_stock_editor_fits_its_window_and_goes_full_screen() {
         let m = h.st.session.project.mixer.master.id;
         let iid = h.st.session.edit("add", |p| {
             let iid = p.next_id();
-            p.mixer.master.inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+            p.mixer.master.inserts.push(Insert { id: iid, effect: def.id.into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
             iid
         });
         h.st.session.compile(48000.0);
@@ -1212,7 +1223,18 @@ fn safe_mode_opens_without_plugins_and_keeps_them() {
     let iid = h.st.session.edit("add", |p| {
         let iid = p.next_id();
         let plugin = PluginRef { format: PluginFormat::Vst3, path: "/plugins/Crashy.vst3".into(), id: "00".into(), name: "Crashy".into(), state: vec![1, 2, 3], params: Default::default() };
-        p.mixer.master.inserts.push(Insert { id: iid, effect: "plugin".into(), enabled: true, mix: 1.0, params: Default::default(), sidechain: None, plugin: Some(plugin), preset: String::new(), mods: Vec::new() });
+        p.mixer.master.inserts.push(Insert {
+            id: iid,
+            effect: "plugin".into(),
+            enabled: true,
+            mix: 1.0,
+            params: Default::default(),
+            sidechain: None,
+            plugin: Some(plugin),
+            preset: String::new(),
+            mods: Vec::new(),
+            file: None,
+        });
         iid
     });
     dragon_engine::project_io::save(&h.st.session.project, &path, 0).unwrap();
@@ -1470,7 +1492,18 @@ fn mixer_multi_select_routes_and_sidechains() {
     let iid = h.st.session.edit("comp", |p| {
         let id = p.next_id();
         let def = dragon_engine::effects::find("compressor").unwrap();
-        p.mixer.get_mut(bus).unwrap().inserts.push(Insert { id, effect: "compressor".into(), enabled: true, mix: 1.0, params: def.defaults(), sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(bus).unwrap().inserts.push(Insert {
+            id,
+            effect: "compressor".into(),
+            enabled: true,
+            mix: 1.0,
+            params: def.defaults(),
+            sidechain: None,
+            plugin: None,
+            preset: String::new(),
+            mods: Vec::new(),
+            file: None,
+        });
         id
     });
     h.idle(mixer, 3);
@@ -1612,7 +1645,7 @@ fn drag_an_effect_onto_another_track() {
         let id = p.next_id();
         let mut params = dragon_engine::effects::find("saturator").unwrap().defaults();
         params.insert("drive".into(), 17.0);
-        p.mixer.get_mut(src).unwrap().inserts.push(Insert { id, effect: "saturator".into(), enabled: true, mix: 0.6, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.mixer.get_mut(src).unwrap().inserts.push(Insert { id, effect: "saturator".into(), enabled: true, mix: 0.6, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new(), file: None });
     });
     h.idle(mixer, 2);
     let rects: Vec<(Id, Rect)> = h.ctx.data(|d| d.get_temp(egui::Id::new("mixer.rects"))).unwrap();
