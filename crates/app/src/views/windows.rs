@@ -539,6 +539,8 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     // The display reads the same measured output (its meters show real values, not a demo).
     ui.data_mut(|d| d.insert_temp(egui::Id::new(("fx.hero", m, i)).with("out_level"), lv.unwrap_or((0.0, 0.0, 0.0))));
     let dev = egui::Frame::NONE.inner_margin(egui::Margin { left: 14 + ear, right: 14 + ear, top: 8, bottom: 14 }).show(ui, |ui| {
+        // The preset bar on top of the faceplate, in the unit's own finish.
+        preset_bar(ui, st, m, i, def, &ins);
         // Dragonforge and Draconic Ghost engrave their own names and meters.
         if !super::fx_forge::is_forge(def.id) && !super::fx_ghost::is_ghost(def.id) {
             super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: ins.enabled, gr, level, time, key: egui::Id::new(("fx.unit", m, i)) });
@@ -772,47 +774,131 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
     ui.separator();
     modulation(ui, st, m, i, def, &ins);
     ui.separator();
-    // Presets.
-    ui.horizontal(|ui| {
-        ui.label("Preset");
-        let dir = presets_dir(st, def.id);
-        let list: Vec<PathBuf> = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect()).unwrap_or_default();
-        egui::ComboBox::from_id_salt(("preset", i)).selected_text(if ins.preset.is_empty() { "(default)".to_string() } else { ins.preset.clone() }).show_ui(ui, |ui| {
-            if ui.selectable_label(false, "(default)").clicked() {
-                let d = def.defaults();
-                st.session.edit("Load preset", |p| {
-                    with_insert(p, m, i, |x| {
-                        x.params = d;
-                        x.preset.clear();
-                    })
-                });
+}
+
+/// The preset bar on top of a stock unit: previous / next, the preset menu (factory presets by character,
+/// your own presets), and saving – painted in the unit's finish so it reads as part of the faceplate.
+fn preset_bar(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &'static effects::EffectDef, ins: &dragon_engine::model::Insert) {
+    use dragon_engine::effects::factory;
+    let finish = super::analog::finish_of(def.id);
+    let face = finish.base();
+    // A recessed slot in the plate: dark on every finish (light plates get a deep slot of their own
+    // colour), so the light lettering reads everywhere.
+    let ink = egui::Color32::from_rgb(0xee, 0xe6, 0xd6);
+    let accent = finish.accent().unwrap_or(egui::Color32::from_rgb(0xf0, 0x8a, 0x4b));
+    let well = if finish.light() { shade(face, 0.3) } else { shade(face, 0.55) };
+    let factory_list = factory::cached(def);
+    let dir = presets_dir(st, def.id);
+    let user: Vec<PathBuf> = {
+        let key = egui::Id::new(("fx.user_presets", def.id));
+        match ui.data(|d| d.get_temp::<(f64, Vec<PathBuf>)>(key)) {
+            // Re-read the folder at most every two seconds.
+            Some((t, v)) if ui.input(|x| x.time) - t < 2.0 => v,
+            _ => {
+                let mut v: Vec<PathBuf> = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect()).unwrap_or_default();
+                v.sort();
+                let t = ui.input(|x| x.time);
+                ui.data_mut(|d| d.insert_temp(key, (t, v.clone())));
+                v
             }
-            for f in &list {
-                let name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                if ui.selectable_label(ins.preset == name, &name).clicked() {
-                    if let Some(params) = st.ctx.paths.load_from::<BTreeMap<String, f32>>(f) {
-                        st.session.edit("Load preset", |p| {
-                            with_insert(p, m, i, |x| {
-                                x.params = params;
-                                x.preset = name;
-                            })
-                        });
-                    }
-                }
-            }
-        });
-        let id = egui::Id::new(("presetname", i));
-        let mut name: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
-        ui.add(egui::TextEdit::singleline(&mut name).hint_text("name").desired_width(90.0));
-        if ui.button("Save").clicked() && !name.trim().is_empty() {
-            let _ = std::fs::create_dir_all(&dir);
-            st.ctx.paths.save_to(&dir.join(format!("{}.json", crate::state::sanitize(name.trim()))), &ins.params);
-            let n = name.trim().to_string();
-            st.session.edit("Save preset", |p| with_insert(p, m, i, |x| x.preset = n));
-            name.clear();
         }
-        ui.data_mut(|d| d.insert_temp(id, name));
+    };
+    let stem = |f: &PathBuf| f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    // Every preset in menu order (default, factory, user), for stepping.
+    let names: Vec<String> = std::iter::once(String::new()).chain(factory_list.iter().map(|p| p.name.clone())).chain(user.iter().map(stem)).collect();
+    let mut load: Option<String> = None;
+    egui::Frame::NONE.fill(well).stroke(egui::Stroke::new(1.0_f32, shade(face, 0.45))).corner_radius(5.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let s = ui.style_mut();
+            s.visuals.widgets.inactive.weak_bg_fill = well.lerp_to_gamma(ink, 0.12);
+            s.visuals.widgets.inactive.bg_fill = well.lerp_to_gamma(ink, 0.12);
+            s.visuals.widgets.inactive.fg_stroke.color = ink;
+            s.visuals.widgets.hovered.weak_bg_fill = well.lerp_to_gamma(ink, 0.22);
+            s.visuals.widgets.hovered.fg_stroke.color = ink;
+            s.visuals.override_text_color = Some(ink);
+            ui.label(RichText::new("PRESET").small().strong().color(accent));
+            let at = names.iter().position(|n| *n == ins.preset).unwrap_or(0);
+            if ui.button("<").on_hover_text("Previous preset").clicked() {
+                load = Some(names[(at + names.len() - 1) % names.len()].clone());
+            }
+            if ui.button(">").on_hover_text("Next preset").clicked() {
+                load = Some(names[(at + 1) % names.len()].clone());
+            }
+            let shown = if ins.preset.is_empty() { "(default)".to_string() } else { ins.preset.clone() };
+            ui.menu_button(RichText::new(format!("{shown}  ({}/{})", at, names.len() - 1)).strong(), |ui| {
+                ui.set_min_width(200.0);
+                if ui.selectable_label(ins.preset.is_empty(), "(default)").clicked() {
+                    load = Some(String::new());
+                    ui.close_menu();
+                }
+                ui.separator();
+                for g in factory::groups() {
+                    ui.menu_button(g, |ui| {
+                        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                            for p in factory_list.iter().filter(|p| p.group == g) {
+                                if ui.selectable_label(ins.preset == p.name, &p.name).clicked() {
+                                    load = Some(p.name.clone());
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                    });
+                }
+                ui.separator();
+                ui.menu_button(format!("Your presets ({})", user.len()), |ui| {
+                    if user.is_empty() {
+                        ui.label(RichText::new("None yet – type a name and Save").small());
+                    }
+                    for f in &user {
+                        let n = stem(f);
+                        if ui.selectable_label(ins.preset == n, &n).clicked() {
+                            load = Some(n);
+                            ui.close_menu();
+                        }
+                    }
+                });
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let id = egui::Id::new(("presetname", i));
+                let mut name: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
+                let save = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save")).on_hover_text("Save the current settings as your own preset");
+                ui.add(egui::TextEdit::singleline(&mut name).hint_text("new preset name").desired_width(130.0));
+                if save.clicked() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    st.ctx.paths.save_to(&dir.join(format!("{}.json", crate::state::sanitize(name.trim()))), &ins.params);
+                    let n = name.trim().to_string();
+                    st.session.edit("Save preset", |p| with_insert(p, m, i, |x| x.preset = n));
+                    ui.data_mut(|d| d.remove::<(f64, Vec<PathBuf>)>(egui::Id::new(("fx.user_presets", def.id))));
+                    name.clear();
+                }
+                ui.data_mut(|d| d.insert_temp(id, name));
+            });
+        });
     });
+    ui.add_space(4.0);
+    if let Some(name) = load {
+        let params = if name.is_empty() {
+            Some(def.defaults())
+        } else if let Some(p) = factory_list.iter().find(|p| p.name == name) {
+            Some(p.params.clone())
+        } else {
+            user.iter().find(|f| stem(f) == name).and_then(|f| st.ctx.paths.load_from::<BTreeMap<String, f32>>(f)).map(|u| {
+                let mut d = def.defaults();
+                d.extend(u);
+                d
+            })
+        };
+        if let Some(params) = params {
+            st.hint(def.name, "Preset", if name.is_empty() { "(default)".into() } else { name.clone() });
+            st.session.edit("Load preset", |p| {
+                with_insert(p, m, i, |x| {
+                    x.params = params;
+                    x.preset = name;
+                })
+            });
+        }
+    }
 }
 
 /// The right-click menu of an effect parameter: type an exact value, reset, MIDI learn, automation lane.

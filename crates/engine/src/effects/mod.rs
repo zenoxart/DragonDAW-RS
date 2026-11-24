@@ -8,6 +8,7 @@ pub mod alter;
 pub mod clipper;
 pub mod dynamics;
 pub mod eq;
+pub mod factory;
 pub mod ghost;
 pub mod jadefang;
 mod modulation;

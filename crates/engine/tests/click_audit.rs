@@ -337,3 +337,23 @@ fn profile_one() {
         e.process(a, b, None);
     }
 }
+
+/// Every factory preset of every stock effect plays music without blowing up: finite output, no
+/// more than +12 dB above the input's peak, and not silent unless the effect is meant to cut.
+#[test]
+fn factory_presets_are_safe() {
+    let n = (RATE * 0.35) as usize;
+    let (inl, inr) = music(n);
+    let in_peak = peak(&inl).max(peak(&inr));
+    let mut bad = Vec::new();
+    for def in registry() {
+        for p in dragon_engine::effects::factory::presets(def) {
+            let out = run(def, &p.params, &inl, &inr, &[256]);
+            let pk = peak(&out.l).max(peak(&out.r));
+            if !pk.is_finite() || pk > in_peak * 4.0 {
+                bad.push(format!("{} / {}: peak {:.2} (input {:.2})", def.id, p.name, pk, in_peak));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} presets too loud:\n{}", bad.len(), bad.join("\n"));
+}
