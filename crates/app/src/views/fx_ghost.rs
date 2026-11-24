@@ -12,7 +12,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::collections::BTreeMap;
 
 const W: f32 = 1080.0;
-const H: f32 = 610.0;
+const H: f32 = 652.0;
 
 const BG: Color32 = Color32::from_rgb(0x0b, 0x1a, 0x1c);
 const PANEL: Color32 = Color32::from_rgb(0x11, 0x26, 0x28);
@@ -191,8 +191,8 @@ impl Face<'_> {
             let wid = len * tw as f32 / th.max(1) as f32;
             pointer(&self.p, &t, c + Vec2::new(ang.sin(), -ang.cos()) * len * 0.42, wid * 0.5, len * 0.5, ang);
         }
-        self.label(self.pt(cx, cy + 68.0), name, 17.0, GHOST, egui::Align2::CENTER_CENTER);
-        let vr = self.rect(cx - 46.0, cy + 82.0, cx + 46.0, cy + 106.0);
+        self.label(self.pt(cx, cy + 64.0), name, 16.0, GHOST, egui::Align2::CENTER_CENTER);
+        let vr = self.rect(cx - 50.0, cy + 78.0, cx + 50.0, cy + 102.0);
         self.p.rect_stroke(vr, 7.0 * self.s, Stroke::new(1.2_f32, TEAL2.gamma_multiply(0.6)), egui::StrokeKind::Inside);
         let txt = match id {
             "depth" | "mix" | "link" => format!("{v:.0} %"),
@@ -254,10 +254,8 @@ pub fn body(ui: &mut Ui, def: &'static EffectDef, params: &BTreeMap<String, f32>
     }
     if let Some(t) = tex(&ctx, "ghost.wing", WING) {
         // Faint, in the outer corners only (past the switches and the name).
-        let wr = f.rect(W - 120.0, 4.0, W - 6.0, 80.0);
-        f.p.image(t.id(), wr, full_uv(), Color32::from_white_alpha(55));
-        let wl = f.rect(-30.0, 66.0, 70.0, 88.0);
-        let _ = wl;
+        let wr = f.rect(W - 104.0, 2.0, W - 4.0, 84.0);
+        f.p.image(t.id(), wr, full_uv(), Color32::from_white_alpha(26));
     }
 
     // ---- header
@@ -269,8 +267,13 @@ pub fn body(ui: &mut Ui, def: &'static EffectDef, params: &BTreeMap<String, f32>
     f.segments(470.0, 22.0, 210.0, "engine", ENGINES, "Engine: Zero (no latency), Low (1.3 ms lookahead – the cut starts before the transient), Precise (STFT, 21 ms)");
     f.segments(696.0, 22.0, 132.0, "resolution", RESOLUTIONS, "Resolution: finer frequency analysis (more CPU), no extra latency");
     f.segments(844.0, 22.0, 120.0, "character", &["Soft", "Hard"], "Soft: transparent and musical · Hard: aggressive clean-up");
+    // The latency in its own box, clear of the switches and the wing behind it.
     let lat = live.tele.get(3).copied().unwrap_or(64.0);
-    f.label(f.pt(1022.0, 37.0), &format!("{:.1} ms", lat / 48.0), 15.0, GHOST, egui::Align2::CENTER_CENTER);
+    let lb = f.rect(978.0, 22.0, 1062.0, 52.0);
+    f.p.rect_filled(lb, 8.0 * s, Color32::from_rgba_unmultiplied(0x0b, 0x1a, 0x1c, 220));
+    f.p.rect_stroke(lb, 8.0 * s, Stroke::new(1.0_f32, TEAL2.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+    f.label(lb.center(), &format!("{:.1} ms", lat / 48.0), 14.0, GHOST, egui::Align2::CENTER_CENTER);
+    f.label(f.pt(1020.0, 62.0), "LATENCY", 9.0, DIM, egui::Align2::CENTER_CENTER);
 
     // ---- left column
     let lc = f.rect(14.0, 88.0, 150.0, 404.0);
@@ -427,19 +430,20 @@ pub fn body(ui: &mut Ui, def: &'static EffectDef, params: &BTreeMap<String, f32>
     }
 
     // ---- knobs
-    let kr = f.rect(14.0, 414.0, 1066.0, 552.0);
+    // Tall enough for the arcs above the knobs and the value boxes under their names.
+    let kr = f.rect(14.0, 414.0, 1066.0, 590.0);
     f.panel(kr);
     for (k, (id, name)) in [("depth", "DEPTH"), ("sharpness", "SHARPNESS"), ("selectivity", "SELECTIVITY"), ("attack", "ATTACK"), ("release", "RELEASE"), ("mix", "MIX"), ("trim", "TRIM")].into_iter().enumerate() {
-        f.knob(110.0 + k as f32 * 143.0, 456.0, id, name);
+        f.knob(110.0 + k as f32 * 143.0, 472.0, id, name);
     }
 
     // ---- bottom bar
-    let br = f.rect(14.0, 560.0, 1066.0, 604.0);
+    let br = f.rect(14.0, 598.0, 1066.0, 644.0);
     f.panel(br);
-    f.toggle(30.0, 582.0, "sidechain", "SIDECHAIN", "Sidechain: listen to the key input (set it on the insert) – cut this track wherever the key is resonant");
-    f.label(f.pt(214.0, 582.0), "BAND SOLO", 13.0, GHOST, egui::Align2::LEFT_CENTER);
+    f.toggle(30.0, 621.0, "sidechain", "SIDECHAIN", "Sidechain: listen to the key input (set it on the insert) – cut this track wherever the key is resonant");
+    f.label(f.pt(206.0, 621.0), "BAND SOLO", 13.0, GHOST, egui::Align2::LEFT_CENTER);
     for k in 0..6 {
-        let br = f.rect(304.0 + k as f32 * 36.0, 568.0, 334.0 + k as f32 * 36.0, 596.0);
+        let br = f.rect(296.0 + k as f32 * 36.0, 607.0, 326.0 + k as f32 * 36.0, 635.0);
         let resp = f.ui.interact(br, salt.with(("solo", k)), Sense::click()).on_hover_text(format!("Listen to focus band {} only (click again: off)", k + 1));
         let on = solo == k + 1;
         f.p.rect_filled(br, 6.0 * s, if on { TEAL2 } else { Color32::from_rgb(0x1c, 0x30, 0x32) });
@@ -449,9 +453,9 @@ pub fn body(ui: &mut Ui, def: &'static EffectDef, params: &BTreeMap<String, f32>
             f.set("solo", if on { 0.0 } else { (k + 1) as f32 });
         }
     }
-    f.label(f.pt(560.0, 582.0), &format!("LOW CUT  {}", fmt_hz(lo)), 13.0, GHOST, egui::Align2::LEFT_CENTER);
+    f.label(f.pt(536.0, 621.0), &format!("LOW CUT  {}", fmt_hz(lo)), 13.0, GHOST, egui::Align2::LEFT_CENTER);
     // The cut range on one line (log 20 Hz … 20 kHz), two handles.
-    let line = f.rect(690.0, 576.0, 920.0, 588.0);
+    let line = f.rect(686.0, 615.0, 898.0, 627.0);
     let lx = |hz: f32| line.left() + ((hz / 20.0).log2() / 10.0).clamp(0.0, 1.0) * line.width();
     f.p.rect_filled(line, 6.0 * s, Color32::from_rgb(0x1c, 0x30, 0x32));
     f.p.rect_filled(Rect::from_min_max(Pos2::new(lx(lo), line.top()), Pos2::new(lx(hi), line.bottom())), 6.0 * s, TEAL2.gamma_multiply(0.85));
@@ -466,7 +470,7 @@ pub fn body(ui: &mut Ui, def: &'static EffectDef, params: &BTreeMap<String, f32>
         }
         f.p.circle_filled(c, 10.0 * s, Color32::from_gray(230));
     }
-    f.label(f.pt(1052.0, 582.0), &format!("HIGH CUT  {}", fmt_hz(hi)), 13.0, GHOST, egui::Align2::RIGHT_CENTER);
+    f.label(f.pt(1052.0, 621.0), &format!("HIGH CUT  {}", fmt_hz(hi)), 13.0, GHOST, egui::Align2::RIGHT_CENTER);
     if live.time.is_some() && live.enabled {
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
