@@ -37,7 +37,12 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if play.on_hover_text("Play / pause (Space)").clicked() {
             st.toggle_play();
         }
-        if icon_btn(ui, crate::brand::icon::STOP, "⏹", Color32::WHITE, false).on_hover_text("Stop (Ctrl+Space)").clicked() {
+        let stop = icon_btn(ui, crate::brand::icon::STOP, "⏹", Color32::WHITE, false).on_hover_text("Stop (Ctrl+Space) – double-click: stop and go back to the start (Home)");
+        // A double-click also returns the playhead to the start of the song (its first click already stopped).
+        if stop.double_clicked() {
+            st.stop();
+            st.seek(0.0);
+        } else if stop.clicked() {
             st.stop();
         }
         let rec_b = icon_btn(ui, crate::brand::icon::RECORD, "⏺", theme::REC, rec);
