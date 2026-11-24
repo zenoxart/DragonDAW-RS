@@ -558,7 +558,10 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 let mut pan = m.pan;
                 let r = knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", widgets::pan_fmt);
                 widgets::apply(st, &r, "Pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.pan = pan));
-                r.context_menu(|ui| learn_menu(ui, st, Target::MixerPan(id)));
+                r.context_menu(|ui| {
+                    widgets::set_value_item(ui, &r);
+                    learn_menu(ui, st, Target::MixerPan(id))
+                });
                 let mut w = m.width;
                 let r = knob(ui, &mut w, 0.0, 2.0, 1.0, "sep", widgets::pct);
                 widgets::apply(st, &r, "Stereo separation", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.width = w));
@@ -582,7 +585,10 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                     st.hint(&m.name, "Volume", format!("{:+.1} dB", dragon_engine::dsp::gain_to_db(v.max(1e-6))));
                 }
                 widgets::apply(st, &r, "Volume", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.volume = v));
-                r.context_menu(|ui| learn_menu(ui, st, Target::MixerVolume(id)));
+                r.context_menu(|ui| {
+                    widgets::set_value_item(ui, &r);
+                    learn_menu(ui, st, Target::MixerVolume(id))
+                });
             });
             // The fader's level in dB (what you balance with) and the current peak.
             let (l, rr) = meters.strips.get(&id).copied().unwrap_or((0.0, 0.0));

@@ -335,6 +335,8 @@ fn mini_knob(ui: &mut Ui, v: &mut f32, min: f32, max: f32, what: &str) -> egui::
         *v = if min < 0.0 { 0.0 } else { 0.8 };
         r.mark_changed();
     }
+    let show = |x: f32| if what == "pan" { widgets::pan_fmt(x) } else { widgets::db_fmt(x) };
+    widgets::value_hook(ui, &mut r, v, min, max, if min < 0.0 { 0.0 } else { 0.8 }, &show);
     let n = (*v - min) / (max - min);
     let c = rect.center();
     let p = ui.painter();

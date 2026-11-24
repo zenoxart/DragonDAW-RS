@@ -434,6 +434,8 @@ impl eframe::App for DragonApp {
         views::overlays::trust_prompt(ctx, &mut self.st);
         views::overlays::marker_prompt(ctx, &mut self.st);
         views::overlays::tab_popup(ctx, &mut self.st);
+        // The default right-click menu (Set value… / Reset) of knobs and faders without a menu of their own.
+        views::widgets::value_menus(ctx);
         crate::crash::window(ctx, &mut self.st);
         // A project that has been open (compiled and running) for a moment opened fine.
         if let Some(n) = self.st.open_guard {

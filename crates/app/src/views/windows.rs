@@ -769,8 +769,10 @@ pub(super) fn effect_editor(ui: &mut Ui, st: &mut State, m: Id, i: Id) {
                             }
                             _ => {
                                 let mut n = prm.normalize(v);
-                                let r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol)
-                                    .on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click to type a value", prm.name));
+                                let mut r = widgets::fx_knob(ui, &mut n, prm.normalize(prm.default), short, &prm.format(v), ccol)
+                                    .on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets, right-click › Set value… to type one", prm.name));
+                                let show = |x: f32| prm.format(prm.denormalize(x));
+                                widgets::value_hook(ui, &mut r, &mut n, 0.0, 1.0, prm.normalize(prm.default), &show);
                                 v = prm.denormalize(n);
                                 widgets::apply(st, &r, prm.name, |p| {
                                     with_insert(p, m, i, |x| {
@@ -923,28 +925,10 @@ fn preset_bar(ui: &mut Ui, st: &mut State, m: Id, i: Id, def: &'static effects::
 fn param_menu(r: &egui::Response, st: &mut State, m: Id, i: Id, prm: &effects::ParamInfo, v: f32, target: Target) {
     let key = prm.id.to_string();
     r.context_menu(|ui| {
-        // Type an exact value (style); units and a k suffix are accepted.
-        let buf_id = ui.id().with(("fx.type", &target));
-        let mut buf: String = ui.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| prm.format(v));
-        let te = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(110.0).hint_text("value"));
-        ui.data_mut(|d| d.insert_temp(buf_id, buf.clone()));
-        if te.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            if let Some(x) = widgets::parse_value(&buf) {
-                let x = x.clamp(prm.min.min(prm.max), prm.max.max(prm.min));
-                let key = key.clone();
-                st.session.edit(prm.name, |p| {
-                    with_insert(p, m, i, |ins| {
-                        ins.params.insert(key, x);
-                    })
-                });
-            }
-            ui.data_mut(|d| d.remove::<String>(buf_id));
-            ui.close_menu();
-        }
-        // Reset, copy, paste and the knob's manual page.
+        // Set value…, reset, copy, paste and the knob's manual page.
         let def = st.session.project.mixer.get(m).and_then(|c| c.inserts.iter().find(|x| x.id == i)).and_then(|x| effects::find(&x.effect));
         if let Some(def) = def {
-            if let Some(x) = crate::docs::knob_menu_items(ui, def, prm, v) {
+            if let Some(x) = crate::docs::knob_menu_items(ui, r, def, prm, v) {
                 let key = key.clone();
                 st.session.edit(prm.name, |p| {
                     with_insert(p, m, i, |ins| {

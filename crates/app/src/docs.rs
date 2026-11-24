@@ -121,10 +121,11 @@ fn clip_id() -> egui::Id {
     egui::Id::new("knob.clipboard")
 }
 
-/// The help entries of a knob's right-click menu: reset, copy, paste and the knob's manual page.
+/// The entries of a knob's right-click menu: set value, reset, copy, paste and the knob's manual page.
 /// Returns a new value (reset or paste) for the caller to apply.
-pub fn knob_menu_items(ui: &mut egui::Ui, def: &EffectDef, prm: &ParamInfo, value: f32) -> Option<f32> {
+pub fn knob_menu_items(ui: &mut egui::Ui, resp: &egui::Response, def: &EffectDef, prm: &ParamInfo, value: f32) -> Option<f32> {
     let mut out = None;
+    crate::views::widgets::set_value_item(ui, resp);
     if ui.button("Reset to default").clicked() {
         out = Some(prm.default);
         ui.close_menu();
@@ -161,7 +162,7 @@ pub fn knob_menu(resp: &egui::Response, def: &EffectDef, prm: &ParamInfo, value:
     resp.context_menu(|ui| {
         ui.label(egui::RichText::new(format!("{}  {}", prm.name, prm.format(value))).strong());
         ui.separator();
-        out = knob_menu_items(ui, def, prm, value);
+        out = knob_menu_items(ui, resp, def, prm, value);
     });
     out
 }
@@ -232,7 +233,7 @@ fn range_text(prm: &ParamInfo) -> String {
 }
 
 #[cfg(test)]
-const KNOB_MENU: &str = "Right-click the control for its menu: type a value, **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.\n\nDrag up / down to turn it (Shift: fine), turn the mouse wheel over it, double-click or Ctrl+click to reset.";
+const KNOB_MENU: &str = "Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.\n\nDrag up / down to turn it (Shift: fine), turn the mouse wheel over it, double-click or Ctrl+click to reset.";
 
 #[cfg(test)]
 /// Every generated page: (path below `docs/`, content).

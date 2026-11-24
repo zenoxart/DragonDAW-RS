@@ -141,7 +141,7 @@ impl Face<'_> {
         let r = rad * self.s;
         let rect = Rect::from_center_size(c, Vec2::splat(r * 2.0 + 10.0));
         let mut resp = self.ui.interact(rect, self.salt.with(id), Sense::click_and_drag());
-        let n = fx_panel::knob_input(self.ui, &mut resp, prm.normalize(v), prm.normalize(prm.default), if r > 30.0 { 280.0 } else { 200.0 });
+        let n = fx_panel::knob_input(self.ui, &mut resp, prm.normalize(v), prm.normalize(prm.default), if r > 30.0 { 280.0 } else { 200.0 }, prm);
         fx_panel::draw_knob(&self.p, c, r, n, style, EMBER, resp.hovered() || resp.dragged());
         if resp.changed() {
             self.out.push((id.to_string(), prm.denormalize(n)));
@@ -302,7 +302,7 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, live: 
         let rad = 66.0 * s;
         let prm = f.prm("drive");
         let mut resp = f.ui.interact(Rect::from_center_size(c, Vec2::splat(rad * 2.0 + 12.0)), salt.with("drive"), Sense::click_and_drag());
-        let n = fx_panel::knob_input(f.ui, &mut resp, prm.normalize(f.v("drive")), prm.normalize(prm.default), 320.0);
+        let n = fx_panel::knob_input(f.ui, &mut resp, prm.normalize(f.v("drive")), prm.normalize(prm.default), 320.0, prm);
         let a0 = PI * 0.75;
         for k in 0..=10 {
             let a = a0 + PI * 1.5 * k as f32 / 10.0;

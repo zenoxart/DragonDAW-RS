@@ -192,6 +192,7 @@ pub fn knob_colored(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f
         *value = default;
         r.mark_changed();
     }
+    value_hook(ui, &mut r, value, min, max, default, &fmt);
     let c = Pos2::new(rect.center().x, rect.top() + size / 2.0 + 2.0);
     let p = ui.painter();
     let rad = size / 2.0 - 3.0;
@@ -318,6 +319,9 @@ pub fn mini_knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32,
         *value = default;
         r.mark_changed();
     }
+    // Mini knobs are mix / amount controls: shown in percent of their range.
+    let show = move |v: f32| format!("{:.0}%", (v - min) / (max - min) * 100.0);
+    value_hook(ui, &mut r, value, min, max, default, &show);
     let c = rect.center();
     let p = ui.painter();
     let rad = size / 2.0 - 2.5;
@@ -403,6 +407,12 @@ pub fn fader(ui: &mut Ui, value: &mut f32, max: f32, height: f32) -> Response {
         *value = 0.8;
         n = to_n(*value);
         r.mark_changed();
+    }
+    let show = |v: f32| if v <= 1e-6 { "-∞ dB".to_string() } else { format!("{:.1} dB", dragon_engine::dsp::gain_to_db(v)) };
+    let before = *value;
+    value_hook(ui, &mut r, value, 0.0, max, 0.8, &show);
+    if *value != before {
+        n = to_n(*value);
     }
     let p = ui.painter();
     p.rect_filled(track, 2.0, theme::BG);
@@ -706,5 +716,301 @@ mod level_scale_tests {
             let back = dragon_engine::dsp::db_to_gain(level_db(n));
             assert!((back - g).abs() / g < 1e-3, "{g} -> {back}");
         }
+    }
+}
+
+// ------------------------------------------------------------------------------- set value (typing)
+//
+// Every knob and fader takes a typed value: right-click › "Set value…" opens a small text box under the
+// control with its current value; Enter sets it. The value goes through the control's own change path, so
+// it is one undo / redo step like a drag. Controls call [`value_hook`] (directly or through
+// [`super::fx_panel::knob_input`]); controls with a right-click menu of their own put [`set_value_item`]
+// in it, the others get a small default menu (Set value… / Reset) from [`value_menus`].
+
+/// The open text box: which control, its text, whether it still has to take the focus.
+#[derive(Clone)]
+struct Prompt {
+    id: egui::Id,
+    text: String,
+    focus: bool,
+}
+
+/// What every value control registered this frame (for the default menu).
+#[derive(Clone, Default)]
+struct Registry {
+    pass: u64,
+    /// (control, its rect, current text, right-clicked this frame)
+    items: Vec<(egui::Id, Rect, String, bool)>,
+}
+
+/// The default menu: open for a control at a position.
+#[derive(Clone)]
+struct DefaultMenu {
+    id: egui::Id,
+    pos: Pos2,
+    text: String,
+    opened: u64,
+}
+
+fn prompt_key() -> egui::Id {
+    egui::Id::new("value.prompt")
+}
+fn registry_key() -> egui::Id {
+    egui::Id::new("value.registry")
+}
+fn menu_key() -> egui::Id {
+    egui::Id::new("value.menu")
+}
+fn reset_key() -> egui::Id {
+    egui::Id::new("value.reset")
+}
+
+/// Opens the text box for control `id` with `text` in it.
+pub fn open_value_prompt(ctx: &egui::Context, id: egui::Id, text: String) {
+    ctx.data_mut(|d| d.insert_temp(prompt_key(), Prompt { id, text, focus: true }));
+}
+
+/// Whether the default value menu is open (tests).
+#[cfg(test)]
+pub fn value_menu_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<DefaultMenu>(menu_key()).is_some())
+}
+
+/// The "Set value…" entry for a control's own right-click menu (`r` is the control).
+pub fn set_value_item(ui: &mut Ui, r: &Response) {
+    let text = ui.ctx().data(|d| d.get_temp::<Registry>(registry_key())).and_then(|reg| reg.items.iter().find(|x| x.0 == r.id).map(|x| x.2.clone()));
+    if ui.add_enabled(text.is_some(), egui::Button::new("Set value…")).on_hover_text("Type an exact value (Enter sets it)").clicked() {
+        open_value_prompt(ui.ctx(), r.id, text.unwrap_or_default());
+        ui.close_menu();
+    }
+}
+
+/// The number in a shown value ("−6.0 dB" → −6, "L 40" → −40, "2.5 kHz" → 2500, "-∞" → −∞).
+fn number_of(s: &str) -> Option<f32> {
+    let t = s.trim().to_lowercase().replace('−', "-");
+    if t.contains('∞') || t.contains("inf") {
+        return Some(if t.starts_with('+') { f32::INFINITY } else { f32::NEG_INFINITY });
+    }
+    // Pan style: "L 40" / "R 40" / "C".
+    if let Some(rest) = t.strip_prefix('l').filter(|r| r.trim_start().starts_with(|c: char| c.is_ascii_digit())) {
+        return parse_value(rest).map(|x| -x);
+    }
+    if let Some(rest) = t.strip_prefix('r').filter(|r| r.trim_start().starts_with(|c: char| c.is_ascii_digit())) {
+        return parse_value(rest);
+    }
+    // "40L" / "40R" (how pan is shown).
+    if let Some(num) = t.strip_suffix('l').filter(|n| n.trim().parse::<f32>().is_ok()) {
+        return num.trim().parse::<f32>().ok().map(|x| -x);
+    }
+    if let Some(num) = t.strip_suffix('r').filter(|n| n.trim().parse::<f32>().is_ok()) {
+        return num.trim().parse::<f32>().ok();
+    }
+    if t == "c" || t == "center" || t == "centre" {
+        return Some(0.0);
+    }
+    let start = t.find(|c: char| c.is_ascii_digit() || matches!(c, '-' | '+' | '.'))?;
+    parse_value(&t[start..])
+}
+
+/// The value in `min … max` whose shown text means what was typed: an exact text match (note names, option
+/// words), else the number, found along the control's own display (so "−6 dB" on a gain fader, "40 %" on a
+/// 0 … 1 knob and "250 ms" on a knob in seconds all land right).
+pub fn value_from_text(typed: &str, min: f32, max: f32, show: &dyn Fn(f32) -> String) -> Option<f32> {
+    let (lo, hi) = (min.min(max), min.max(max));
+    let typed_l = typed.trim().to_lowercase();
+    const N: usize = 1024;
+    let at = |k: usize| lo + (hi - lo) * k as f32 / N as f32;
+    // Exact text (note names and the like).
+    if let Some(k0) = (0..=N).find(|&k| show(at(k)).trim().to_lowercase() == typed_l) {
+        // The middle of what shows this text (the ends stay the ends).
+        let k1 = (k0..=N).take_while(|&k| show(at(k)).trim().to_lowercase() == typed_l).last().unwrap_or(k0);
+        return Some(if k0 == 0 {
+            lo
+        } else if k1 == N {
+            hi
+        } else {
+            0.5 * (at(k0) + at(k1))
+        });
+    }
+    let target = number_of(typed)?;
+    let num = |v: f32| number_of(&show(v));
+    if target == f32::NEG_INFINITY {
+        return Some(lo);
+    }
+    // The display in steps: runs of samples that show the same number become one point at the run's
+    // centre (a value shown rounded to "40 %" lands in the middle of what shows as 40 %), then the typed
+    // number is interpolated between the neighbouring points.
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let mut run: Option<(f32, f32, f32)> = None; // (first v, last v, number)
+    for k in 0..=N {
+        let v = at(k);
+        let Some(x) = num(v).filter(|x| x.is_finite()) else { continue };
+        match run {
+            Some((a, _, y)) if y == x => run = Some((a, v, y)),
+            _ => {
+                if let Some((a, b, y)) = run {
+                    pts.push((0.5 * (a + b), y));
+                }
+                run = Some((v, v, x));
+            }
+        }
+    }
+    if let Some((a, b, y)) = run {
+        // The ends of the range stay the ends.
+        pts.push((if b >= hi { b } else { 0.5 * (a + b) }, y));
+    }
+    if let Some(first) = pts.first_mut() {
+        if first.0 - lo < (hi - lo) / N as f32 * 8.0 {
+            first.0 = lo;
+        }
+    }
+    let first = *pts.first()?;
+    let last = *pts.last()?;
+    let rising = last.1 >= first.1;
+    let (bottom, top) = if rising { (first, last) } else { (last, first) };
+    if target >= top.1 {
+        return Some(top.0);
+    }
+    if target <= bottom.1 {
+        return Some(bottom.0);
+    }
+    for w in pts.windows(2) {
+        let ((v0, y0), (v1, y1)) = (w[0], w[1]);
+        if (target - y0) * (target - y1) <= 0.0 && y0 != y1 {
+            return Some((v0 + (v1 - v0) * (target - y0) / (y1 - y0)).clamp(lo, hi));
+        }
+    }
+    // Not monotonic and not between two neighbours: the nearest point.
+    pts.iter().min_by(|a, b| (a.1 - target).abs().total_cmp(&(b.1 - target).abs())).map(|p| p.0)
+}
+
+/// Gives a control its typed value: registers it for the default right-click menu, shows its text box when
+/// open and, on Enter, sets `value` (in the control's own range `min … max`, shown by `show`) and marks
+/// `r` changed – the caller's usual change handling makes it an undo step. `default` is for Reset.
+pub fn value_hook(ui: &Ui, r: &mut Response, value: &mut f32, min: f32, max: f32, default: f32, show: &dyn Fn(f32) -> String) {
+    let ctx = ui.ctx().clone();
+    let pass = ctx.cumulative_pass_nr();
+    let text = show(*value);
+    // Read before taking the data lock (the response asks the input state).
+    let right = r.secondary_clicked();
+    ctx.data_mut(|d| {
+        let reg = d.get_temp_mut_or_default::<Registry>(registry_key());
+        if reg.pass != pass {
+            reg.pass = pass;
+            reg.items.clear();
+        }
+        reg.items.push((r.id, r.rect, text.clone(), right));
+    });
+    // Reset from the default menu.
+    if ctx.data(|d| d.get_temp::<egui::Id>(reset_key())) == Some(r.id) {
+        ctx.data_mut(|d| d.remove::<egui::Id>(reset_key()));
+        *value = default;
+        r.mark_changed();
+    }
+    let Some(mut pr) = ctx.data(|d| d.get_temp::<Prompt>(prompt_key())).filter(|p| p.id == r.id) else { return };
+    let mut close = false;
+    let mut set = None;
+    egui::Area::new(r.id.with("value.box")).order(egui::Order::Foreground).fixed_pos(r.rect.left_bottom() + Vec2::new(0.0, 2.0)).show(&ctx, |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.label(RichText::new("Set value – Enter to set, Esc to cancel").small().color(theme::TEXT_DIM));
+            let out = egui::TextEdit::singleline(&mut pr.text).desired_width(120.0).show(ui);
+            let te = out.response;
+            if pr.focus {
+                // Focused with the whole value selected: typing replaces it.
+                te.request_focus();
+                let mut state = out.state;
+                let n = pr.text.chars().count();
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
+                state.store(ui.ctx(), te.id);
+                pr.focus = false;
+            }
+            let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+            if enter {
+                match value_from_text(&pr.text, min, max, show) {
+                    Some(v) => {
+                        set = Some(v);
+                        close = true;
+                    }
+                    None => {
+                        pr.text = show(*value);
+                    }
+                }
+            } else if esc || (te.lost_focus() && !enter) {
+                close = true;
+            }
+        });
+    });
+    if let Some(v) = set {
+        *value = v;
+        r.mark_changed();
+    }
+    ctx.data_mut(|d| if close { d.remove::<Prompt>(prompt_key()) } else { d.insert_temp(prompt_key(), pr) });
+}
+
+/// The default right-click menu (Set value… / Reset to default) of value controls that have no menu of
+/// their own. Called once per frame after all views.
+pub fn value_menus(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    let reg: Registry = ctx.data(|d| d.get_temp(registry_key())).unwrap_or_default();
+    // Opened this frame: a control was right-clicked and no menu of its own came up.
+    if reg.pass == pass && !ctx.is_context_menu_open() {
+        if let Some((id, _, text, _)) = reg.items.iter().find(|x| x.3) {
+            let pos = ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default();
+            ctx.data_mut(|d| d.insert_temp(menu_key(), DefaultMenu { id: *id, pos, text: text.clone(), opened: pass }));
+        }
+    }
+    let Some(m) = ctx.data(|d| d.get_temp::<DefaultMenu>(menu_key())) else { return };
+    let mut close = false;
+    let area = egui::Area::new(egui::Id::new("value.menu.area")).order(egui::Order::Foreground).fixed_pos(m.pos).show(ctx, |ui| {
+        egui::Frame::menu(ui.style()).show(ui, |ui| {
+            ui.set_min_width(140.0);
+            ui.label(RichText::new(&m.text).small().strong());
+            ui.separator();
+            if ui.button("Set value…").on_hover_text("Type an exact value (Enter sets it)").clicked() {
+                open_value_prompt(ctx, m.id, m.text.clone());
+                close = true;
+            }
+            if ui.button("Reset to default").clicked() {
+                ctx.data_mut(|d| d.insert_temp(reset_key(), m.id));
+                close = true;
+            }
+        });
+    });
+    // Any click elsewhere (after the frame that opened it) or Esc closes it.
+    let clicked_out = pass > m.opened && ctx.input(|i| i.pointer.any_pressed()) && ctx.pointer_interact_pos().is_some_and(|p| !area.response.rect.contains(p));
+    if close || clicked_out || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ctx.data_mut(|d| d.remove::<DefaultMenu>(menu_key()));
+    }
+    if close {
+        ctx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::*;
+
+    #[test]
+    fn typed_values_follow_the_display() {
+        // Gain fader shown in dB.
+        let db = |v: f32| if v <= 0.0 { "-∞ dB".to_string() } else { format!("{:.1} dB", dragon_engine::dsp::gain_to_db(v)) };
+        let g = value_from_text("-6", 0.0, 2.0, &db).unwrap();
+        assert!((dragon_engine::dsp::gain_to_db(g) + 6.0).abs() < 0.05, "{g}");
+        assert_eq!(value_from_text("-inf", 0.0, 2.0, &db), Some(0.0));
+        assert!((value_from_text("+20 dB", 0.0, 2.0, &db).unwrap() - 2.0).abs() < 1e-3, "clamped to the top");
+        // Percent of 0 … 1.
+        assert!((value_from_text("40%", 0.0, 1.0, &pct).unwrap() - 0.4).abs() < 1e-3);
+        // Pan.
+        assert!((value_from_text("L 50", -1.0, 1.0, &pan_fmt).unwrap() + 0.5).abs() < 0.01);
+        assert!((value_from_text("30R", -1.0, 1.0, &pan_fmt).unwrap() - 0.3).abs() < 0.01);
+        assert!(value_from_text("C", -1.0, 1.0, &pan_fmt).unwrap().abs() < 0.01);
+        // Seconds shown as ms.
+        let ms = |v: f32| format!("{:.0} ms", v * 1000.0);
+        assert!((value_from_text("250", 0.0, 1.0, &ms).unwrap() - 0.25).abs() < 1e-3);
+        // Note names.
+        let note = |v: f32| dragon_engine::instruments::note_name(v.round() as u8);
+        assert_eq!(value_from_text(&note(64.0), 0.0, 127.0, &note).map(|v| v.round()), Some(64.0));
+        // Nonsense keeps the value.
+        assert_eq!(value_from_text("abc", 0.0, 1.0, &pct), None);
     }
 }

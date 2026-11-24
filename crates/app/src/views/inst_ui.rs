@@ -291,6 +291,7 @@ fn controls(ui: &mut Ui, st: &mut State, def: &'static EffectDef, values: &BTree
                 super::widgets::apply(st, &r, prm.name, |p| set(p, prm.id, v));
                 if let (Some(cid), "cutoff") = (cutoff_of, prm.id) {
                     r.context_menu(|ui| {
+                        super::widgets::set_value_item(ui, &r);
                         if ui.button("Create automation lane").clicked() {
                             crate::views::automation::add_lane(st, Target::SynthCutoff(cid));
                             ui.close_menu();

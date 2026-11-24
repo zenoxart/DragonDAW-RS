@@ -114,12 +114,26 @@ impl Face<'_> {
             }
         }
     }
+    /// Right-click › Set value… on a control: the typed value, in the parameter's units, as an edit.
+    fn typed(&mut self, resp: &mut egui::Response, id: &str) -> Option<f32> {
+        let pi = self.def.param(id)?;
+        let mut n = pi.normalize(self.v(id));
+        let show = |x: f32| pi.format(pi.denormalize(x));
+        crate::views::widgets::value_hook(self.ui, resp, &mut n, 0.0, 1.0, pi.normalize(pi.default), &show);
+        if resp.changed() {
+            let v = pi.denormalize(n);
+            self.set(id, v);
+            return Some(v);
+        }
+        None
+    }
     /// A horizontal slider (0 … 1 of the parameter's range) with an optional text under it.
     fn slider(&mut self, x: f32, y: f32, w: f32, id: &str, tip: &str) {
         let Some(pi) = self.def.param(id) else { return };
         let n = pi.normalize(self.v(id));
         let r = self.rect(x, y - 6.0, x + w, y + 6.0);
-        let resp = self.ui.interact(r.expand(6.0 * self.s), self.salt.with(id), Sense::click_and_drag()).on_hover_text(tip);
+        let mut resp = self.ui.interact(r.expand(6.0 * self.s), self.salt.with(id), Sense::click_and_drag()).on_hover_text(tip);
+        self.typed(&mut resp, id);
         if let Some(x) = crate::docs::knob_menu(&resp, self.def, pi, self.v(id)) {
             self.set(id, x);
         }
@@ -141,7 +155,8 @@ impl Face<'_> {
         let v = self.v(id);
         let rr = 52.0;
         let r = self.rect(cx - rr, cy - rr, cx + rr, cy + rr);
-        let resp = self.ui.interact(r, self.salt.with(id), Sense::click_and_drag()).on_hover_text(format!("{name}: drag up / down (Shift: fine), double-click: default, right-click for the menu"));
+        let mut resp = self.ui.interact(r, self.salt.with(id), Sense::click_and_drag()).on_hover_text(format!("{name}: drag up / down (Shift: fine), double-click: default, right-click for the menu"));
+        let v = self.typed(&mut resp, id).unwrap_or(v);
         if let Some(x) = crate::docs::knob_menu(&resp, self.def, pi, v) {
             self.set(id, x);
         }

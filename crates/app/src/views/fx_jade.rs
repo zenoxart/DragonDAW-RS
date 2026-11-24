@@ -57,7 +57,7 @@ fn value(def: &EffectDef, params: &BTreeMap<String, f32>, id: &str) -> f32 {
 fn knob(ui: &mut Ui, salt: egui::Id, prm: &ParamInfo, v: f32, c: Pos2, rad: f32, style: KnobStyle, accent: Color32) -> Option<f32> {
     let rect = Rect::from_center_size(c, Vec2::splat(rad * 2.0 + 10.0));
     let mut r = ui.interact(rect, salt.with(prm.id), Sense::click_and_drag());
-    let n = fx_panel::knob_input(ui, &mut r, prm.normalize(v), prm.normalize(prm.default), if rad > 30.0 { 260.0 } else { 200.0 });
+    let n = fx_panel::knob_input(ui, &mut r, prm.normalize(v), prm.normalize(prm.default), if rad > 30.0 { 260.0 } else { 200.0 }, prm);
     let nv = prm.denormalize(n);
     let active = r.hovered() || r.dragged();
     fx_panel::draw_knob(ui.painter(), c, rad, n, style, accent, active);
@@ -153,7 +153,7 @@ pub fn body(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent
         let ip = prm("input");
         let kr = Rect::from_center_size(in_c, Vec2::splat(in_rad * 2.0 + 10.0));
         let mut r = ui.interact(kr, salt.with("input"), Sense::click_and_drag());
-        let n = fx_panel::knob_input(ui, &mut r, ip.normalize(v), ip.normalize(ip.default), 300.0);
+        let n = fx_panel::knob_input(ui, &mut r, ip.normalize(v), ip.normalize(ip.default), 300.0, ip);
         white_knob(&p, in_c, in_rad, n);
         if r.changed() {
             out.push(("input".into(), ip.denormalize(n)));

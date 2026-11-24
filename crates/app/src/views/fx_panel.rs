@@ -433,8 +433,11 @@ fn fit_text(p: &egui::Painter, at: Pos2, align: egui::Align2, text: &str, width:
 }
 
 /// Knob drag / wheel / reset handling on a normalized value. Returns the new value.
-pub fn knob_input(ui: &Ui, r: &mut Response, n: f32, default: f32, px: f32) -> f32 {
+pub fn knob_input(ui: &Ui, r: &mut Response, n: f32, default: f32, px: f32, prm: &ParamInfo) -> f32 {
     let mut n = n;
+    // Right-click › Set value…: typed in the parameter's own units.
+    let show = |x: f32| prm.format(prm.denormalize(x));
+    super::widgets::value_hook(ui, r, &mut n, 0.0, 1.0, default, &show);
     if r.dragged() {
         let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
         n = (n - r.drag_delta().y / px * fine).clamp(0.0, 1.0);
@@ -561,7 +564,7 @@ fn knob_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, skin: Skin, acce
     };
     let h = rad * 2.0 + 44.0;
     let (rect, mut r) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click_and_drag());
-    let n = knob_input(ui, &mut r, prm.normalize(v), prm.normalize(prm.default), if big { 240.0 } else { 180.0 });
+    let n = knob_input(ui, &mut r, prm.normalize(v), prm.normalize(prm.default), if big { 240.0 } else { 180.0 }, prm);
     let value = prm.denormalize(n);
     let p = ui.painter_at(rect.expand(4.0));
     let active = r.hovered() || r.dragged();
@@ -588,7 +591,7 @@ fn fader_cell(ui: &mut Ui, prm: &ParamInfo, v: f32, label: &str, accent: Color32
             r.mark_changed();
         }
     }
-    n = knob_input(ui, &mut r, n, prm.normalize(prm.default), f32::INFINITY);
+    n = knob_input(ui, &mut r, n, prm.normalize(prm.default), f32::INFINITY, prm);
     let value = prm.denormalize(n);
     let p = ui.painter_at(rect.expand(4.0));
     let active = r.hovered() || r.dragged();

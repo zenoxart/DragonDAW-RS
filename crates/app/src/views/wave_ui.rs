@@ -339,6 +339,7 @@ fn mod_target(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams, r: &egu
     }
     if !slots.is_empty() {
         r.context_menu(|ui| {
+            widgets::set_value_item(ui, r);
             ui.label(RichText::new(format!("Modulating {}", dest.name())).small().strong().color(MOD_COL));
             for (i, m) in &slots {
                 let i = *i;

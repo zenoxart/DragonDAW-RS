@@ -2151,3 +2151,41 @@ fn new_marker_asks_for_a_name_and_snaps() {
     assert_eq!(m.beat, 4.0, "on the nearest bar");
     assert_eq!(h.st.session.project.markers.len(), n + 1);
 }
+
+fn pan_knob(ui: &mut egui::Ui, st: &mut State) {
+    let id = st.session.project.mixer.channels[1].id;
+    let mut pan = st.session.project.mixer.channels[1].pan;
+    let r = super::widgets::knob(ui, &mut pan, -1.0, 1.0, 0.0, "pan", super::widgets::pan_fmt);
+    super::widgets::apply(st, &r, "Pan", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.pan = pan));
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::new("test.knob"), r.rect);
+        d.insert_temp(egui::Id::new("test.knob.id"), r.id);
+    });
+    super::widgets::value_menus(ui.ctx());
+}
+
+#[test]
+fn right_click_set_value_types_a_knob_value_as_one_undo_step() {
+    let mut h = Harness::new();
+    h.idle(pan_knob, 2);
+    let knob = h.rect("test.knob");
+    // Right-click: the default menu (the knob has no menu of its own).
+    h.click(pan_knob, knob.center(), PointerButton::Secondary, Modifiers::NONE);
+    assert!(super::widgets::value_menu_open(&h.ctx));
+    // "Set value…" opens the box with the current value; type and press Enter.
+    let before = h.st.session.project.mixer.channels[1].pan;
+    let knob_id: egui::Id = h.ctx.data(|d| d.get_temp(egui::Id::new("test.knob.id"))).unwrap();
+    super::widgets::open_value_prompt(&h.ctx, knob_id, super::widgets::pan_fmt(before));
+    h.idle(pan_knob, 2);
+    let key = |k: egui::Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    h.frame(pan_knob, vec![Event::Text("30L".into())], Modifiers::NONE);
+    h.frame(pan_knob, vec![key(egui::Key::Enter)], Modifiers::NONE);
+    h.idle(pan_knob, 2);
+    let after = h.st.session.project.mixer.channels[1].pan;
+    assert!((after + 0.3).abs() < 0.01, "typed 30L: {after}");
+    assert!(!h.st.session.in_gesture());
+    h.st.session.undo();
+    assert!((h.st.session.project.mixer.channels[1].pan - before).abs() < 1e-6, "undo restores");
+    h.st.session.redo();
+    assert!((h.st.session.project.mixer.channels[1].pan + 0.3).abs() < 0.01, "redo sets it again");
+}
