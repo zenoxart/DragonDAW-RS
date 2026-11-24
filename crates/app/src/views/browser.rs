@@ -167,6 +167,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
             return;
         }
+        current_project(ui, st);
         if !st.settings.recent.is_empty() {
             egui::CollapsingHeader::new(RichText::new("Recent projects").strong()).default_open(true).show(ui, |ui| {
                 for p in st.settings.recent.clone() {
@@ -206,6 +207,61 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     // Rows in screen order (folder headers are pushed after their contents).
     rows.sort_by(|a, b| a.rect.top().total_cmp(&b.rect.top()));
     navigate(ui, st, &rows, keys);
+}
+
+/// The open project: its undo history as a folder (Current project / History). Every step is listed, the
+/// current one marked; double-click a step to bring the whole project back to the state after it (or to
+/// the start) – steps after it stay as redo steps, so you can jump forward again.
+fn current_project(ui: &mut Ui, st: &mut State) {
+    let name = st.session.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
+    egui::CollapsingHeader::new(RichText::new(format!("Current project – {name}")).strong()).id_salt("browser.current").icon(folder_icon).default_open(true).show(ui, |ui| {
+        let steps = st.session.history.timeline();
+        let pos = st.session.history.position();
+        egui::CollapsingHeader::new(format!("History ({} step{})", steps.len(), if steps.len() == 1 { "" } else { "s" })).id_salt("browser.history").icon(folder_icon).default_open(true).show(ui, |ui| {
+            if steps.is_empty() {
+                ui.label(RichText::new("No changes yet. Every edit appears here; double-click one to go back (or forward) to it.").small().color(theme::TEXT_DIM));
+                return;
+            }
+            let mut go = None;
+            egui::ScrollArea::vertical().id_salt("browser.history.scroll").max_height(260.0).stick_to_bottom(true).show(ui, |ui| {
+                // Position 0: before the oldest step kept.
+                let row = |ui: &mut Ui, k: usize, text: String, done: bool| {
+                    let cur = k == pos;
+                    let col = if cur {
+                        egui::Color32::WHITE
+                    } else if done {
+                        theme::TEXT
+                    } else {
+                        theme::TEXT_DIM
+                    };
+                    let label = RichText::new(format!("{} {k:>3}  {text}", if cur { "▶" } else { " " })).monospace().size(11.5).color(col);
+                    let label = if done || cur { label } else { label.italics() };
+                    ui.selectable_label(cur, label).on_hover_text(if cur {
+                        "The project is here now".to_string()
+                    } else if k < pos {
+                        format!("Double-click: go back to the state after this step (undoes {} step(s))", pos - k)
+                    } else {
+                        format!("Double-click: go forward to the state after this step (redoes {} step(s))", k - pos)
+                    })
+                };
+                if row(ui, 0, "Start of the history".into(), true).double_clicked() {
+                    go = Some(0);
+                }
+                for (i, (label, done)) in steps.iter().enumerate() {
+                    if row(ui, i + 1, label.clone(), *done).double_clicked() {
+                        go = Some(i + 1);
+                    }
+                }
+            });
+            if let Some(k) = go {
+                if k != pos {
+                    let n = st.session.goto(k);
+                    st.ui.status = format!("History: {} – {n} step(s) {}", if k == 0 { "start".to_string() } else { steps[k - 1].0.clone() }, if k < pos { "undone" } else { "redone" });
+                }
+            }
+            ui.label(RichText::new("Kept with the project (History folder) – up to the undo limit in Options.").small().color(theme::TEXT_DIM));
+        });
+    });
 }
 
 /// Puts a folder's header row in the list (its contents were drawn first).

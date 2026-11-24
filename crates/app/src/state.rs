@@ -1209,6 +1209,7 @@ impl State {
                     Some(SafeMode::NoPluginStates) => dragon_engine::render::Pool::with_plugins(Box::new(dragon_engine::plugins::HostWithoutStates)),
                 };
                 self.replace_session(Session::with_pool(p, Some(path.to_path_buf()), pool));
+                self.restore_history(path);
                 self.safe_mode = safe;
                 self.open_guard = Some(90);
                 if let Some(m) = safe {
@@ -1222,6 +1223,20 @@ impl State {
             Err(e) => {
                 crate::crash::clear(&self.ctx.paths.local, "opening");
                 self.toast(format!("Cannot open {}: {e}", path.display()), Severity::Error)
+            }
+        }
+    }
+
+    /// Loads the undo history saved with the project file `path` (or an autosave) into the session.
+    pub fn restore_history(&mut self, path: &Path) {
+        if let Some(saved) = dragon_engine::history::load_history(path) {
+            let n = saved.undo.len();
+            if self.session.history.restore(&self.session.project, &saved) {
+                if n > 0 {
+                    self.ui.status = format!("History restored: {n} step(s) can be undone");
+                }
+            } else {
+                self.ui.status = "The saved history no longer fits this project (it was changed elsewhere) – starting a new one".into();
             }
         }
     }
@@ -1281,6 +1296,10 @@ impl State {
                 self.session.history.touch();
                 self.session.set_path(path.clone());
                 self.session.history.mark_saved();
+                // The undo history goes with it (History/<name>.history.json), so it survives reopening.
+                if let Err(e) = dragon_engine::history::save_history(&self.session.history, &self.session.project, &path) {
+                    self.ctx.log.warn("history", e.to_string());
+                }
                 self.add_recent(&path);
                 self.ui.status = if copied > 0 { format!("Saved {} ({copied} file(s) copied into Samples)", path.display()) } else { format!("Saved {}", path.display()) };
                 crate::views::quests::event(self, crate::views::quests::Event::Saved);
@@ -1488,7 +1507,12 @@ impl State {
             self.last_autosave = Instant::now();
             let name = self.session.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
             match self.autosave.save(&self.session.project, &name) {
-                Ok(_) => self.ui.status = "Autosaved".into(),
+                Ok(path) => {
+                    // The history with it, so a recovered project can still be undone.
+                    let _ = dragon_engine::history::save_history(&self.session.history, &self.session.project, &path);
+                    prune_autosave_histories(&path);
+                    self.ui.status = "Autosaved".into()
+                }
                 Err(e) => self.ctx.log.warn("autosave", e.to_string()),
             }
         }
@@ -2190,6 +2214,20 @@ impl State {
             iid
         });
         self.ui.effect_windows.push((m, iid));
+    }
+}
+
+/// Removes saved histories of autosaves that have been deleted.
+fn prune_autosave_histories(autosave: &Path) {
+    let Some(dir) = autosave.parent() else { return };
+    let Ok(rd) = std::fs::read_dir(dir.join("History")) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if let Some(stem) = name.strip_suffix(".history.json") {
+            if !dir.join(format!("{stem}.{}", project_io::EXTENSION)).exists() {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
 }
 

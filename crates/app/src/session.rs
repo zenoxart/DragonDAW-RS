@@ -81,6 +81,12 @@ impl Session {
         self.history.redo(&mut self.project)
     }
 
+    /// Jumps to the state after `pos` steps of the history (undoing or redoing as many as needed).
+    pub fn goto(&mut self, pos: usize) -> usize {
+        self.end_gesture();
+        self.history.goto(&mut self.project, pos)
+    }
+
     /// Recompiles when the project changed since the last compile.
     pub fn compile_if_changed(&mut self, rate: f32) -> Option<Arc<Song>> {
         if self.compiled_revision == Some(self.history.revision) {

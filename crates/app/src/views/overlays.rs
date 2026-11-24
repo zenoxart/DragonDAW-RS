@@ -89,6 +89,7 @@ pub fn recovery(ctx: &egui::Context, st: &mut State) {
                     match st.autosave.load(p) {
                         Ok(proj) => {
                             st.replace_session(crate::session::Session::new(proj, None));
+                            st.restore_history(p);
                             st.session.history.touch();
                             st.toast("Recovered – save it with Save as", Severity::Success);
                         }

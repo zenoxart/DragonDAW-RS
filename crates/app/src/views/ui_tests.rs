@@ -2189,3 +2189,35 @@ fn right_click_set_value_types_a_knob_value_as_one_undo_step() {
     h.st.session.redo();
     assert!((h.st.session.project.mixer.channels[1].pan + 0.3).abs() < 0.01, "redo sets it again");
 }
+
+fn browser_view(ui: &mut egui::Ui, st: &mut State) {
+    super::browser::show(ui, st);
+}
+
+#[test]
+fn undo_history_is_saved_with_the_project_and_reopens() {
+    let mut h = Harness::new();
+    let dir = std::env::temp_dir().join(format!("dragon_hist_app_{}", std::process::id()));
+    let path = dir.join("Song").join("Song.dragon");
+    for bpm in [100.0, 110.0, 120.0] {
+        h.st.session.edit("Tempo", |p| p.bpm = bpm);
+    }
+    h.st.session.edit("Rename", |p| p.meta.name = "Hist".into());
+    let steps = h.st.session.history.timeline();
+    assert!(h.st.save_to(&path));
+    assert!(dragon_engine::history::history_path(&path).exists());
+    // Reopen in a fresh state: every step is back and can be undone.
+    let mut h2 = Harness::new();
+    h2.st.open_path(&path);
+    assert_eq!(h2.st.session.history.timeline(), steps);
+    assert_eq!(h2.st.session.project.bpm, 120.0);
+    // The browser lists it under Current project / History.
+    h2.idle(browser_view, 2);
+    // Jump back to after the first tempo change, then forward to the end.
+    let first = steps.iter().position(|(l, _)| l == "Tempo").unwrap() + 1;
+    h2.st.session.goto(first);
+    assert_eq!(h2.st.session.project.bpm, 100.0);
+    h2.st.session.goto(steps.len());
+    assert_eq!((h2.st.session.project.bpm, h2.st.session.project.meta.name.as_str()), (120.0, "Hist"));
+    let _ = std::fs::remove_dir_all(dir);
+}
