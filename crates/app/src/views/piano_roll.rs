@@ -434,7 +434,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
     }
     // The event lane: velocity, pan or release of each note (tabs at its left, or F / Shift+F). Drag to
-    // paint the values across the notes, right-drag for a straight ramp (like FL Studio).
+    // paint the values across the notes, right-drag for a straight ramp .
     p.rect_filled(vel, 0.0, theme::PANEL);
     let vp = p.with_clip_rect(vel);
     let lane_h = vel.height() - 6.0;
@@ -916,7 +916,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     }
                 }
             } else if ui.input(|i| i.modifiers.ctrl) {
-                // Ctrl + click on empty space only deselects (like FL Studio) – no note, whatever the tool.
+                // Ctrl + click on empty space only deselects  – no note, whatever the tool.
                 st.ui.notes.clear();
             } else if matches!(tool, Tool::Draw | Tool::Paint) {
                 let start = snap_tick_floor(tick) as u32;

@@ -171,6 +171,11 @@ fn instruments_launcher_and_monitoring_do_not_allocate() {
     let (mut l, mut rr) = (vec![0.0f32; 4096], vec![0.0f32; 4096]);
     let input = (vec![0.01f32; 4096], vec![-0.01f32; 4096]);
     r.push_live(dragon_engine::render::LiveEvent::Launch { lane: 1, pattern: Some(launch_pat), quantize: 0.0 });
+    // Warm up with the parallel mixer on, then watch with it on and off: the renderer switches between
+    // the two by load, and neither path may grow a buffer the other one never touched.
+    let _turn = TIMING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let pool = dragon_engine::mixpool::MixPool::global();
+    pool.set_always(true);
     for _ in 0..80 {
         r.render(&mut l[..1024], &mut rr[..1024], &[&input.0[..1024], &input.1[..1024]]);
     }
@@ -178,10 +183,12 @@ fn instruments_launcher_and_monitoring_do_not_allocate() {
     ALLOCS.store(0, Ordering::Relaxed);
     WATCH.with(|w| w.set(true));
     for k in 0..200 {
+        pool.set_always(k < 100);
         let n = [64, 256, 1024, 512][k % 4];
         r.render(&mut l[..n], &mut rr[..n], &[&input.0[..n], &input.1[..n]]);
     }
     WATCH.with(|w| w.set(false));
+    pool.set_always(false);
     let n = ALLOCS.load(Ordering::Relaxed);
     for t in TRACES.lock().unwrap().iter() {
         let frames: Vec<&str> = t

@@ -864,7 +864,7 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
         }
         "edit.duplicate" => {
             // The focused editor decides: in the piano roll the notes (all of them when none is selected,
-            // like FL Studio), even if clips are still selected in the playlist.
+            //), even if clips are still selected in the playlist.
             if st.ui.editor == crate::state::Editor::PianoRoll && st.ui.notes.is_empty() {
                 let n = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|x| x.notes.len()).unwrap_or(0);
                 st.ui.notes = (0..n).collect();

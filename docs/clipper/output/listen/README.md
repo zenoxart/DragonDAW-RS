@@ -4,9 +4,17 @@
 
 Plays only what the detector or band hears, to set it up by ear.
 
-Part of **Obsidian (soft clipper)** – Soft clipper with the sound of the Fruity Soft Clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen.
+Part of **Obsidian (soft clipper)** – Soft clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen.
 
 **Range:** On / off (default: off)
+
+## Mathematics
+
+Outputs only what the clipper removes, $x_D - y$.
+
+**Knob position → value.** A switch: 0 = off, 1 = on.
+
+**Smoothing.** Takes effect at once (no glide).
 
 Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
 

@@ -2071,7 +2071,7 @@ fn mixer_dock_and_sticky_channels() {
     assert_eq!(x(&h, right), r_right, "the sticky right channel stays");
 }
 
-/// The event lane, like FL Studio: one fast sweep across it sets the velocity of every note it passes
+/// The event lane: one fast sweep across it sets the velocity of every note it passes
 /// (none skipped), a right-drag ramps them, the Pan tab draws pan.
 #[test]
 fn piano_roll_lane_paints_and_ramps() {

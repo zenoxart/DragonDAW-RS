@@ -1103,7 +1103,7 @@ pub fn limiter_def() -> EffectDef {
 
 // ------------------------------------------------------------------------------------------------ de-esser
 
-/// De-esser after Pro-DS: single-vocal (relative: reacts to sibilance compared with the voice) or allround
+/// De-esser: single-vocal (relative: reacts to sibilance compared with the voice) or allround
 /// (absolute) detection, split-band or wide-band processing, detection band (high-pass … low-pass), threshold,
 /// range (the most reduction), look-ahead, stereo link and listen.
 pub const DS_MODES: &[&str] = &["Single vocal", "Allround"];
@@ -1267,7 +1267,7 @@ pub fn deesser_def() -> EffectDef {
         id: "deesser",
         name: "Serpent's Hush (de-esser)",
         category: "Dynamics",
-        description: "De-esser after Pro-DS: single-vocal (relative) or allround detection, split- or wide-band processing, detection band, threshold, range, look-ahead, stereo link and listen.",
+        description: "De-esser: single-vocal (relative) or allround detection, split- or wide-band processing, detection band, threshold, range, look-ahead, stereo link and listen.",
         params: DEESS_PARAMS,
         uses_sidechain: false,
         create: |rate| {
@@ -1601,7 +1601,7 @@ mod tests {
         assert_eq!(g.latency(), 240);
     }
 
-    /// Pro-DS: sibilance is reduced, a low vowel is left alone, the range limits the cut, split band
+    /// De-esser: sibilance is reduced, a low vowel is left alone, the range limits the cut, split band
     /// leaves the lows of a mixed signal untouched, and listen outputs the detection band.
     #[test]
     fn deesser_modes_range_and_split() {

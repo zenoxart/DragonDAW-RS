@@ -8,6 +8,14 @@ Part of **Talon (transient shaper)** – Transient designer: attack (Needle / Na
 
 **Range:** Options: Off, Clip, Limit, Soft clip (default: Limit)
 
+## Mathematics
+
+Off, Clip, Limit (instant attack, 50 ms recovery) or Soft clip (tanh above 0.8) at −0.1 dBFS.
+
+**Knob position → value.** A choice of 4: the value is the option's index $0 \dots 3$.
+
+**Smoothing.** Takes effect at once (no glide).
+
 Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
 
 Drag up / down to turn it (Shift: fine), turn the mouse wheel over it, double-click or Ctrl+click to reset.

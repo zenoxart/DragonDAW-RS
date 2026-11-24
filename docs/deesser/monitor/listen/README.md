@@ -4,9 +4,17 @@
 
 Plays only what the detector or band hears, to set it up by ear.
 
-Part of **Serpent's Hush (de-esser)** – De-esser after Pro-DS: single-vocal (relative) or allround detection, split- or wide-band processing, detection band, threshold, range, look-ahead, stereo link and listen.
+Part of **Serpent's Hush (de-esser)** – De-esser: single-vocal (relative) or allround detection, split- or wide-band processing, detection band, threshold, range, look-ahead, stereo link and listen.
 
 **Range:** On / off (default: off)
+
+## Mathematics
+
+Outputs the detector band $s$ itself.
+
+**Knob position → value.** A switch: 0 = off, 1 = on.
+
+**Smoothing.** Takes effect at once (no glide).
 
 Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
 

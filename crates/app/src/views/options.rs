@@ -249,7 +249,7 @@ fn surface(ui: &mut Ui, st: &mut State) {
     controller_buttons(ui, st);
 }
 
-/// The DAW buttons of a keyboard controller (FLkey-style): press Learn, then the button on the keyboard.
+/// The DAW buttons of a keyboard controller: press Learn, then the button on the keyboard.
 fn controller_buttons(ui: &mut Ui, st: &mut State) {
     use dragon_engine::midi::ControllerButton;
     ui.add_space(8.0);

@@ -62,7 +62,7 @@ impl Stage {
     fn dot(a: &[f32], b: &[f32; L]) -> f32 {
         // Four partial sums (vectorises; the order differs from a plain sum only in rounding).
         let mut acc = [0.0f32; 4];
-        for (x, h) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        for (x, h) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
             for k in 0..4 {
                 acc[k] += x[k] * h[k];
             }

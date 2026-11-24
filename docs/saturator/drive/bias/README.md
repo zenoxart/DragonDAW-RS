@@ -8,6 +8,14 @@ Part of **Crucible (saturator)** – Tube (12AX7, 12AT7, 12AU7, 6SN7, EF86, EL34
 
 **Range:** -1.00 … 1.00 (default: 0.00)
 
+## Mathematics
+
+$\beta$: shifts the operating point by $0.4\beta$ — more asymmetry (even harmonics) or less.
+
+**Knob position → value.** Linear: $v = -1 + p\,(2)$, so each tenth of the travel is 0.2.
+
+**Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).
+
 Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
 
 Drag up / down to turn it (Shift: fine), turn the mouse wheel over it, double-click or Ctrl+click to reset.

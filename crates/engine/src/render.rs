@@ -1375,7 +1375,7 @@ impl Renderer {
             pre_fader: Vec::new(),
             chan_buf: (vec![0.0; AUTOMATION_BLOCK], vec![0.0; AUTOMATION_BLOCK]),
             scratch: Scratch::default(),
-            route_tmp: Default::default(),
+            route_tmp: (Vec::with_capacity(AUTOMATION_BLOCK), Vec::with_capacity(AUTOMATION_BLOCK)),
             strip_meters: None,
             mix_load: 0.0,
             mix_parallel: false,
@@ -1782,6 +1782,13 @@ impl Renderer {
             sc.tele_data.reserve(TELE_ROOM * 4);
             sc.tele.reserve(1024);
             sc.gr.reserve(1024);
+        }
+        // The dry and sidechain copies hold one block. Reserved here, not on first use: a chain that only
+        // later runs outside the parallel pass (or gets a sidechain) must not grow them mid-playback.
+        for v in [&mut sc.dry.0, &mut sc.dry.1, &mut sc.sc.0, &mut sc.sc.1] {
+            if v.capacity() < AUTOMATION_BLOCK {
+                v.reserve(AUTOMATION_BLOCK - v.len());
+            }
         }
         if sc.ins_mix.len() < song.ins_total {
             sc.ins_mix.resize(song.ins_total, (1.0, 1.0));

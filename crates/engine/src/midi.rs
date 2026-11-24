@@ -331,7 +331,7 @@ pub fn mcu_led_message(note: u8, on: bool) -> [u8; 3] {
 
 // ------------------------------------------------------------------------------ controller buttons
 
-/// The DAW buttons a keyboard controller can trigger (FLkey-style transport and function buttons).
+/// The DAW buttons a keyboard controller can trigger (transport and function buttons).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ControllerButton {
     Record,

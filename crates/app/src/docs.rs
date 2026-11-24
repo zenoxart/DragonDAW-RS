@@ -264,7 +264,7 @@ pub fn pages() -> Vec<(String, String)> {
             for (k, prm) in knobs {
                 sp.push_str(&format!("| [{}]({k}/README.md) | {} |\n", strip_band(prm.name), range_text(prm)));
                 let body = format!(
-                    "# {} › {} › {}\n\n[Back to {}](../README.md) · [{}](../../README.md)\n\n{}\n\n**Range:** {}{}\n\n{KNOB_MENU}\n",
+                    "# {} › {} › {}\n\n[Back to {}](../README.md) · [{}](../../README.md)\n\n{}\n\n**Range:** {}{}\n\n{}\n{KNOB_MENU}\n",
                     def.name,
                     title_case(sec),
                     strip_band(prm.name),
@@ -272,11 +272,18 @@ pub fn pages() -> Vec<(String, String)> {
                     def.name,
                     explain(def, prm),
                     range_text(prm),
-                    if unband(prm.id).1 { "\n\nEvery band has this control; pick the band with the band buttons." } else { "" }
+                    if unband(prm.id).1 { "\n\nEvery band has this control; pick the band with the band buttons." } else { "" },
+                    knob_math(def, prm)
                 );
                 out.push((format!("{dir}/{sec}/{k}/README.md"), body));
             }
             out.push((format!("{dir}/{sec}/README.md"), sp));
+        }
+        if let Some(m) = math(def.id) {
+            idx.push_str(&format!(
+                "\n## How it works\n\n{}\n\nThe formulas of each control are on its page above; shared building blocks (decibels, smoothing, RBJ filters, oversampling) are in [DSP foundations](../dsp/README.md).\n",
+                m.0.replace("{DSP}", "../dsp/README.md").trim()
+            ));
         }
         idx.push_str("\n[All effects](../effects/README.md) · [Manual](../README.md)\n");
         out.push((format!("{dir}/README.md"), idx));
@@ -292,6 +299,120 @@ pub fn pages() -> Vec<(String, String)> {
     index.push_str(&plugins);
     out.push(("README.md".into(), index));
     out
+}
+
+/// The technical description of an effect: (overview, per-control sections), from `docs_math/<id>.md`.
+/// Control sections start with `<!-- knob: <id> -->` (band controls without their `bN_` prefix).
+#[cfg(test)]
+fn math(id: &str) -> Option<(String, std::collections::BTreeMap<String, String>)> {
+    let text = match id {
+        "bitcrusher" => include_str!("../docs_math/bitcrusher.md"),
+        "chorus" => include_str!("../docs_math/chorus.md"),
+        "clipper" => include_str!("../docs_math/clipper.md"),
+        "compressor" => include_str!("../docs_math/compressor.md"),
+        "deesser" => include_str!("../docs_math/deesser.md"),
+        "delay" => include_str!("../docs_math/delay.md"),
+        "dragon_particle" => include_str!("../docs_math/dragon_particle.md"),
+        "eq" => include_str!("../docs_math/eq.md"),
+        "filter" => include_str!("../docs_math/filter.md"),
+        "flanger" => include_str!("../docs_math/flanger.md"),
+        "gate" => include_str!("../docs_math/gate.md"),
+        "ghost" => include_str!("../docs_math/ghost.md"),
+        "imager" => include_str!("../docs_math/imager.md"),
+        "jadefang" => include_str!("../docs_math/jadefang.md"),
+        "limiter" => include_str!("../docs_math/limiter.md"),
+        "multiband" => include_str!("../docs_math/multiband.md"),
+        "multisat" => include_str!("../docs_math/multisat.md"),
+        "orbit" => include_str!("../docs_math/orbit.md"),
+        "phaser" => include_str!("../docs_math/phaser.md"),
+        "reverb" => include_str!("../docs_math/reverb.md"),
+        "saturator" => include_str!("../docs_math/saturator.md"),
+        "transient" => include_str!("../docs_math/transient.md"),
+        "tremolo" => include_str!("../docs_math/tremolo.md"),
+        "tune" => include_str!("../docs_math/tune.md"),
+        "utility" => include_str!("../docs_math/utility.md"),
+        _ => return None,
+    };
+    let mut parts = text.split("<!-- knob: ");
+    let overview = parts.next().unwrap_or_default().to_string();
+    let knobs = parts
+        .filter_map(|p| {
+            let (head, body) = p.split_once("-->")?;
+            Some((head.trim().to_string(), body.trim().to_string()))
+        })
+        .collect();
+    Some((overview, knobs))
+}
+
+/// A control's text: its own entry, else the entry of its family (numbered controls such as `dr_3` or
+/// `lfo2_rate` are written once, for number 1 – or 2 where the family starts there).
+#[cfg(test)]
+fn knob_text<'a>(knobs: &'a std::collections::BTreeMap<String, String>, id: &str) -> Option<&'a String> {
+    knobs.get(id).or_else(|| {
+        ['1', '2'].iter().find_map(|d| {
+            let mut out = String::new();
+            let mut prev_digit = false;
+            for c in id.chars() {
+                if c.is_ascii_digit() {
+                    if !prev_digit {
+                        out.push(*d);
+                    }
+                    prev_digit = true;
+                } else {
+                    out.push(c);
+                    prev_digit = false;
+                }
+            }
+            knobs.get(&out)
+        })
+    })
+}
+
+/// The "Mathematics" section of a control's page: what the effect does with it, then the exact mapping
+/// from the knob's position to its value and how changes are smoothed.
+#[cfg(test)]
+fn knob_math(def: &EffectDef, prm: &ParamInfo) -> String {
+    let mut out = String::from("## Mathematics\n\n");
+    if let Some((_, knobs)) = math(def.id) {
+        if let Some(t) = knob_text(&knobs, unband(prm.id).0) {
+            out.push_str(&t.replace("{DSP}", "../../../dsp/README.md"));
+            out.push_str("\n\n");
+        }
+    }
+    let (lo, hi) = (prm.min, prm.max);
+    let u = if prm.unit.is_empty() { String::new() } else { format!("\\ \\text{{{}}}", prm.unit.replace('%', "\\%")) };
+    out.push_str("**Knob position \u{2192} value.** ");
+    match prm.kind {
+        ParamKind::Log if lo > 0.0 => out.push_str(&format!(
+            "Logarithmic: $v = {lo}\\cdot\\left(\\frac{{{hi}}}{{{lo}}}\\right)^{{p}}{u}$, $p = \\frac{{\\ln(v/{lo})}}{{\\ln({})}}$ — every factor of {:.3} takes a tenth of the travel; the centre ($p = 0.5$) is {:.4}{}.\n\n",
+            fmt_num(hi / lo),
+            (hi / lo).powf(0.1),
+            (lo * hi).sqrt(),
+            if prm.unit.is_empty() { String::new() } else { format!(" {}", prm.unit) }
+        )),
+        ParamKind::Choice(opts) => out.push_str(&format!("A choice of {}: the value is the option's index $0 \\dots {}$.\n\n", opts.len(), opts.len().saturating_sub(1))),
+        ParamKind::Toggle => out.push_str("A switch: 0 = off, 1 = on.\n\n"),
+        _ => out.push_str(&format!("Linear: $v = {lo} + p\\,({}){u}$, so each tenth of the travel is {}{}.\n\n", fmt_num(hi - lo), fmt_num((hi - lo) / 10.0), if prm.unit.is_empty() { String::new() } else { format!(" {}", prm.unit) })),
+    }
+    match prm.kind {
+        ParamKind::Linear | ParamKind::Log => out.push_str(&format!(
+            "**Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \\leftarrow v + c\\,(v_t - v)$, $c = 1 - e^{{-32/(0.025 f_s)}}$ — a 25 ms time constant{}. See [DSP foundations](../../../dsp/README.md).\n",
+            if matches!(prm.kind, ParamKind::Log) { ", in the log domain (even per ratio)" } else { "" }
+        )),
+        _ => out.push_str("**Smoothing.** Takes effect at once (no glide).\n"),
+    }
+    out
+}
+
+#[cfg(test)]
+fn fmt_num(x: f32) -> String {
+    let s = format!("{x:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    if s.is_empty() || s == "-0" {
+        "0".into()
+    } else {
+        s
+    }
 }
 
 #[cfg(test)]
@@ -332,7 +453,7 @@ mod tests {
             if write {
                 std::fs::create_dir_all(f.parent().unwrap()).unwrap();
                 std::fs::write(&f, &body).unwrap();
-            } else if std::fs::read_to_string(&f).ok().as_deref() != Some(body.as_str()) {
+            } else if std::fs::read_to_string(&f).ok().map(|t| t.replace("\r\n", "\n")).as_deref() != Some(body.as_str()) {
                 stale.push(path);
             }
         }

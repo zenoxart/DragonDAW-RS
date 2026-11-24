@@ -517,7 +517,7 @@ pub fn steps_to_notes(pc: &mut PatternChannel, root: u8) {
 // ---------------------------------------------------------------------------------------------------- slicing
 
 /// Turns an audio file into a sliced sampler channel plus a pattern that plays the slices in order
-/// (Slicex / Fruity Slicer). Returns (channel id, pattern id).
+/// (a slicer). Returns (channel id, pattern id).
 pub fn slice_to_rack(p: &mut Project, path: &std::path::Path, data: &crate::samples::AudioData, sensitivity: f32) -> (Id, Id) {
     let slices = crate::instruments::sampler_slices(data, sensitivity, 64);
     let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Slices".into());

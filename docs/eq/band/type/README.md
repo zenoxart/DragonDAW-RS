@@ -10,6 +10,14 @@ Part of **Prism (parametric EQ)** – 7-band parametric EQ with shelves, cuts an
 
 Every band has this control; pick the band with the band buttons.
 
+## Mathematics
+
+RBJ bell, low/high shelf, low/high pass, band pass or notch; pass filters and shelves use the slope.
+
+**Knob position → value.** A choice of 7: the value is the option's index $0 \dots 6$.
+
+**Smoothing.** Takes effect at once (no glide).
+
 Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
 
 Drag up / down to turn it (Shift: fine), turn the mouse wheel over it, double-click or Ctrl+click to reset.

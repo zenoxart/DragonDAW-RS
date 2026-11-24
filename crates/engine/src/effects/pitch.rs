@@ -385,10 +385,10 @@ const TUNE_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("vibrato", "Natural vibrato", 0.0, 1.0, 0.0, ""),
     ParamInfo::lin("amount", "Amount", 0.0, 1.0, 1.0, ""),
     ParamInfo::lin("mix", "Mix", 0.0, 1.0, 1.0, ""),
-    // MetaTune's Note Stabilizer: a held note is kept until the voice moves this far past the midpoint to
+    // Note stabilizer: a held note is kept until the voice moves this far past the midpoint to
     // the next note (no flutter between two notes).
     ParamInfo::lin("stabilizer", "Note stabilizer", 0.0, 100.0, 0.0, "ct"),
-    // MetaTune's Doubler: two tuned copies, slightly delayed and detuned, panned left and right.
+    // Doubler: two tuned copies, slightly delayed and detuned, panned left and right.
     ParamInfo::lin("doubler", "Doubler", 0.0, 1.0, 0.0, ""),
 ];
 

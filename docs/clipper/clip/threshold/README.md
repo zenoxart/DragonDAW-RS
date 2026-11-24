@@ -4,9 +4,17 @@
 
 The level above which the effect starts working. Lower it to act on more of the signal.
 
-Part of **Obsidian (soft clipper)** – Soft clipper with the sound of the Fruity Soft Clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen.
+Part of **Obsidian (soft clipper)** – Soft clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen.
 
 **Range:** -24.0 dB … 0.00 dB (default: -6.00 dB)
+
+## Mathematics
+
+$t = 10^{T/20}$: where the shoulder starts (clamped to the ceiling).
+
+**Knob position → value.** Linear: $v = -24 + p\,(24)\ \text{dB}$, so each tenth of the travel is 2.4 dB.
+
+**Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).
 
 Right-click the control for its menu: **Set value…** (a box with the current value: type a new one in the control's units – `-6 dB`, `250 ms`, `2.5k`, `30L` – and press Enter; one undo step), **Reset to default**, **Copy value** / **Paste value** (between any two knobs; a value of another unit lands at the same position on the scale), MIDI learn, an automation lane, and **Help**, which opens this page.
 

@@ -1376,7 +1376,7 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
             if ui.button("⟲ Reset").on_hover_text("Back to how it was sung (Delete)").clicked() {
                 st.ui.repair.reset_targets();
             }
-            if ui.add_enabled(!st.ui.repair.history.is_empty(), egui::Button::new("↶ Undo")).on_hover_text("Ctrl+Z").clicked() {
+            if ui.add_enabled(!st.ui.repair.history.is_empty(), egui::Button::new("Undo")).on_hover_text("Ctrl+Z").clicked() {
                 key(st, "edit.undo_toggle");
             }
             if ui.button("☑ Select all").on_hover_text("Ctrl+A").clicked() {
@@ -1427,7 +1427,7 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
 
 /// Tail, transition, fade-in and volume of the selected notes (or all of them). One undo step per drag.
 fn shape_card(ui: &mut Ui, st: &mut State, what: &str) {
-    card(ui, "🎚 Shape", |ui| {
+    card(ui, "Shape", |ui| {
         let r = &mut st.ui.repair;
         let targets = r.targets();
         let Some(&first) = targets.first() else {
