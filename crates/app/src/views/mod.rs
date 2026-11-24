@@ -12,6 +12,7 @@ pub mod fx_cave;
 pub mod fx_crucible;
 pub mod fx_forge;
 pub mod fx_gallery;
+pub mod fx_ghost;
 pub mod fx_jade;
 pub mod fx_mod;
 pub mod fx_panel;

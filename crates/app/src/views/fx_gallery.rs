@@ -29,6 +29,8 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
 fn natural_width(id: &str) -> f32 {
     if super::fx_forge::is_forge(id) {
         super::fx_forge::window_width()
+    } else if super::fx_ghost::is_ghost(id) {
+        super::fx_ghost::window_width()
     } else if super::fx_jade::own_face(id) {
         super::fx_jade::window_width()
     } else {
@@ -58,7 +60,7 @@ fn scaled(ui: &mut Ui, id: egui::Id, natural_w: f32, add: impl FnOnce(&mut Ui)) 
 
 /// The unit as its editor draws it: faceplate, nameplate (Dragonforge engraves its own), then the
 /// display in its bezel – or the effect's own face. Edits made in the preview are dropped.
-fn unit(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent: egui::Color32, time: Option<f32>) {
+fn unit(ui: &mut Ui, def: &'static EffectDef, params: &BTreeMap<String, f32>, accent: egui::Color32, time: Option<f32>) {
     let finish = super::analog::finish_of(def.id);
     let face = finish.base();
     let plate_at = ui.painter().add(egui::Shape::Noop);
@@ -68,14 +70,18 @@ fn unit(ui: &mut Ui, def: &EffectDef, params: &BTreeMap<String, f32>, accent: eg
     // A steady demo level for the meters (−14 dB RMS), gently moving when motion is on.
     let lv = 0.2 * (1.0 + 0.15 * time.map(|t| (t * 1.7).sin()).unwrap_or(0.0));
     let forge = super::fx_forge::is_forge(def.id);
+    let ghost = super::fx_ghost::is_ghost(def.id);
     let dev = egui::Frame::NONE.inner_margin(egui::Margin { left: 14 + ear, right: 14 + ear, top: 8, bottom: 14 }).show(ui, |ui| {
-        if !forge {
+        if !forge && !ghost {
             super::analog::nameplate(ui, &super::analog::Plate { id: def.id, name: def.name, category: def.category, enabled: true, gr, level: (lv, lv * 0.95), time, key: key.with("plate") });
         }
         ui.add_space(6.0);
         if forge {
             let live = super::fx_forge::Live { tele: &[], level: (lv, lv * 0.95), time, enabled: true };
             let _ = super::fx_forge::body(ui, def, params, &live, key.with("forge"));
+        } else if ghost {
+            let live = super::fx_forge::Live { tele: &[], level: (lv, lv * 0.95), time, enabled: true };
+            let _ = super::fx_ghost::body(ui, def, params, &live, key.with("ghost"));
         } else if super::fx_jade::own_face(def.id) {
             let _ = super::fx_jade::body(ui, def, params, accent, key.with("jade"));
         } else {

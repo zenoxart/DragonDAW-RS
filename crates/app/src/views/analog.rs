@@ -162,7 +162,7 @@ pub fn finish_of(id: &str) -> Finish {
         "clipper" => Finish::Gold,
         "chorus" | "flanger" | "phaser" | "tremolo" | "orbit" => Finish::Oxblood,
         "reverb" => Finish::Amethyst,
-        "delay" => Finish::Slate,
+        "delay" | "ghost" => Finish::Slate,
         "cinnabar" => Finish::Cinnabar,
         "wyrmdrum" => Finish::Wyrmhide,
         "jadefang" => Finish::Jade,

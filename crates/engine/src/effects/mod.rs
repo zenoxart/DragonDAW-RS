@@ -8,6 +8,7 @@ pub mod alter;
 pub mod clipper;
 pub mod dynamics;
 pub mod eq;
+pub mod ghost;
 pub mod jadefang;
 mod modulation;
 pub use modulation::DELAY_SYNC_BEATS;
@@ -216,6 +217,7 @@ pub fn registry() -> &'static [EffectDef] {
             dynamics::limiter_def(),
             dynamics::deesser_def(),
             dynamics::transient_def(),
+            ghost::def(),
             reverb::reverb_def(),
             modulation::delay_def(),
             modulation::chorus_def(),

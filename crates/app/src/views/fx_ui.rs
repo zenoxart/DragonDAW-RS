@@ -2692,7 +2692,7 @@ mod tests {
     #[test]
     fn every_display_responds_to_a_drag() {
         let mut dead = Vec::new();
-        for def in effects::registry().iter().filter(|d| d.id != "eq" && !super::super::fx_jade::own_face(d.id)) {
+        for def in effects::registry().iter().filter(|d| d.id != "eq" && !super::super::fx_jade::own_face(d.id) && !super::super::fx_ghost::is_ghost(d.id)) {
             let params = def.defaults();
             let mut moved = false;
             'points: for gy in [0.5f32, 0.3, 0.7] {

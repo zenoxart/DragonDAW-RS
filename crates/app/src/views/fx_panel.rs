@@ -1190,7 +1190,7 @@ mod tests {
     /// each once per band view (nothing falls back to the generic knob grid, nothing is shown twice).
     #[test]
     fn every_effect_has_a_complete_panel() {
-        for def in effects::registry().iter().filter(|d| !super::super::fx_jade::own_face(d.id)) {
+        for def in effects::registry().iter().filter(|d| !super::super::fx_jade::own_face(d.id) && !super::super::fx_ghost::is_ghost(d.id)) {
             let first = panel(def.id, 1).unwrap_or_else(|| panic!("{} has no panel", def.id));
             let bands = first.bands.map(|b| b.0).unwrap_or(1);
             let mut seen = std::collections::BTreeSet::new();
