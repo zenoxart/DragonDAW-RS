@@ -46,7 +46,7 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
                 };
                 w.resizable(false).vscroll(false).default_width(fw).min_width(fw).max_width(fw)
             } else {
-                w.default_width(if wide { 980.0 } else { 600.0 }).default_height((ctx.screen_rect().height() - 120.0).min(820.0)).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
+                w.default_width(if wide { 980.0 } else { 600.0 }).min_width(480.0).max_height(ctx.screen_rect().height() - 60.0)
             }
         };
         // The smallest the window may get: wide enough for the panel's widest control and tall enough for
@@ -58,7 +58,11 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
                 let max_h = screen.height() - 120.0;
                 // Too tall for the screen: as wide as the screen allows, so the sections pack into fewer rows.
                 let grow = if need_h > max_h && win_w < screen.width() - 41.0 { screen.width() - 40.0 } else { 0.0 };
-                w = w.min_width(need_w.max(grow).clamp(480.0, screen.width() - 40.0)).min_height(need_h.min(max_h));
+                let min_w = need_w.max(grow).clamp(480.0, screen.width() - 40.0);
+                // Never taller than the editor (no empty space under it) and not much wider than its
+                // panel needs; at least as big as the content, within the screen.
+                let h = need_h.min(max_h);
+                w = w.min_width(min_w).max_width((min_w * 1.5).max(720.0).min(screen.width() - 40.0)).min_height(h).max_height(h);
             }
         }
         let panel_need = egui::Id::new(super::fx_panel::NEED_KEY);
@@ -85,12 +89,24 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
         let title = st.session.project.channel(c).map(|x| format!("{} – {}", x.name, x.instrument.kind_name())).unwrap_or_default();
         // Rack units get the width their layout needs (the synth's sections side by side).
         let width = match st.session.project.channel(c).map(|x| &x.instrument) {
-            Some(Instrument::Wavetable(_) | Instrument::Guitar(_) | Instrument::Piano(_)) => 1300.0,
+            Some(Instrument::Wavetable(_) | Instrument::Guitar(_) | Instrument::Piano(_)) => 1300.0_f32,
             Some(Instrument::Synth(_)) => 1180.0,
             Some(Instrument::DrumPads(_)) => 900.0,
             _ => 460.0,
         };
-        egui::Window::new(title).id(egui::Id::new(("inst", c))).open(&mut open).resizable(true).vscroll(true).default_width(width).show(ctx, |ui| instrument_editor(ui, st, c));
+        // Bounded around the layout's width: never so narrow the sections wrap badly, never so wide the
+        // rack floats in empty space; never taller than the screen.
+        let sw = ctx.screen_rect().width() - 40.0;
+        egui::Window::new(title)
+            .id(egui::Id::new(("inst", c)))
+            .open(&mut open)
+            .resizable(true)
+            .vscroll(true)
+            .default_width(width.min(sw))
+            .min_width((width * 0.75).min(sw))
+            .max_width((width * 1.2).min(sw))
+            .max_height(ctx.screen_rect().height() - 60.0)
+            .show(ctx, |ui| instrument_editor(ui, st, c));
         if !open || st.session.project.channel(c).is_none() {
             st.ui.instrument_windows.retain(|w| *w != c);
         }
