@@ -10,6 +10,9 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+Parallel crushed full band: the whole signal through a fixed compressor (−36 dB, 20:1, 0.5 / 60 ms, +22 dB make-up),
+added at $0.6\,p$ – classic parallel ("New York") compression.
+
 **Knob position → value.** Linear: $v = 0 + p\,(100)\ \text{\%}$, so each tenth of the travel is 10 %.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

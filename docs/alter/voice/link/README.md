@@ -10,6 +10,9 @@ Part of **Shapeshifter (pitch & formant)** – Real-time voice pitch and formant
 
 ## Mathematics
 
+On: the formant follows the pitch, $\phi = 2^{(\varphi + p)/12}$ – like a sample played faster or slower (the
+"chipmunk" effect). **Formant** then adds to it. Off: formant and pitch are independent.
+
 **Knob position → value.** A switch: 0 = off, 1 = on.
 
 **Smoothing.** Takes effect at once (no glide).

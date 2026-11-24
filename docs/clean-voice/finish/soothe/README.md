@@ -10,6 +10,9 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+Blend $m = v/100$ between the latency-aligned dry signal and the resonance suppressor's output. The suppressor always
+runs (its latency must not change), so 0 % is the dry signal delayed by the frame.
+
 **Knob position → value.** Linear: $v = 0 + p\,(100)\ \text{\%}$, so each tenth of the travel is 10 %.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

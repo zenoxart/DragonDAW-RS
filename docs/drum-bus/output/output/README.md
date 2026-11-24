@@ -10,6 +10,8 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+Output gain $O = 10^{o/20}$ into the rails $16\tanh(xO/16)$.
+
 **Knob position → value.** Linear: $v = -24 + p\,(36)\ \text{dB}$, so each tenth of the travel is 3.6 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

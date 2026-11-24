@@ -10,6 +10,10 @@ Part of **Shapeshifter (pitch & formant)** – Real-time voice pitch and formant
 
 ## Mathematics
 
+*Transpose*: follows the voice and shifts it by **Pitch**. *Quantize*: snaps the detected pitch to the nearest semitone
+at once (no glide), then transposes – the hard-tuned effect. *Robot*: ignores the sung pitch and places every grain at
+the period of one note (**Pitch** picks it), so the voice speaks on a monotone.
+
 **Knob position → value.** A choice of 3: the value is the option's index $0 \dots 2$.
 
 **Smoothing.** Takes effect at once (no glide).

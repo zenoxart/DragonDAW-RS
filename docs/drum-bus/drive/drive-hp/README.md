@@ -10,6 +10,9 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+RBJ high-pass ($Q$ 0.7) after the drive, 10 … 120 Hz: removes the sub the saturation adds and keeps it out of the
+compressor's detector.
+
 **Knob position → value.** Logarithmic: $v = 10\cdot\left(\frac{120}{10}\right)^{p}\ \text{Hz}$, $p = \frac{\ln(v/10)}{\ln(12)}$ — every factor of 1.282 takes a tenth of the travel; the centre ($p = 0.5$) is 34.6410 Hz.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant, in the log domain (even per ratio). See [DSP foundations](../../../dsp/README.md).

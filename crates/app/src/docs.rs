@@ -295,6 +295,8 @@ pub fn pages() -> Vec<(String, String)> {
     for (s, t, d) in SECTIONS {
         index.push_str(&format!("- [{t}]({s}/README.md) – {d}\n"));
     }
+    index.push_str("- [DSP notes](dsp/README.md) – the mathematics shared by every effect: decibels, smoothing, envelope followers, filters, oversampling, pan laws\n");
+    index.push_str("\nEvery section page ends with **How it works** (the algorithms and formulas behind it), every effect page has the same, and every knob page a **Mathematics** section: what the control does in the algorithm, the exact mapping from its position to its value, and how changes are smoothed.\n");
     index.push_str("\n## Stock effects\n\n| Effect | Category | What it does |\n|---|---|---|\n");
     index.push_str(&plugins);
     out.push(("README.md".into(), index));
@@ -306,13 +308,17 @@ pub fn pages() -> Vec<(String, String)> {
 #[cfg(test)]
 fn math(id: &str) -> Option<(String, std::collections::BTreeMap<String, String>)> {
     let text = match id {
+        "alter" => include_str!("../docs_math/alter.md"),
         "bitcrusher" => include_str!("../docs_math/bitcrusher.md"),
         "chorus" => include_str!("../docs_math/chorus.md"),
+        "class_a_strip" => include_str!("../docs_math/class_a_strip.md"),
+        "clean_voice" => include_str!("../docs_math/clean_voice.md"),
         "clipper" => include_str!("../docs_math/clipper.md"),
         "compressor" => include_str!("../docs_math/compressor.md"),
         "deesser" => include_str!("../docs_math/deesser.md"),
         "delay" => include_str!("../docs_math/delay.md"),
         "dragon_particle" => include_str!("../docs_math/dragon_particle.md"),
+        "drum_bus" => include_str!("../docs_math/drum_bus.md"),
         "eq" => include_str!("../docs_math/eq.md"),
         "filter" => include_str!("../docs_math/filter.md"),
         "flanger" => include_str!("../docs_math/flanger.md"),

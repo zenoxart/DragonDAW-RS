@@ -10,6 +10,9 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+High-pass at 50, 80, 160 or 300 Hz, 18 dB/octave: a third-order Butterworth made of an RBJ 2nd-order high-pass with
+$Q = 1$ and a first-order high-pass at the same frequency (together the Butterworth poles of order 3).
+
 **Knob position → value.** A choice of 5: the value is the option's index $0 \dots 4$.
 
 **Smoothing.** Takes effect at once (no glide).

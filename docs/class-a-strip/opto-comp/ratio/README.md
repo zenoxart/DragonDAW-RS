@@ -10,6 +10,8 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Ratio $R$: above the knee every dB over the threshold is reduced by $1 - 1/R$ dB (2:1 → 0.5 dB, 10:1 → 0.9 dB).
+
 **Knob position → value.** Linear: $v = 2 + p\,(8)\ \text{:1}$, so each tenth of the travel is 0.8 :1.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

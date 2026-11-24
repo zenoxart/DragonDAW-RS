@@ -730,7 +730,7 @@ mod tests {
         assert!((t[0] - 57.0).abs() < 0.1, "detected A3: {t:?}");
     }
 
-    /// MetaTune's Note Stabilizer holds a note when the voice wavers just past the midpoint; the Doubler
+    /// The Note Stabilizer holds a note when the voice wavers just past the midpoint; the Doubler
     /// widens a mono voice (the two sides differ).
     #[test]
     fn stabilizer_and_doubler() {

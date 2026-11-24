@@ -10,6 +10,8 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Centre of the mid band (360 Hz, 700 Hz, 1.6, 3.2, 4.8 or 7.2 kHz), an RBJ peaking filter.
+
 **Knob position → value.** A choice of 6: the value is the option's index $0 \dots 5$.
 
 **Smoothing.** Takes effect at once (no glide).

@@ -10,6 +10,10 @@ Part of **Shapeshifter (pitch & formant)** – Real-time voice pitch and formant
 
 ## Mathematics
 
+Pitch $p$ in semitones, ratio $\rho = 2^{p/12}$ (±12 st: ½ … 2). *Transpose*: the output period is $P/\rho$. *Quantize*:
+rounded to whole semitones and added to the snapped note. *Robot*: chooses the one note the voice is held on, MIDI
+$72 + \lfloor p\rceil$.
+
 **Knob position → value.** Linear: $v = -12 + p\,(24)\ \text{st}$, so each tenth of the travel is 2.4 st.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

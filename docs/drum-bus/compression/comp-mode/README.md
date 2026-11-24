@@ -10,6 +10,15 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+Settings of the bus compressor (stock compressor, auto make-up on, threshold −22 dB):
+
+| mode | style | ratio | attack | release |
+|---|---|---|---|---|
+| A (glue) | Bus | 4:1 | 10 ms | 150 ms |
+| B (punch) | Punch | 6:1 | 25 ms | 80 ms |
+
+B's slower attack lets the transient through before it clamps down.
+
 **Knob position → value.** A choice of 2: the value is the option's index $0 \dots 1$.
 
 **Smoothing.** Takes effect at once (no glide).

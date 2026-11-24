@@ -1670,7 +1670,7 @@ fn tune(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     let kr = Rect::from_min_max(Pos2::new(r.left() + 10.0, r.bottom() - 38.0), Pos2::new(r.right() - 10.0, r.bottom() - 8.0));
     let kw = kr.width() / 12.0;
     let tgt = if target >= 0.0 { Some((target.round() as i32).rem_euclid(12) as usize) } else { None };
-    // MetaTune-style heat map: every detected note warms its key; the heat fades over a few seconds.
+    // Heat map: every detected note warms its key; the heat fades over a few seconds.
     let heat_id = h.key.with("tune.heat");
     let mut heat: [f32; 12] = p.ctx().data(|d| d.get_temp(heat_id)).unwrap_or([0.0; 12]);
     if h.time.is_some() {

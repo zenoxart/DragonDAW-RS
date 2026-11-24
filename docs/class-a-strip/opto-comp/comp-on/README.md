@@ -10,6 +10,8 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Bypasses the opto compressor and its tube make-up stage when off.
+
 **Knob position → value.** A switch: 0 = off, 1 = on.
 
 **Smoothing.** Takes effect at once (no glide).

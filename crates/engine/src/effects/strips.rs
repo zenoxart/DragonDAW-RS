@@ -1,8 +1,8 @@
 //! Tracking and bus processors built from classic circuits:
 //!
-//! - **Dragon Class-A Strip** – a Class-A transformer microphone preamp (the 1073 school: input
+//! - **Dragon Class-A Strip** – a Class-A transformer microphone preamp (input
 //!   transformer whose core saturates on low frequencies, a single-ended class-A gain stage, output
-//!   transformer, stepped inductor-style EQ with high-pass) feeding a tube opto compressor (the CL-1B school:
+//!   transformer, stepped inductor-style EQ with high-pass) feeding a tube opto compressor (an
 //!   electro-optical cell with program-dependent attack and two-stage, memory-laden release; fixed or manual
 //!   timing; a tube make-up stage). Zero latency, for recording through.
 //! - **Dragon Drum Bus** – an all-in-one drum processor: punch (transients), smack (parallel crush), low end,
@@ -228,7 +228,7 @@ impl Preamp {
     }
 }
 
-/// The compressor's timing switch (CL 1B: Fixed, Fix/Man, Manual).
+/// The compressor's timing switch (Fixed, Fix/Man, Manual).
 #[derive(Clone, Copy)]
 enum Timing {
     Fixed,
@@ -278,7 +278,7 @@ impl OptoCell {
     #[inline]
     fn next(&mut self, want: f32, rate: f32, timing: Timing) -> f32 {
         let dt = 1.0 / rate;
-        // CL 1B manual: Fixed = 1 ms attack / 50 ms release (the opto cell's own slow recovery and memory
+        // Fixed = 1 ms attack / 50 ms release (the opto cell's own slow recovery and memory
         // still follow); Fix/Man = the fixed attack, fast 50 ms release for short peaks and the manual release
         // for long ones; Manual = attack 0.5–300 ms, release 0.05–10 s.
         let (att, rel_fast, rel_slow) = match timing {
@@ -376,7 +376,7 @@ impl ClassAStrip {
         let r = self.rate;
         self.hpf_on = h > 0;
         if h > 0 {
-            // 18 dB/oct (third-order Butterworth) like the 1073's: a 2nd-order section (Q 1) and a 1st-order one.
+            // 18 dB/oct (third-order Butterworth): a 2nd-order section (Q 1) and a 1st-order one.
             for ch in 0..2 {
                 self.hpf[ch].set(BiquadKind::HighPass, HPF_HZ[h], 1.0, 0.0, r);
                 self.hpf1[ch].set(HPF_HZ[h], r);
@@ -1012,7 +1012,7 @@ mod tests {
         assert_eq!(d.v("heq3"), 2.0);
     }
 
-    /// Published 1073 / CL 1B values: EQ points, ±16 / ±18 dB ranges, an 18 dB/oct high-pass, ratio 2–10,
+    /// The classic circuits' published values: EQ points, ±16 / ±18 dB ranges, an 18 dB/oct high-pass, ratio 2–10,
     /// attack 0.5–300 ms, release 0.05–10 s, gain up to 30 dB.
     #[test]
     fn class_a_strip_matches_the_published_specs() {

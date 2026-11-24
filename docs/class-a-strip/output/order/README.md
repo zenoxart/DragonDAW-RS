@@ -10,6 +10,9 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+*Pre > EQ > Comp*: the compressor reacts to the equalised signal (an EQ boost is compressed). *Pre > Comp > EQ*: it
+reacts to the raw preamp output and the EQ shapes the compressed sound.
+
 **Knob position → value.** A choice of 2: the value is the option's index $0 \dots 1$.
 
 **Smoothing.** Takes effect at once (no glide).

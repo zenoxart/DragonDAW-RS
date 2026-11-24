@@ -10,6 +10,8 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+Range $r$ of the 1 – 10 kHz band of the first multiband (see the band table above).
+
 **Knob position → value.** Linear: $v = -12 + p\,(12)\ \text{dB}$, so each tenth of the travel is 1.2 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

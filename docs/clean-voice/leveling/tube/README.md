@@ -10,6 +10,9 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+Switches the input tube vari-mu (first row of the vari-mu table) in or out of the chain. Off, its stage is skipped
+entirely (no gain, no harmonics).
+
 **Knob position → value.** A switch: 0 = off, 1 = on.
 
 **Smoothing.** Takes effect at once (no glide).

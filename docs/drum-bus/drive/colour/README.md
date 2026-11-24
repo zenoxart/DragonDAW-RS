@@ -10,6 +10,9 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+The saturator's curve: *A (warm)* tube mode (12AX7 stage), *B (tape)* tape mode, *C (crunch)* tube mode with an EL34
+power stage (harder, more odd harmonics).
+
 **Knob position → value.** A choice of 3: the value is the option's index $0 \dots 2$.
 
 **Smoothing.** Takes effect at once (no glide).

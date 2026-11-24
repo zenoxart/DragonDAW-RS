@@ -1,4 +1,4 @@
-//! Drum pads (FPC style): each pad is a note with velocity layers, gain, pan, pitch and a choke group.
+//! Drum pads: each pad is a note with velocity layers, gain, pan, pitch and a choke group.
 
 use super::{note_ratio, InstrumentVoice, NoteOn};
 use crate::dsp::pan_law;

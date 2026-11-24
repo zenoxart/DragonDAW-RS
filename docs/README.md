@@ -23,6 +23,9 @@ Every feature of Dragon DAW, by section. In the app, **Help › Documentation** 
 - [Controllers](controllers/README.md) – MIDI keyboards, controller buttons, control surfaces
 - [Plugins](plugins/README.md) – Hosting VST3 and CLAP plugins, scanning, presets
 - [Options](options/README.md) – Settings, shortcuts, performance
+- [DSP notes](dsp/README.md) – the mathematics shared by every effect: decibels, smoothing, envelope followers, filters, oversampling, pan laws
+
+Every section page ends with **How it works** (the algorithms and formulas behind it), every effect page has the same, and every knob page a **Mathematics** section: what the control does in the algorithm, the exact mapping from its position to its value, and how changes are smoothed.
 
 ## Stock effects
 

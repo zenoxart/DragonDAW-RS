@@ -10,6 +10,8 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+Input gain $10^{g/20}$ before everything else: it sets how hard the drive, the harmonics and the compressors are hit.
+
 **Knob position → value.** Linear: $v = -24 + p\,(48)\ \text{dB}$, so each tenth of the travel is 4.8 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

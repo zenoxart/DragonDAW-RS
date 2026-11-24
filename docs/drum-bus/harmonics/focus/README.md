@@ -10,6 +10,9 @@ Part of **Dragonforge (drum bus)** – Drum bus processor: input with target met
 
 ## Mathematics
 
+Centre $f_c$ of the harmonics band-pass: 50 Hz (sub kicks, 808s) or 80 Hz (punchier acoustic kicks). The path's
+low-pass follows at $4f_c$ (200 or 320 Hz).
+
 **Knob position → value.** A choice of 2: the value is the option's index $0 \dots 1$.
 
 **Smoothing.** Takes effect at once (no glide).

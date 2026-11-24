@@ -10,6 +10,13 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+Threshold $T$ of the de-esser. The detector is the mid signal $\tfrac12(L+R)$ through two 2 kHz high-passes and a
+6 kHz high shelf (+6 dB, $Q$ 0.6), followed by a 0.1 ms / 45 ms envelope. The reduction is
+
+$$G = \max\big(g(S - (T + \alpha)),\ -\text{range}\big),\quad K = 4\ \text{dB},\ R = 8$$
+
+where $S$ is the sibilance level and $\alpha$ the adaptive offset of *Single vocal* detection (see that control).
+
 **Knob position → value.** Linear: $v = -60 + p\,(60)\ \text{dB}$, so each tenth of the travel is 6 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

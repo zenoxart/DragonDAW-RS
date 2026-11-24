@@ -10,6 +10,11 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+Drive $u = v/100$ into the second vari-mu stage: it lowers the threshold, $T = -14 - 14u$ dB, and raises the input
+by $4u$ dB, so more of the signal sits above threshold, the ratio $R(o)$ rises and the valve colour grows with the
+reduction. The make-up follows the threshold (the reduction a −14 dBFS signal would get), so the level stays roughly
+constant while the character changes.
+
 **Knob position → value.** Linear: $v = 0 + p\,(100)\ \text{\%}$, so each tenth of the travel is 10 %.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

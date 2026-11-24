@@ -10,6 +10,9 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+Parallel amount $m = v/100$ of the presence curve: $y = x + m\,(P(x) - x)$. At 100 % the full curve (+1.5 dB at 40 Hz
+and 2.5 kHz, up to +12 dB shelf above 10 kHz) is applied; at 50 % roughly half of each boost in dB at low gains.
+
 **Knob position → value.** Linear: $v = 0 + p\,(100)\ \text{\%}$, so each tenth of the travel is 10 %.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

@@ -10,6 +10,9 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Gain $g$ of the mid band, −18 … +18 dB. Its $Q$ tightens with the gain as inductor bands do:
+$Q = 1 + 0.6\,|g|/18$ (1 at 0 dB, 1.6 at ±18 dB).
+
 **Knob position → value.** Linear: $v = -18 + p\,(36)\ \text{dB}$, so each tenth of the travel is 3.6 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

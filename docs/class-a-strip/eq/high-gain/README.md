@@ -10,6 +10,8 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Gain of the high shelf at 12 kHz (capped at $0.45f_s$), −16 … +16 dB, RBJ high shelf with $Q$ 0.6.
+
 **Knob position → value.** Linear: $v = -16 + p\,(32)\ \text{dB}$, so each tenth of the travel is 3.2 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

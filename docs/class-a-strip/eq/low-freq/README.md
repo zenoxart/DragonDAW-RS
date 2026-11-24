@@ -10,6 +10,9 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Corner of the low shelf (35, 60, 110 or 220 Hz). The shelf is an RBJ low shelf with $Q = 0.55$: the low $Q$ gives the
+broad bump before the shelf that inductor EQs have.
+
 **Knob position → value.** A choice of 4: the value is the option's index $0 \dots 3$.
 
 **Smoothing.** Takes effect at once (no glide).

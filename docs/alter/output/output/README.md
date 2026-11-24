@@ -10,6 +10,8 @@ Part of **Shapeshifter (pitch & formant)** – Real-time voice pitch and formant
 
 ## Mathematics
 
+Output gain $O = 10^{o/20}$, smoothed over 10 ms.
+
 **Knob position → value.** Linear: $v = -18 + p\,(30)\ \text{dB}$, so each tenth of the travel is 3 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

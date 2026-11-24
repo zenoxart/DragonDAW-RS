@@ -10,6 +10,9 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Attack $t_a$ of the opto light (Manual timing only): $\lambda \leftarrow G^* + (\lambda - G^*)e^{-\Delta t/t_a}$ while the
+reduction rises.
+
 **Knob position → value.** Logarithmic: $v = 0.5\cdot\left(\frac{300}{0.5}\right)^{p}\ \text{ms}$, $p = \frac{\ln(v/0.5)}{\ln(600)}$ — every factor of 1.896 takes a tenth of the travel; the centre ($p = 0.5$) is 12.2474 ms.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant, in the log domain (even per ratio). See [DSP foundations](../../../dsp/README.md).

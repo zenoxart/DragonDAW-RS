@@ -10,6 +10,9 @@ Part of **Shapeshifter (pitch & formant)** – Real-time voice pitch and formant
 
 ## Mathematics
 
+Drive $\delta = v/100$, $d = 1 + 6\delta$: the wet signal becomes $\tanh(dx)/\sqrt d$. Small signals gain $\sqrt d$
+(up to +8.5 dB at 100 %), peaks are rounded off.
+
 **Knob position → value.** Linear: $v = 0 + p\,(100)\ \text{\%}$, so each tenth of the travel is 10 %.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

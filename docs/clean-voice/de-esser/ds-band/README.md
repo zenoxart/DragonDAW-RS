@@ -10,6 +10,10 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+*Wide band*: the whole (look-ahead-delayed) signal is multiplied by the de-esser's gain. *Split band*: the signal is
+split by a Linkwitz–Riley 4th-order crossover at 2 kHz and only the upper band is reduced,
+$y = LP(x) + g\cdot HP(x)$, so the body of the voice is untouched.
+
 **Knob position → value.** A choice of 2: the value is the option's index $0 \dots 1$.
 
 **Smoothing.** Takes effect at once (no glide).

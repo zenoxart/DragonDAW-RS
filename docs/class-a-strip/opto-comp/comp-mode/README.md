@@ -10,6 +10,11 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+The opto cell's timing (see the table above). *Fixed* uses the cell's own program-dependent behaviour: the slow
+release lengthens from 0.5 s up to 3 s with the memory $\mu$, which builds while it compresses hard. *Fix / Man* keeps
+the fixed attack and fast release, and takes the slow release from the **Release** knob. *Manual* takes both from the
+knobs.
+
 **Knob position → value.** A choice of 3: the value is the option's index $0 \dots 2$.
 
 **Smoothing.** Takes effect at once (no glide).

@@ -10,6 +10,10 @@ Part of **Golem Strip (class-A channel strip)** – Recording channel: a one-fad
 
 ## Mathematics
 
+Preamp gain $d$ in dB, $D = 10^{d/20}$, applied before the transformer and class-A curves. More drive pushes the signal
+further into the curves: the second harmonic grows roughly with level ($0.08x^2$), the low band's third with the
+input transformer's $\tanh$. Bring the level back with **Output**.
+
 **Knob position → value.** Linear: $v = 0 + p\,(30)\ \text{dB}$, so each tenth of the travel is 3 dB.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

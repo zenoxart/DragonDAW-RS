@@ -10,6 +10,10 @@ Part of **Shapeshifter (pitch & formant)** – Real-time voice pitch and formant
 
 ## Mathematics
 
+Formant shift $\varphi$ in semitones. Grains are read at
+$\phi = \operatorname{clamp}\!\big(2^{(\varphi + [\text{Link}]\,p)/12},\ \tfrac12,\ 2\big)$ – $\phi > 1$ shortens each grain and raises
+its resonances (a smaller vocal tract), $\phi < 1$ lowers them – while the grain spacing, and so the pitch, stays.
+
 **Knob position → value.** Linear: $v = -12 + p\,(24)\ \text{st}$, so each tenth of the travel is 2.4 st.
 
 **Smoothing.** Changes (dragging, automation, presets) glide every 32 samples with $v \leftarrow v + c\,(v_t - v)$, $c = 1 - e^{-32/(0.025 f_s)}$ — a 25 ms time constant. See [DSP foundations](../../../dsp/README.md).

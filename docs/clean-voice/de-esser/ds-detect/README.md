@@ -10,6 +10,11 @@ Part of **Purify (voice cleanup)** – Post-production vocal chain in one plugin
 
 ## Mathematics
 
+*Single vocal*: the threshold follows the voice's own level so a quiet passage is de-essed as much as a loud one. A
+program envelope (120 ms / 600 ms) of the mid signal gives $P$ in dB and the offset is
+$\alpha = \operatorname{clamp}(0.7\,(P + 20),\ -12,\ 12)$ dB. *Allround*: $\alpha = 0$, a fixed threshold for mixed
+material.
+
 **Knob position → value.** A choice of 2: the value is the option's index $0 \dots 1$.
 
 **Smoothing.** Takes effect at once (no glide).
