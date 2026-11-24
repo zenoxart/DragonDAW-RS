@@ -2098,3 +2098,33 @@ fn piano_roll_lane_paints_and_ramps() {
     assert_eq!(h.notes().len(), n0, "no note drawn");
     assert!(h.st.ui.notes.is_empty(), "deselected");
 }
+
+fn browser(ui: &mut egui::Ui, st: &mut State) {
+    super::browser::show(ui, st);
+}
+
+/// The browser: searching lists matching files from every folder level; Down selects the first, Enter
+/// puts it into the channel rack; a double-click only plays (twice) and adds nothing.
+#[test]
+fn browser_search_keys_and_double_click() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("drums/kicks")).unwrap();
+    let wav = |p: &std::path::Path| dragon_engine::samples::write_wav(p, &[0.0; 4410], &[0.0; 4410], 44100, dragon_engine::samples::BitDepth::Int16, false, false).unwrap();
+    wav(&dir.path().join("drums/kicks/Deep Kick.wav"));
+    wav(&dir.path().join("drums/Snare.wav"));
+    let mut h = Harness::new();
+    h.st.settings.browser_folders = vec![dir.path().to_path_buf()];
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("browser.filter"), "kick".to_string()));
+    // The listing runs in the background: a few frames for it to land.
+    for _ in 0..100 {
+        h.idle(browser, 1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.st.ui.editor = crate::state::Editor::Browser;
+    let channels = h.st.session.project.channels.len();
+    h.frame(browser, vec![Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    assert_eq!(h.st.ui.browser_sel.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).as_deref(), Some("Deep Kick.wav"), "search found the file two folders down");
+    h.st.ui.editor = crate::state::Editor::Browser;
+    h.frame(browser, vec![Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    assert_eq!(h.st.session.project.channels.len(), channels + 1, "Enter put it into the rack");
+}

@@ -142,6 +142,8 @@ pub enum Editor {
     Mixer,
     /// Audio Repair (Ctrl+A selects all notes / the whole clip, arrows move notes there).
     Repair,
+    /// The file browser (arrow keys move through it, Enter puts a sound into the rack).
+    Browser,
 }
 
 /// Copied clips (with their track index) or notes.
@@ -213,6 +215,8 @@ pub struct UiState {
     pub editor: Editor,
     /// The file selected in the browser (shown in its waveform preview) and when its preview started.
     pub browser_sel: Option<PathBuf>,
+    /// A double-clicked sound to play once more when its first play ends: (file, started, length s).
+    pub preview_again: Option<(PathBuf, Instant, f64)>,
     /// The start screen is showing.
     pub start_screen: bool,
     /// The album songs' last measured loudness (mixer channel, LUFS).
@@ -358,6 +362,7 @@ impl UiState {
             picker_sel: Vec::new(),
             editor: Editor::Playlist,
             browser_sel: None,
+            preview_again: None,
             start_screen: false,
             album_lufs: Vec::new(),
             repair: Default::default(),
