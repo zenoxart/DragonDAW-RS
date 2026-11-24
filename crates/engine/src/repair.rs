@@ -576,19 +576,61 @@ pub struct NoteShape {
     pub fade_in: f32,
     /// Level change of the note, dB.
     pub gain_db: f32,
+    /// Seconds the note moves (negative = earlier). The gaps before and after stretch or shrink to
+    /// make room; see [`time_limits`].
+    pub time_shift: f32,
+    /// Length of the note relative to the recording (1 = as sung, 2 = twice as long).
+    pub stretch: f32,
+    /// Formant shift in semitones: the voice's timbre (its resonances) moves, the pitch stays.
+    pub formant: f32,
 }
 
 impl Default for NoteShape {
     fn default() -> Self {
-        NoteShape { tail: 0.0, transition: 0.015, fade_in: 0.0, gain_db: 0.0 }
+        NoteShape { tail: 0.0, transition: 0.015, fade_in: 0.0, gain_db: 0.0, time_shift: 0.0, stretch: 1.0, formant: 0.0 }
     }
 }
 
 impl NoteShape {
     /// Whether the shape changes anything by itself (tail and transition only shape a pitch move).
     pub fn changes_sound(&self) -> bool {
-        self.fade_in > 1e-4 || self.gain_db.abs() > 1e-3
+        self.fade_in > 1e-4 || self.gain_db.abs() > 1e-3 || self.resynthesises()
     }
+
+    /// Whether the note's timing, length or formants change (rendered by the note resynthesis).
+    pub fn resynthesises(&self) -> bool {
+        self.time_shift.abs() > 1e-4 || (self.stretch - 1.0).abs() > 1e-3 || self.formant.abs() > 1e-3
+    }
+}
+
+/// Where note `k` sounds after its timing edit (start, end in seconds): moved and stretched as far as
+/// [`time_limits`] allows; where there is no room, where it was recorded.
+pub fn placement(notes: &[NoteBlob], k: usize, sh: &NoteShape, total: f64) -> (f64, f64) {
+    let n = &notes[k];
+    if sh.time_shift.abs() <= 1e-4 && (sh.stretch - 1.0).abs() <= 1e-3 {
+        return (n.start, n.end);
+    }
+    let len_in = (n.end - n.start).max(1e-3);
+    let len = (len_in * sh.stretch.clamp(0.25, 4.0) as f64).max(0.02);
+    let (_, _, lo, hi) = time_limits(notes, k, len, total);
+    if hi >= lo {
+        let s = (n.start + sh.time_shift as f64).clamp(lo, hi);
+        (s, s + len)
+    } else {
+        (n.start, n.end)
+    }
+}
+
+/// Room around a note for a timing edit: the region `(from, to)` (seconds) whose content may stretch,
+/// bounded by the neighbouring notes (and at most a quarter second away), and the earliest / latest
+/// start the note can move to with its length `len` (seconds) so that both gaps keep 10 ms.
+pub fn time_limits(notes: &[NoteBlob], k: usize, len: f64, total: f64) -> (f64, f64, f64, f64) {
+    let n = &notes[k];
+    let prev = if k > 0 { notes[k - 1].end } else { 0.0 };
+    let next = notes.get(k + 1).map(|x| x.start).unwrap_or(total);
+    let from = (n.start - 0.25).max(prev).max(0.0).min(n.start);
+    let to = (n.end + 0.25).min(next).min(total).max(n.end);
+    (from, to, from + 0.01, to - 0.01 - len)
 }
 
 /// What to do with a note: shift it, flatten its drift / vibrato and shape it.
@@ -740,6 +782,16 @@ fn curve_at(note: &NoteBlob, t: f64) -> f32 {
 /// Renders the pitch edits: each edited note is re-pitched (granular, pitch-synchronous shifting) with a
 /// smooth 15 ms move in and out; everything else stays untouched.
 pub fn apply_pitch(data: &AudioData, notes: &[NoteBlob], edits: &[PitchEdit]) -> AudioData {
+    // Notes whose timing, length or formants change are resynthesised (with their pitch and level
+    // edits); the others take the light path below.
+    let (resynth, simple): (Vec<PitchEdit>, Vec<PitchEdit>) = edits.iter().partition(|e| e.shape.resynthesises() && notes.get(e.note).is_some());
+    if !resynth.is_empty() {
+        let mut out = apply_pitch(data, notes, &simple);
+        for e in &resynth {
+            out = resynth_note(&out, notes, e);
+        }
+        return out;
+    }
     let rate = data.rate as f32;
     let n = data.frames();
     // Semitones to move each sample by, and how much of the shifted signal to use.
@@ -810,6 +862,158 @@ pub fn apply_pitch(data: &AudioData, notes: &[NoteBlob], edits: &[PitchEdit]) ->
             *s = sh.process(xi, 2f32.powf(o / 12.0)) / 0.8;
         }
         scale((0..n).map(|i| x[i] + (shifted[i + delay] - x[i]) * wet[i]).collect())
+    })
+}
+
+/// Offline pitch-synchronous overlap-add of one note with its timing, length, pitch, formant and level
+/// edits. Grains two periods long (the period from the note's pitch curve; 10 ms grains outside it)
+/// are cut around analysis marks one period apart and laid down at synthesis marks spaced by the new
+/// period. A time map (output → input) picks which grain plays where: the region between the
+/// neighbouring notes stretches so the note can move and change length. A formant shift resamples each
+/// grain (shorter grains = higher resonances) while the grain spacing – the pitch – stays.
+fn resynth_note(data: &AudioData, notes: &[NoteBlob], e: &PitchEdit) -> AudioData {
+    let note = &notes[e.note];
+    let rate = data.rate as f64;
+    let total = data.frames() as f64 / rate;
+    let sh = e.shape;
+    let len_in = (note.end - note.start).max(1e-3);
+    let (start_out, end_out) = placement(notes, e.note, &sh, total);
+    let len_out = end_out - start_out;
+    let (from, to, _, _) = time_limits(notes, e.note, len_out, total);
+    // Knots (output seconds, input seconds) of the time map.
+    let knots = [(from, from), (start_out, note.start), (start_out + len_out, note.end), (to, to)];
+    let map = |t: f64| -> f64 {
+        for w in knots.windows(2) {
+            if t <= w[1].0 {
+                let f = ((t - w[0].0) / (w[1].0 - w[0].0).max(1e-9)).clamp(0.0, 1.0);
+                return w[0].1 + (w[1].1 - w[0].1) * f;
+            }
+        }
+        t
+    };
+    let inside = |t_in: f64| t_in >= note.start && t_in <= note.end;
+    // Period (samples) at an input time: from the pitch curve inside the note, else unvoiced grains.
+    let unvoiced = 0.01 * rate;
+    let period = |t_in: f64| -> f64 {
+        if inside(t_in) {
+            let hz = 440.0 * 2f64.powf((curve_at(note, t_in) as f64 - 69.0) / 12.0);
+            (rate / hz).clamp(32.0, 1200.0)
+        } else {
+            unvoiced
+        }
+    };
+    let ramp = (sh.transition.max(0.005) as f64).min(len_in / 2.0);
+    // How much of the edit applies at an input time (ramped at the note's edges).
+    let weight = |t_in: f64| -> f64 {
+        if t_in < note.start - ramp || t_in > note.end + ramp {
+            0.0
+        } else if t_in < note.start {
+            1.0 - (note.start - t_in) / ramp
+        } else if t_in > note.end {
+            1.0 - (t_in - note.end) / ramp
+        } else {
+            1.0
+        }
+    };
+    let g = 10f64.powf(sh.gain_db as f64 / 20.0);
+    let x = mono(data);
+    let a = ((from - 0.03) * rate).max(0.0) as usize;
+    let b = (((to + 0.03) * rate) as usize).min(x.len());
+    // Analysis marks over the region, voiced ones snapped to the waveform's (positive) peak: the same
+    // point of every period, so consecutive grains line up.
+    let mut marks: Vec<f64> = Vec::new();
+    let mut m = a as f64;
+    while m < b as f64 {
+        let p = period(m / rate);
+        let mut at = m;
+        if inside(m / rate) {
+            let r = (p / 4.0) as isize;
+            let c = m as isize;
+            let best = (c - r..=c + r).filter(|i| *i >= 0 && (*i as usize) < x.len()).max_by(|i, j| x[*i as usize].total_cmp(&x[*j as usize]));
+            if let Some(bi) = best {
+                at = bi as f64;
+            }
+        }
+        if marks.last().is_none_or(|l| at > *l + 8.0) {
+            marks.push(at);
+        }
+        m = at.max(m) + p;
+    }
+    if marks.is_empty() {
+        return data.clone();
+    }
+    let (oa, ob) = ((from * rate) as usize, ((to * rate) as usize).min(x.len()));
+    let hann = |u: f64| if u.abs() >= 1.0 { 0.0 } else { 0.5 + 0.5 * (std::f64::consts::PI * u).cos() };
+    let sample = |ch: &[f32], pos: f64| -> f64 {
+        if pos < 0.0 || pos >= (ch.len() - 1) as f64 {
+            return 0.0;
+        }
+        let i = pos as usize;
+        let f = pos - i as f64;
+        ch[i] as f64 * (1.0 - f) + ch[i + 1] as f64 * f
+    };
+    let render = |ch: &[f32]| -> Vec<f32> {
+        let mut acc = vec![0.0f64; ob.saturating_sub(oa) + 1];
+        let mut wsum = vec![0.0f64; acc.len()];
+        let mut t = oa as f64;
+        while t < ob as f64 {
+            let t_in = map(t / rate) * rate;
+            // The analysis mark nearest the mapped time.
+            let k = marks.partition_point(|mk| *mk < t_in);
+            let mk = match (k.checked_sub(1).map(|i| marks[i]), marks.get(k).copied()) {
+                (Some(p), Some(n)) => {
+                    if t_in - p < n - t_in {
+                        p
+                    } else {
+                        n
+                    }
+                }
+                (Some(p), None) => p,
+                (None, Some(n)) => n,
+                (None, None) => break,
+            };
+            let w = weight(mk / rate);
+            let p = period(mk / rate);
+            let semis = if inside(mk / rate) || w > 0.0 {
+                let c = curve_at(note, (mk / rate).clamp(note.start, note.end));
+                (e.shift + (note.midi - c) * e.drift) as f64 * w
+            } else {
+                0.0
+            };
+            let ratio = 2f64.powf(semis / 12.0);
+            let phi = 2f64.powf(sh.formant as f64 * w / 12.0);
+            let level = 1.0 + (g - 1.0) * w;
+            let fade = if sh.fade_in > 1e-4 { ((mk / rate - note.start) / sh.fade_in as f64).clamp(0.0, 1.0) * w + (1.0 - w) } else { 1.0 };
+            // Grain: two periods around the mark, resampled by the formant factor.
+            let half = p / phi;
+            let lo = (-half).ceil() as isize;
+            let hi = half.floor() as isize;
+            for j in lo..=hi {
+                let o = t as isize + j - oa as isize;
+                if o < 0 || o as usize >= acc.len() {
+                    continue;
+                }
+                let win = hann(j as f64 / half);
+                acc[o as usize] += sample(ch, mk + j as f64 * phi) * win * level * fade;
+                wsum[o as usize] += win;
+            }
+            let hop = if inside(mk / rate) { p / ratio } else { unvoiced / 2.0 };
+            t += hop.max(8.0);
+        }
+        acc.iter().zip(&wsum).map(|(v, w)| (v / w.max(0.35)) as f32).collect()
+    };
+    let x_fade = (0.005 * rate) as usize;
+    per_channel(data, |ch| {
+        let wet = render(ch);
+        let mut out = ch.to_vec();
+        let n = ob.saturating_sub(oa);
+        for i in 0..n {
+            // Crossfade into and out of the resynthesised region (where the map is the identity).
+            let edge = i.min(n - 1 - i);
+            let w = (edge as f32 / x_fade.max(1) as f32).min(1.0);
+            out[oa + i] = ch[oa + i] * (1.0 - w) + wet[i] * w;
+        }
+        out
     })
 }
 
@@ -1105,6 +1309,47 @@ mod tests {
         let nb = detect_notes(&b);
         assert_eq!(nb.len(), 1);
         assert!((nb[0].midi - 69.0).abs() < 0.5, "{}", nb[0].midi);
+    }
+
+    /// Moving a note later: its tone starts later, the gap before it stretches, nothing outside the
+    /// region changes; a formant shift keeps the pitch.
+    #[test]
+    fn notes_move_in_time_and_shift_formants() {
+        // Silence, a 220 Hz note 0.4 – 0.8 s, silence.
+        let a = audio(|t| if (0.4..0.8).contains(&t) { 0.5 * (2.0 * PI * 220.0 * t).sin() } else { 0.0 }, 1.4);
+        let note = NoteBlob { start: 0.4, end: 0.8, midi: 57.0, curve: vec![(0.4, 57.0), (0.8, 57.0)], level: 0.5 };
+        let (_, to, _, hi) = time_limits(std::slice::from_ref(&note), 0, 0.4, 1.4);
+        assert!((to - 1.05).abs() < 1e-9 && hi > 0.6);
+        let mut e = PitchEdit::new(0, 0.0, 0.0);
+        e.shape.time_shift = 0.15;
+        let y = apply_pitch(&a, std::slice::from_ref(&note), &[e]);
+        let seg = |d: &AudioData, t0: f32, t1: f32| rms(&d.l[(t0 * RATE as f32) as usize..(t1 * RATE as f32) as usize]);
+        assert!(seg(&y, 0.42, 0.52) < 0.05, "the note no longer starts at 0.4 s: {}", seg(&y, 0.42, 0.52));
+        assert!(seg(&y, 0.6, 0.9) > 0.25, "it sounds from 0.55 s on: {}", seg(&y, 0.6, 0.9));
+        assert!(seg(&y, 0.98, 1.4) < 0.05, "and ends before the region does");
+        let mid = &y.l[(0.65 * RATE as f32) as usize..(0.85 * RATE as f32) as usize];
+        assert!(tone_level(mid, 220.0) > 0.3, "same pitch: {}", tone_level(mid, 220.0));
+        // Twice as long.
+        let mut s = PitchEdit::new(0, 0.0, 0.0);
+        s.shape.stretch = 1.5;
+        let y = apply_pitch(&a, std::slice::from_ref(&note), &[s]);
+        assert!(seg(&y, 0.85, 0.95) > 0.25, "longer: {}", seg(&y, 0.85, 0.95));
+        // A formant shift: the pitch stays at 220 Hz, the spectrum's balance moves.
+        // Harmonics of 220 Hz under one resonance at 660 Hz (the 3rd harmonic).
+        let peak = |h: f32| (-((h * 220.0 - 660.0) / 250.0).powi(2)).exp();
+        let rich = audio(|t| if (0.4..0.8).contains(&t) { (1..10).map(|h| (2.0 * PI * 220.0 * h as f32 * t).sin() * (0.05 + peak(h as f32))).sum::<f32>() * 0.3 } else { 0.0 }, 1.4);
+        let mut f = PitchEdit::new(0, 0.0, 0.0);
+        f.shape.formant = 5.0;
+        let y = apply_pitch(&rich, std::slice::from_ref(&note), &[f]);
+        let win = |d: &AudioData| d.l[(0.5 * RATE as f32) as usize..(0.7 * RATE as f32) as usize].to_vec();
+        let (w0, w1) = (win(&rich), win(&y));
+        // The resonance keeps its height (within 2 dB) at its new place.
+        assert!(tone_level(&w1, 880.0) > 0.8 * tone_level(&w0, 660.0), "{} vs {}", tone_level(&w1, 880.0), tone_level(&w0, 660.0));
+        // +5 semitones moves the resonance from 660 Hz towards 880 Hz: the 4th harmonic gains on the 3rd.
+        let tilt = |w: &[f32]| tone_level(w, 880.0) / tone_level(w, 660.0);
+        assert!(tilt(&w1) > tilt(&w0) * 3.0, "the resonance moved up: {} vs {}", tilt(&w1), tilt(&w0));
+        assert!(tone_level(&w1, 330.0) < 0.01 && tone_level(&w1, 550.0) < 0.01, "no new pitch in between");
+        assert!(seg(&y, 0.0, 0.1) < 1e-6 && seg(&y, 1.2, 1.4) < 1e-6, "outside untouched");
     }
 
     #[test]

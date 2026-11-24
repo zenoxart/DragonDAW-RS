@@ -204,6 +204,44 @@ pub fn normalize_clip(c: &mut Clip, peak: f32, target_db: f32) {
 
 // ---------------------------------------------------------------------------------------------------- comping
 
+/// One pass of a loop recording: where it sits on the timeline, where it starts in the recorded file
+/// (seconds, before the latency offset) and how long it is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoopPass {
+    pub start_beat: f64,
+    pub file_secs: f64,
+    pub len_beats: f64,
+}
+
+/// Splits a recording that started at `start_beat`, ran `secs` seconds and wrapped `wraps` times
+/// around the loop `lp` into its passes: the first from `start_beat` to the loop end, every further
+/// one from the loop start to the loop end, the last one as far as it got. Empty when the recording
+/// didn't loop or `start_beat` isn't before the loop end.
+pub fn loop_passes(tm: &TempoMap, start_beat: f64, secs: f64, lp: Range, wraps: usize) -> Vec<LoopPass> {
+    if wraps == 0 || lp.len() <= 1e-6 || start_beat >= lp.end - 1e-6 {
+        return Vec::new();
+    }
+    let (s0, a, b) = (tm.beat_to_seconds(start_beat), tm.beat_to_seconds(lp.start), tm.beat_to_seconds(lp.end));
+    let mut out = Vec::new();
+    let mut file = 0.0;
+    let mut beat = start_beat;
+    let mut pass_secs = b - s0;
+    for k in 0..=wraps {
+        let left = secs - file;
+        if left <= 1e-4 {
+            break;
+        }
+        let dur = if k == wraps { left.min(b - a) } else { pass_secs.min(left) };
+        let from = tm.beat_to_seconds(beat);
+        let len = tm.seconds_to_beat(from + dur) - beat;
+        out.push(LoopPass { start_beat: beat, file_secs: file, len_beats: len.max(0.01) });
+        file += pass_secs;
+        beat = lp.start;
+        pass_secs = b - a;
+    }
+    out
+}
+
 /// Moves the current main-lane clips into a new take (used before recording another pass).
 pub fn push_take(p: &mut Project, track: Id, name: &str) -> Option<Id> {
     let id = p.next_id();
@@ -861,6 +899,26 @@ pub fn is_audio_file(path: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A loop recording that started half a bar before the loop end and ran through two more passes
+    /// and a bit: four passes, laid end to end in the file.
+    #[test]
+    fn loop_recording_splits_into_passes() {
+        use super::*;
+        let tm = TempoMap::constant(120.0); // half a second per beat
+        let lp = Range { start: 4.0, end: 12.0 };
+        let secs = 1.0 + 4.0 + 4.0 + 1.5; // beats 10..12, two whole loops, then 3 beats
+        let passes = loop_passes(&tm, 10.0, secs, lp, 3);
+        assert_eq!(passes.len(), 4);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert!(near(passes[0].start_beat, 10.0) && near(passes[0].len_beats, 2.0) && near(passes[0].file_secs, 0.0));
+        assert!(near(passes[1].start_beat, 4.0) && near(passes[1].len_beats, 8.0) && near(passes[1].file_secs, 1.0));
+        assert!(near(passes[2].file_secs, 5.0) && near(passes[2].len_beats, 8.0));
+        assert!(near(passes[3].file_secs, 9.0) && near(passes[3].len_beats, 3.0));
+        // No wrap, or a start past the loop: nothing to split.
+        assert!(loop_passes(&tm, 10.0, secs, lp, 0).is_empty());
+        assert!(loop_passes(&tm, 12.0, secs, lp, 2).is_empty());
+    }
+
     fn beat_project() -> (super::Project, super::Id, super::Id, super::Id) {
         use super::*;
         let mut p = Project::new_default();

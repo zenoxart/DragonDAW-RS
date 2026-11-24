@@ -6,7 +6,8 @@
 //! distortion repair, de-reverb, spectral attenuate, gain), each with Preview (listen first) and Apply.
 //!
 //! **Pitch correction** – Notes ("blobs") with their pitch curves: Move (drag up / down,
-//! semitone snap, Alt = free), Vibrato (drag to scale a note's vibrato and drift), Split; rubber-band
+//! semitone snap, Alt = free), Vibrato (drag to scale a note's vibrato and drift), Timing (drag to move a
+//! note in time, its right edge to change its length), Split; formant shift in the Shape card; rubber-band
 //! and Ctrl+A selection, arrow keys (semitone), Ctrl+arrows (octave), Alt+arrows (10 cents), Delete
 //! resets, its own undo (Ctrl+Z), the "correct pitch" macro, zoom in time and pitch.
 //!
@@ -102,6 +103,7 @@ enum NoteTool {
     #[default]
     Move,
     Modulation,
+    Timing,
     Split,
 }
 
@@ -117,6 +119,7 @@ type MakeProcess = Box<dyn Fn() -> Process>;
 type Curve = Vec<(f64, f32)>;
 /// Note edits that can be undone: the notes (split changes them), their moves and their modulation.
 type NoteState = (Vec<NoteBlob>, Vec<f32>, Vec<f32>, Vec<NoteShape>);
+type NoteDrag = (Pos2, Vec<f32>, Vec<f32>, Vec<NoteShape>, bool);
 
 /// Everything the tab keeps between frames.
 #[derive(Default)]
@@ -165,7 +168,8 @@ pub struct RepairUi {
     note_tool: NoteTool,
     no_snap: bool,
     /// A drag on notes: where it started and the moves / modulation then.
-    note_drag: Option<(Pos2, Vec<f32>, Vec<f32>)>,
+    /// (start, shifts, modulation, shapes, dragging the right edge = length)
+    note_drag: Option<NoteDrag>,
     rubber: Option<Pos2>,
     history: Vec<NoteState>,
     // A render running.
@@ -219,6 +223,20 @@ impl RepairUi {
         let n = &self.notes[k];
         let raw = curve_at(n, t);
         n.midi + self.shifts[k] + self.mods[k] * (raw - n.midi)
+    }
+
+    /// Where note `k` sounds after its timing edit (start, end in seconds).
+    fn placed(&self, k: usize) -> (f64, f64) {
+        let n = &self.notes[k];
+        let total = self.data.as_ref().map(|d| d.frames() as f64 / d.rate as f64).unwrap_or(n.end + 1.0);
+        repair::placement(&self.notes, k, &self.shapes[k], total)
+    }
+
+    /// Note `k`'s recorded time `t` where it now sounds.
+    fn placed_time(&self, k: usize, t: f64) -> f64 {
+        let n = &self.notes[k];
+        let (s, e) = self.placed(k);
+        s + (t - n.start) * (e - s) / (n.end - n.start).max(1e-6)
     }
 
     /// Splits note `k` at `t` (seconds); both halves keep its move and modulation.
@@ -939,7 +957,8 @@ fn blob_rect(rp: &RepairUi, k: usize, x_of: &dyn Fn(f64) -> f32, y_of: &dyn Fn(f
     let n = &rp.notes[k];
     let centre = n.midi + rp.shifts[k];
     let half = row_h * (0.28 + 0.2 * n.level.min(1.0));
-    Rect::from_min_max(Pos2::new(x_of(n.start), y_of(centre) - half), Pos2::new(x_of(n.end), y_of(centre) + half))
+    let (s, e) = rp.placed(k);
+    Rect::from_min_max(Pos2::new(x_of(s), y_of(centre) - half), Pos2::new(x_of(e), y_of(centre) + half))
 }
 
 fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
@@ -986,14 +1005,16 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
         let rp = &st.ui.repair;
         for k in 0..rp.notes.len() {
             let n = &rp.notes[k];
-            if n.end < t0 || n.start > t1 {
+            let (ps, pe) = rp.placed(k);
+            if n.end.max(pe) < t0 || n.start.min(ps) > t1 {
                 continue;
             }
             let br = blob_rect(rp, k, &x_of, &y_of, row_h);
             let sel = rp.sel_notes.contains(&k);
             // Where it was recorded, once it moved.
-            if rp.shifts[k].abs() > 0.005 {
-                let ghost = br.translate(Vec2::new(0.0, rp.shifts[k] * row_h));
+            let moved_time = (ps - n.start).abs() > 1e-4 || (pe - n.end).abs() > 1e-4;
+            if rp.shifts[k].abs() > 0.005 || moved_time {
+                let ghost = Rect::from_min_max(Pos2::new(x_of(n.start), br.top()), Pos2::new(x_of(n.end), br.bottom())).translate(Vec2::new(0.0, rp.shifts[k] * row_h));
                 p.rect_stroke(ghost, ghost.height() / 2.0, Stroke::new(1.0_f32, Color32::from_white_alpha(40)), egui::StrokeKind::Inside);
             }
             let col = if rp.edited(k) { theme::ACCENT_2 } else { Color32::from_rgb(0xd8, 0x8a, 0x3c) };
@@ -1002,7 +1023,7 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
                 p.rect_stroke(br, br.height() / 2.0, Stroke::new(1.5_f32, Color32::WHITE), egui::StrokeKind::Outside);
             }
             // Its pitch line as it will sound.
-            let pts: Vec<Pos2> = n.curve.iter().filter(|(t, _)| *t >= t0 - 0.1 && *t <= t1 + 0.1).map(|(t, _)| Pos2::new(x_of(*t), y_of(rp.pitch_at(k, *t)))).collect();
+            let pts: Vec<Pos2> = n.curve.iter().map(|(t, _)| (rp.placed_time(k, *t), *t)).filter(|(d, _)| *d >= t0 - 0.1 && *d <= t1 + 0.1).map(|(d, t)| Pos2::new(x_of(d), y_of(rp.pitch_at(k, t)))).collect();
             if pts.len() > 1 {
                 p.add(egui::Shape::line(pts, Stroke::new(1.3_f32, Color32::from_black_alpha(170))));
             }
@@ -1039,7 +1060,9 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
                         }
                     }
                     rp.snapshot();
-                    rp.note_drag = Some((pos, rp.shifts.clone(), rp.mods.clone()));
+                    // The Timing tool on a note's last few pixels changes its length.
+                    let edge = tool == NoteTool::Timing && pos.x > blob_rect(rp, k, &x_of, &y_of, row_h).right() - 7.0;
+                    rp.note_drag = Some((pos, rp.shifts.clone(), rp.mods.clone(), rp.shapes.clone(), edge));
                 }
                 _ => rp.rubber = Some(pos),
             }
@@ -1048,10 +1071,29 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
     if resp.dragged() {
         if let Some(pos) = resp.interact_pointer_pos() {
             let rp = &mut st.ui.repair;
-            if let Some((from, s0, m0)) = rp.note_drag.clone() {
+            if let Some((from, s0, m0, sh0, edge)) = rp.note_drag.clone() {
                 let dy = (from.y - pos.y) / row_h;
+                let dt = (pos.x - from.x) as f64 / plot.width() as f64 * (t1 - t0);
                 for k in rp.sel_notes.clone() {
-                    if tool == NoteTool::Modulation {
+                    if tool == NoteTool::Timing {
+                        let n = &rp.notes[k];
+                        let len_in = (n.end - n.start).max(1e-3);
+                        if edge {
+                            let len0 = len_in * sh0[k].stretch as f64;
+                            rp.shapes[k].stretch = ((len0 + dt) / len_in).clamp(0.25, 4.0) as f32;
+                        } else {
+                            rp.shapes[k].time_shift = sh0[k].time_shift + dt as f32;
+                        }
+                        // Keep the stored values where the note can really go.
+                        let total = data.frames() as f64 / data.rate as f64;
+                        let len = len_in * rp.shapes[k].stretch as f64;
+                        let (_, _, lo, hi) = repair::time_limits(&rp.notes, k, len, total);
+                        if hi >= lo {
+                            rp.shapes[k].time_shift = ((n.start + rp.shapes[k].time_shift as f64).clamp(lo, hi) - n.start) as f32;
+                        } else {
+                            rp.shapes[k] = sh0[k];
+                        }
+                    } else if tool == NoteTool::Modulation {
                         rp.mods[k] = (m0[k] + (from.y - pos.y) / 120.0).clamp(0.0, 2.0);
                     } else {
                         // The note's centre snaps onto a semitone unless Alt is held (or snapping is off).
@@ -1084,8 +1126,8 @@ fn notes_view(ui: &mut Ui, st: &mut State, data: &AudioData, size: Vec2) {
             }
         }
         // A drag that changed nothing is no undo step.
-        if let Some((_, s0, m0)) = rp.note_drag.take() {
-            if s0 == rp.shifts && m0 == rp.mods {
+        if let Some((_, s0, m0, sh0, _)) = rp.note_drag.take() {
+            if s0 == rp.shifts && m0 == rp.mods && sh0 == rp.shapes {
                 rp.history.pop();
             }
         }
@@ -1328,6 +1370,7 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
             for (t, icon, name, tip) in [
                 (NoteTool::Move, "✋", "Move", "Drag notes up / down (snaps to semitones; Alt = free). Drag on empty space to select several."),
                 (NoteTool::Modulation, "〰", "Vibrato", "Drag a note up / down: more or less vibrato and drift (100 % = as sung)"),
+                (NoteTool::Timing, "⏱", "Timing", "Drag a note left / right to move it in time; drag its right edge to make it longer or shorter (the gaps around it stretch)"),
                 (NoteTool::Split, "✂", "Split", "Click a note where it should be cut in two (double-click works with any tool)"),
             ] {
                 let sel = st.ui.repair.note_tool == t;
@@ -1366,7 +1409,12 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
                 let n = &r.notes[k];
                 let mm = n.midi + r.shifts[k];
                 ui.label(RichText::new(format!("{}  {:+} cents", note_name(mm), cents(mm))).size(15.0).strong());
-                ui.label(RichText::new(format!("{:.2} – {:.2} s · moved {:+.2} semitones · vibrato {:.0} %", n.start, n.end, r.shifts[k], r.mods[k] * 100.0)).small().color(theme::TEXT_DIM));
+                let (ps, pe) = r.placed(k);
+                ui.label(RichText::new(format!("{:.2} – {:.2} s · moved {:+.2} semitones · vibrato {:.0} %", ps, pe, r.shifts[k], r.mods[k] * 100.0)).small().color(theme::TEXT_DIM));
+                let sh = r.shapes[k];
+                if sh.resynthesises() {
+                    ui.label(RichText::new(format!("timing {:+.0} ms · length {:.0} % · formant {:+.1} st", (ps - n.start) * 1000.0, sh.stretch * 100.0, sh.formant)).small().color(theme::TEXT_DIM));
+                }
             } else {
                 ui.label(format!("Working on {what}"));
                 ui.label(RichText::new("Click a note, drag a box around several, or Ctrl+A for all").small().color(theme::TEXT_DIM));
@@ -1444,6 +1492,11 @@ fn shape_card(ui: &mut Ui, st: &mut State, what: &str) {
         changed |= icon_slider(ui, "🔀", &mut trans, 1.0..=200.0, "transition", " ms", "How smoothly the pitch and level glide in and out at the note's edges");
         changed |= icon_slider(ui, "📶", &mut fade, 0.0..=1000.0, "fade in", " ms", "Fades the note in from silence at its start (softens a hard attack)");
         changed |= icon_slider(ui, "🔊", &mut sh.gain_db, -24.0..=12.0, "volume", " dB", "The note's level");
+        let mut shift_ms = sh.time_shift * 1000.0;
+        let mut length = sh.stretch * 100.0;
+        changed |= icon_slider(ui, "⏱", &mut shift_ms, -250.0..=250.0, "timing", " ms", "Moves the note earlier or later (as far as the gaps to its neighbours allow) – or drag it with the Timing tool");
+        changed |= icon_slider(ui, "↔", &mut length, 25.0..=400.0, "length", " %", "Makes the note longer or shorter without changing its pitch – or drag its right edge with the Timing tool");
+        changed |= icon_slider(ui, "🎭", &mut sh.formant, -7.0..=7.0, "formant", " st", "Moves the voice's resonances – its timbre – without changing the pitch: up sounds smaller and brighter, down bigger and darker");
         if changed {
             // The first change of a drag makes the undo step.
             let id = egui::Id::new("repair.shape.drag");
@@ -1455,6 +1508,8 @@ fn shape_card(ui: &mut Ui, st: &mut State, what: &str) {
             sh.tail = tail / 1000.0;
             sh.transition = trans / 1000.0;
             sh.fade_in = fade / 1000.0;
+            sh.time_shift = shift_ms / 1000.0;
+            sh.stretch = length / 100.0;
             for k in targets {
                 r.shapes[k] = sh;
             }
@@ -1588,6 +1643,23 @@ mod tests {
         st.ui.repair.sel_notes = vec![0];
         assert!(key(&mut st, "edit.delete"));
         assert_eq!(st.ui.repair.shifts[0], 0.0);
+    }
+
+    /// A timing edit moves the blob (as far as the gaps allow) and counts as an edit; so does a formant shift.
+    #[test]
+    fn notes_move_in_time_within_their_gaps() {
+        let (_dir, _src, mut st, _cid, _ctx) = loaded();
+        let r = &mut st.ui.repair;
+        let n = r.notes[0].clone();
+        r.shapes[0].time_shift = 0.03;
+        assert!(r.edited(0));
+        let (s, e) = r.placed(0);
+        assert!(s > n.start && s <= n.start + 0.03 + 1e-9 && (e - s - (n.end - n.start)).abs() < 1e-9, "{s} {e} {n:?}");
+        r.shapes[0].time_shift = 1000.0;
+        let (s, _) = r.placed(0);
+        assert!(s < n.start + 0.26, "never past its neighbour or the region: {s}");
+        r.shapes[0] = NoteShape { formant: 2.0, ..Default::default() };
+        assert!(r.edited(0) && r.placed(0) == (n.start, n.end));
     }
 
     #[test]

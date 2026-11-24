@@ -80,6 +80,9 @@ pub struct RecordedTake {
     pub rate: u32,
     /// Seconds to skip at the start of the file to compensate the round-trip latency.
     pub latency: f64,
+    /// How often the transport jumped back (the loop wrapped) while recording: loop recording made
+    /// `wraps + 1` passes, which become one take each.
+    pub wraps: usize,
 }
 
 /// Where and what to record.
@@ -104,12 +107,16 @@ fn recorder_thread(rx: Receiver<RecMsg>) {
     }
     let mut open: Vec<Open> = Vec::new();
     let mut start_beat: Option<f64> = None;
+    let mut prev_beat: Option<f64> = None;
+    let mut wraps = 0usize;
     let mut rate = 48000;
     for msg in rx {
         match msg {
             RecMsg::Start { targets, rate: r } => {
                 rate = r;
                 start_beat = None;
+                prev_beat = None;
+                wraps = 0;
                 open.clear();
                 for t in targets {
                     if let Some(dir) = t.path.parent() {
@@ -127,6 +134,11 @@ fn recorder_thread(rx: Receiver<RecMsg>) {
                 if start_beat.is_none() {
                     start_beat = Some(first_beat);
                 }
+                // A block starting earlier than the one before: the loop wrapped.
+                if prev_beat.is_some_and(|b| first_beat < b - 1e-6) {
+                    wraps += 1;
+                }
+                prev_beat = Some(first_beat);
                 for o in &mut open {
                     let l = channels.get(o.target.source.left as usize);
                     let r = o.target.source.right.and_then(|r| channels.get(r as usize));
@@ -146,7 +158,7 @@ fn recorder_thread(rx: Receiver<RecMsg>) {
                     let frames = o.frames;
                     let _ = o.writer.finalize();
                     if frames > 0 {
-                        out.push(RecordedTake { track: o.target.track, path: o.target.path, start_beat: start_beat.unwrap_or(0.0), frames, rate, latency });
+                        out.push(RecordedTake { track: o.target.track, path: o.target.path, start_beat: start_beat.unwrap_or(0.0), frames, rate, latency, wraps });
                     } else {
                         let _ = std::fs::remove_file(&o.target.path);
                     }

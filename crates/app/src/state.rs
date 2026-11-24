@@ -1132,6 +1132,14 @@ impl State {
             let punch = p.punch_enabled && p.punch.is_some_and(|r| r.len() > 0.01);
             for t in takes {
                 let secs = t.frames as f64 / t.rate as f64 - t.latency;
+                // Loop recording: one take per pass; the last complete pass plays, the others wait in
+                // the take lanes for comping.
+                let passes = p.loop_range.filter(|_| p.loop_enabled).map(|lp| dragon_engine::edit::loop_passes(&tm, t.start_beat, secs.max(0.0), lp, t.wraps)).unwrap_or_default();
+                if passes.len() > 1 {
+                    let loop_len = p.loop_range.map(|r| r.len()).unwrap_or(0.0);
+                    record_loop_passes(p, &t, &passes, loop_len);
+                    continue;
+                }
                 let s0 = tm.beat_to_seconds(t.start_beat);
                 let len = tm.seconds_to_beat(s0 + secs.max(0.0)) - t.start_beat;
                 let end = t.start_beat + len.max(0.01);
@@ -2176,6 +2184,47 @@ pub fn apply_trust(s: &Settings) {
     }
 }
 
+/// Puts the passes of a loop recording on its track: every pass becomes a take ("Pass 1", "Pass 2" …);
+/// the last pass that covered the whole loop also goes onto the main lane. Existing audio there is never touched: if the passes would overlap it, the main
+/// lane copy and the takes go onto a new track grouped with the armed one, as for normal recordings.
+fn record_loop_passes(p: &mut Project, t: &dragon_engine::device::RecordedTake, passes: &[dragon_engine::edit::LoopPass], loop_len: f64) {
+    let name = t.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let Some(color) = p.track(t.track).map(|tr| tr.color) else { return };
+    // The last pass that covered the whole loop; when none did, the longest.
+    let longest = (0..passes.len()).max_by(|&a, &b| passes[a].len_beats.total_cmp(&passes[b].len_beats)).unwrap_or(0);
+    let full = passes.iter().rposition(|x| x.len_beats >= loop_len - 1e-3).unwrap_or(longest);
+    let clip = |p: &mut Project, k: usize| {
+        let x = passes[k];
+        Clip {
+            id: p.next_id(),
+            name: format!("{name} · pass {}", k + 1),
+            start: x.start_beat,
+            length: x.len_beats,
+            muted: false,
+            color,
+            kind: ClipKind::Audio(AudioClip { source: t.path.clone(), offset: t.latency + x.file_secs, ..Default::default() }),
+        }
+    };
+    let main = clip(p, full);
+    let (lo, hi) = (passes[0].start_beat, passes.iter().map(|x| x.start_beat + x.len_beats).fold(0.0, f64::max));
+    let overlaps = p.track(t.track).map(|tr| tr.clips.iter().any(|c| c.end() > lo + 1e-6 && c.start < hi - 1e-6)).unwrap_or(false);
+    let main_id = main.id;
+    if let Some(tr) = p.track_mut(t.track) {
+        tr.audio = true;
+        tr.clips.push(main);
+    }
+    let track = if overlaps { dragon_engine::edit::clips_to_grouped_track(p, t.track, &[main_id]).unwrap_or(t.track) } else { t.track };
+    for k in 0..passes.len() {
+        let c = clip(p, k);
+        let id = p.next_id();
+        if let Some(tr) = p.track_mut(track) {
+            let n = tr.takes.len() + 1;
+            tr.takes.push(Take { id, name: format!("Pass {} (take {n})", k + 1), clips: vec![c] });
+            tr.show_takes = true;
+        }
+    }
+}
+
 fn chrono_like_stamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     format!("{secs}")
@@ -2246,6 +2295,32 @@ fn prune_autosave_histories(autosave: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Loop recording: every pass is a take, the last whole pass plays; over existing audio, all of it
+    /// goes onto a new grouped track and the old clip stays where it was.
+    #[test]
+    fn loop_passes_become_takes() {
+        let mut p = Project::new_default();
+        let (tid, _) = p.add_recording_track("Vox", InputSource { left: 0, right: None }, None);
+        let tm = TempoMap::constant(120.0);
+        let lp = Range { start: 4.0, end: 12.0 };
+        let passes = dragon_engine::edit::loop_passes(&tm, 4.0, 4.0 + 4.0 + 1.0, lp, 2);
+        assert_eq!(passes.len(), 3);
+        let take = dragon_engine::device::RecordedTake { track: tid, path: "v.wav".into(), start_beat: 4.0, frames: 48000 * 9, rate: 48000, latency: 0.01, wraps: 2 };
+        record_loop_passes(&mut p, &take, &passes, lp.len());
+        let t = p.track(tid).unwrap();
+        assert_eq!(t.takes.len(), 3);
+        assert_eq!(t.clips.len(), 1);
+        let ClipKind::Audio(a) = &t.clips[0].kind else { panic!() };
+        assert!((a.offset - 4.01).abs() < 1e-9, "the second (last whole) pass plays: {}", a.offset);
+        assert!(t.takes[2].clips[0].length < 3.0, "the last, partial pass is a take");
+        // Again over that audio: the first track keeps its clip, the new passes go below.
+        let before = p.tracks.len();
+        record_loop_passes(&mut p, &take, &passes, lp.len());
+        assert_eq!(p.tracks.len(), before + 1);
+        assert_eq!(p.track(tid).unwrap().clips.len(), 1);
+        assert_eq!(p.track(tid).unwrap().takes.len(), 3);
+    }
 
     #[test]
     fn starter_project_makes_a_beat() {
