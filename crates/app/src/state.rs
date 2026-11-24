@@ -1067,8 +1067,10 @@ impl State {
             // No armed audio track: record notes into the pattern while the song plays (live MIDI recording).
             self.ui.record_started = Some(Instant::now());
             self.retro = RetroBuffer::new(600.0);
+            // In the current mode: in pattern mode the pattern loops with everything that's enabled in it
+            // (recording used to switch to the song – with an empty playlist only the played notes sounded).
             let count_in = self.session.project.metronome.count_in_bars;
-            self.audio.send(Command::Record { count_in_bars: count_in });
+            self.audio.send(Command::RecordNotes { count_in_bars: count_in, mode: self.play_mode() });
             self.toast("Recording notes – play the typing keyboard or a MIDI controller", Severity::Info);
             return;
         }

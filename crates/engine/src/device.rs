@@ -58,7 +58,14 @@ pub enum Command {
     Pause,
     Stop,
     Seek(f64),
-    Record { count_in_bars: u32 },
+    Record {
+        count_in_bars: u32,
+    },
+    /// Recording notes: the transport runs in `mode` (the pattern loops in pattern mode).
+    RecordNotes {
+        count_in_bars: u32,
+        mode: crate::render::PlayMode,
+    },
     Live(LiveEvent),
 }
 
@@ -318,6 +325,7 @@ impl AudioEngine {
                     Command::Stop => renderer.stop(),
                     Command::Seek(b) => renderer.seek(b),
                     Command::Record { count_in_bars } => renderer.record(count_in_bars),
+                    Command::RecordNotes { count_in_bars, mode } => renderer.record_in(count_in_bars, mode),
                     Command::Live(e) => renderer.push_live(e),
                 }
             }

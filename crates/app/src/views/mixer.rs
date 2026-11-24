@@ -580,8 +580,16 @@ fn strip(ui: &mut Ui, st: &mut State, m: &MixerChannel, index: usize, sel: &Mixe
                 let (lr, lresp) = ui.allocate_exact_size(Vec2::new(16.0, 16.0), Sense::click());
                 ui.painter().circle_filled(lr.center(), 5.5, if m.muted { theme::GRID_BAR } else { theme::OK });
                 ui.painter().circle_stroke(lr.center(), 6.5, Stroke::new(1.0_f32, theme::BG));
-                if lresp.on_hover_text(if m.muted { "Muted – click to enable" } else { "Enabled – click to mute" }).clicked() {
+                let lresp = lresp.on_hover_text(if m.muted { "Muted – click to enable · right-click: enable every mixer channel" } else { "Enabled – click to mute · right-click: enable every mixer channel" });
+                if lresp.clicked() {
                     st.session.edit("Mute", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.muted = !c.muted));
+                }
+                if lresp.secondary_clicked() {
+                    // Reset: every mixer channel on (only here in the mixer).
+                    st.session.edit("Enable all mixer channels", |p| {
+                        p.mixer.master.muted = false;
+                        p.mixer.channels.iter_mut().for_each(|c| c.muted = false);
+                    });
                 }
                 if !is_master && widgets::toggle(ui, m.solo, "S", theme::ACCENT_2).on_hover_text("Solo").clicked() {
                     st.session.edit("Solo", |p| p.mixer.get_mut(id).iter_mut().for_each(|c| c.solo = !c.solo));
@@ -904,11 +912,22 @@ pub(super) fn insert_panel(ui: &mut Ui, st: &mut State, m: &MixerChannel, all: &
                     }
                     ui.painter().circle_filled(lr.center(), 5.5, led);
                     ui.painter().circle_stroke(lr.center(), 6.5, Stroke::new(1.0_f32, theme::BG));
-                    if lresp.on_hover_text(if ins.enabled { "On – click to bypass" } else { "Bypassed – click to enable" }).clicked() {
+                    let lresp = lresp.on_hover_text(if ins.enabled {
+                        "On – click to bypass · right-click: turn every effect in the mixer on"
+                    } else {
+                        "Bypassed – click to enable · right-click: turn every effect in the mixer on"
+                    });
+                    if lresp.clicked() {
                         st.session.edit("Bypass effect", |p| {
                             if let Some(i) = p.mixer.get_mut(id).and_then(|c| c.inserts.iter_mut().find(|i| i.id == iid)) {
                                 i.enabled = !i.enabled;
                             }
+                        });
+                    }
+                    if lresp.secondary_clicked() {
+                        st.session.edit("Enable all effects", |p| {
+                            p.mixer.master.inserts.iter_mut().for_each(|i| i.enabled = true);
+                            p.mixer.channels.iter_mut().flat_map(|c| c.inserts.iter_mut()).for_each(|i| i.enabled = true);
                         });
                     }
                     let gr = meters.gain_reduction.get(&iid).copied().unwrap_or(0.0);

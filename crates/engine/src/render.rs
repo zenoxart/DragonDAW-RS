@@ -1285,6 +1285,8 @@ pub struct Renderer {
     pub meters: Meters,
     live: Vec<LiveEvent>,
     live_notes: Vec<(usize, u8)>,
+    /// Where the running recording starts (after its count-in).
+    rec_origin: f64,
     /// The last note triggered anywhere (pitch, velocity) – the MIDI note / velocity modulation sources.
     last_note: (u8, f32),
     preview: Option<Preview>,
@@ -1363,6 +1365,7 @@ impl Renderer {
             meters: Meters::default(),
             live: Vec::new(),
             live_notes: Vec::new(),
+            rec_origin: 0.0,
             last_note: (60, 0.0),
             preview: None,
             click_phase: 0.0,
@@ -1415,10 +1418,22 @@ impl Renderer {
 
     /// Starts recording; with a count-in the playhead starts `bars` before the start position.
     pub fn record(&mut self, count_in_bars: u32) {
-        self.transport.mode = PlayMode::Song;
-        let bpb = self.song.beats_per_bar(self.start_beat);
+        self.record_in(count_in_bars, PlayMode::Song);
+    }
+
+    /// Starts recording in `mode`: the song from the start position, or a pattern looping from its start
+    /// (recording notes into a pattern, everything that's enabled playing along). A count-in starts the
+    /// playhead `bars` early.
+    pub fn record_in(&mut self, count_in_bars: u32, mode: PlayMode) {
+        self.preview = None;
+        self.transport.mode = mode;
+        self.rec_origin = match mode {
+            PlayMode::Song => self.start_beat,
+            PlayMode::Pattern(_) => 0.0,
+        };
+        let bpb = self.song.beats_per_bar(self.rec_origin);
         self.count_in = count_in_bars as f64 * bpb;
-        self.transport.beat = self.start_beat - self.count_in;
+        self.transport.beat = self.rec_origin - self.count_in;
         self.transport.playing = true;
         self.transport.recording = true;
     }
@@ -2068,7 +2083,7 @@ impl Renderer {
         // ---- advance transport
         if playing {
             self.transport.beat = b1;
-            if self.transport.recording && self.count_in > 0.0 && b1 >= self.start_beat {
+            if self.transport.recording && self.count_in > 0.0 && b1 >= self.rec_origin {
                 self.count_in = 0.0;
             }
             if let PlayMode::Song = self.transport.mode {
@@ -2314,7 +2329,7 @@ impl Renderer {
 
     fn metronome(&mut self, song: &Song, b0: f64, n: usize, out_l: &mut [f32], out_r: &mut [f32]) {
         let m = song.metronome;
-        let counting_in = self.transport.recording && b0 < self.start_beat;
+        let counting_in = self.transport.recording && b0 < self.rec_origin;
         let active = counting_in || (m.enabled && (!m.only_when_recording || self.transport.recording));
         if !active {
             return;
@@ -2765,6 +2780,31 @@ mod tests {
         let step = out[512 * 19..512 * 22].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
         assert!(step < 0.06, "step {step}");
         assert!(out[512 * 30..].iter().fold(0.0f32, |m, x| m.max(x.abs())) < 0.05, "volume applied");
+    }
+
+    /// Recording notes in pattern mode loops the pattern with its channels playing (it used to switch to
+    /// the song, where an empty playlist left only the played notes).
+    #[test]
+    fn recording_notes_in_pattern_mode_plays_the_pattern() {
+        let mut p = Project::new_default();
+        let synth = p.add_channel("Synth", Instrument::Synth(Default::default()));
+        let pat = p.patterns[0].id;
+        p.pattern_mut(pat).unwrap().channels.insert(synth, PatternChannel { steps: vec![], notes: vec![Note { pitch: 60, start: 0, length: PPQ * 4, velocity: 0.9, ..Default::default() }] });
+        // Nothing in the playlist.
+        assert!(p.tracks.iter().all(|t| t.clips.is_empty()));
+        let cache = SampleCache::default();
+        let stretch = StretchCache::default();
+        let mut pool = Pool::new();
+        let mut r = Renderer::new(Arc::new(Song::compile(&p, &mut CompileContext { cache: &cache, stretch: &stretch, pool: &mut pool, rate: 44100.0 })));
+        r.record_in(0, PlayMode::Pattern(pat));
+        let mut peak = 0.0f32;
+        for _ in 0..40 {
+            let (mut l, mut rr) = (vec![0.0; 512], vec![0.0; 512]);
+            r.render(&mut l, &mut rr, &[]);
+            peak = l.iter().fold(peak, |m, x| m.max(x.abs()));
+        }
+        assert!(r.transport.recording);
+        assert!(peak > 0.01, "the pattern plays while recording: peak {peak}");
     }
 
     #[test]

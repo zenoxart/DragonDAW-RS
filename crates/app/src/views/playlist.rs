@@ -1410,9 +1410,14 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
         // Grouped tracks mute and solo together.
         let group = t.group;
         let in_group = move |x: &Track| x.id == tid || (group.is_some() && x.group == group);
-        if widgets::toggle(ui, t.muted, "M", theme::WARN).on_hover_text(if group.is_some() { "Mute (the whole group)" } else { "Mute" }).clicked() {
+        let mr = widgets::toggle(ui, t.muted, "M", theme::WARN).on_hover_text(if group.is_some() { "Mute (the whole group) · right-click: unmute every track" } else { "Mute · right-click: unmute every track" });
+        if mr.clicked() {
             let on = !t.muted;
             st.session.edit("Mute track", |p| p.tracks.iter_mut().filter(|x| in_group(x)).for_each(|x| x.muted = on));
+        }
+        if mr.secondary_clicked() {
+            // Reset: every playlist track unmuted (only here in the playlist).
+            st.session.edit("Unmute all tracks", |p| p.tracks.iter_mut().for_each(|x| x.muted = false));
         }
         if widgets::toggle(ui, t.solo, "S", theme::OK).on_hover_text(if group.is_some() { "Solo (the whole group)" } else { "Solo" }).clicked() {
             let on = !t.solo;

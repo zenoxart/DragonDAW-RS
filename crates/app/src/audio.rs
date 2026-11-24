@@ -47,6 +47,7 @@ impl NullEngine {
                                 Command::Stop => r.stop(),
                                 Command::Seek(b) => r.seek(b),
                                 Command::Record { count_in_bars } => r.record(count_in_bars),
+                                Command::RecordNotes { count_in_bars, mode } => r.record_in(count_in_bars, mode),
                                 Command::Live(e) => r.push_live(e),
                             },
                             Err(std::sync::mpsc::TryRecvError::Empty) => break,

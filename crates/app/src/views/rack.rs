@@ -136,8 +136,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             }
             let row = ui.horizontal(|ui| {
                 ui.set_height(30.0);
-                if widgets::toggle(ui, !c.muted, "⚫", theme::OK).on_hover_text("Mute").clicked() {
+                let mr = widgets::toggle(ui, !c.muted, "⚫", theme::OK).on_hover_text("Enabled / muted · right-click: enable every channel in the rack");
+                if mr.clicked() {
                     st.session.edit("Mute channel", |p| p.channel_mut(cid).iter_mut().for_each(|c| c.muted = !c.muted));
+                }
+                if mr.secondary_clicked() {
+                    // Reset: every rack channel enabled (only here in the channel rack).
+                    st.session.edit("Enable all channels", |p| p.channels.iter_mut().for_each(|c| c.muted = false));
                 }
                 let mut pan = c.pan;
                 let r = mini_knob(ui, &mut pan, -1.0, 1.0, "pan");
