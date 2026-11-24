@@ -556,6 +556,11 @@ emblem_art!(
     "cinnabar",
     "jadefang",
     "wyrmdrum",
+    "fm",
+    "organ",
+    "bass808",
+    "ensemble",
+    "granular_inst",
     "bitcrusher",
     "class_a_strip",
     "clean_voice",
@@ -623,6 +628,11 @@ fn emblem_spec(id: &str) -> (Motion, Follows, Color32) {
         "autofilter" => (Breathe, Level, Color32::from_rgb(0xff, 0xa8, 0x40)),
         "shimmer" => (Rise, Level, Color32::from_rgb(0xff, 0xe0, 0x90)),
         "freeze" => (Shimmer, Level, Color32::from_rgb(0xc0, 0xe8, 0xff)),
+        "fm" => (Breathe, Level, Color32::from_rgb(0xff, 0x9a, 0x30)),
+        "organ" => (Rise, Level, Color32::from_rgb(0xff, 0xb0, 0x40)),
+        "bass808" => (Tremble, Level, Color32::from_rgb(0xff, 0x30, 0x30)),
+        "ensemble" => (Shimmer, Level, Color32::from_rgb(0xc0, 0x80, 0xff)),
+        "granular_inst" => (Turn, Level, Color32::from_rgb(0xff, 0xb0, 0x50)),
         _ => (Breathe, Level, AMBER),
     }
 }

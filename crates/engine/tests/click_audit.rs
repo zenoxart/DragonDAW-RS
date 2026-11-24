@@ -233,7 +233,7 @@ fn stock_effects_do_not_click_on_a_smooth_swell() {
     let (inl, inr) = swell(n);
     let base = spike(&inl, 0).0.max(spike(&inr, 0).0);
     // Effects that chop, crush, randomise or add noise on purpose; analysers.
-    // (Grimoire's vinyl crackle is clicks by design.)
+    // (Codex's vinyl crackle is clicks by design.)
     let skip = ["tuner", "analyzer", "bitcrusher", "stutter", "tape_stop", "lofi"];
     let mut bad = Vec::new();
     for def in registry() {

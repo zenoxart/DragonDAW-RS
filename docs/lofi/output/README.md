@@ -1,6 +1,6 @@
-# Grimoire (lo-fi) › Output
+# Codex (lo-fi) › Output
 
-[Back to Grimoire (lo-fi)](../README.md)
+[Back to Codex (lo-fi)](../README.md)
 
 | Control | Range |
 |---|---|

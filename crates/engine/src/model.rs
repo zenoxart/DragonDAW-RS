@@ -527,6 +527,8 @@ pub enum Instrument {
     Wavetable(Box<crate::wt::WavetableParams>),
     Guitar(Box<crate::gtr::GuitarParams>),
     Piano(Box<crate::pno::PianoParams>),
+    /// Hearthfire, Basilica, Wyrmbass, Chorale, Sandstorm (see `instruments::native`).
+    Native(Box<crate::instruments::native::NativeParams>),
 }
 
 /// The pad a live note plays: the pad on exactly that note, else – for a keyboard, whose keys are not on
@@ -555,6 +557,7 @@ impl Instrument {
             Instrument::Wavetable(_) => "Transmuter",
             Instrument::Guitar(_) => "Drakestring",
             Instrument::Piano(_) => "Emberkeys",
+            Instrument::Native(p) => crate::instruments::native::def(&p.kind).map(|d| d.name.split(" (").next().unwrap_or(d.name)).unwrap_or("Instrument"),
         }
     }
 }

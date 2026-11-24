@@ -1,6 +1,6 @@
-# Grimoire (lo-fi) › Tape
+# Codex (lo-fi) › Tape
 
-[Back to Grimoire (lo-fi)](../README.md)
+[Back to Codex (lo-fi)](../README.md)
 
 | Control | Range |
 |---|---|

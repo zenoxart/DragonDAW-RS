@@ -1,6 +1,6 @@
-# Grimoire (lo-fi) › Noise
+# Codex (lo-fi) › Noise
 
-[Back to Grimoire (lo-fi)](../README.md)
+[Back to Codex (lo-fi)](../README.md)
 
 | Control | Range |
 |---|---|

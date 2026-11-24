@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Tape › Drive
+# Codex (lo-fi) › Tape › Drive
 
-[Back to Tape](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Tape](../README.md) · [Codex (lo-fi)](../../README.md)
 
 How hard the signal is pushed into the saturation stage; more drive adds harmonics and density.
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** 0.00 % … 100 % (default: 20.0 %)
 

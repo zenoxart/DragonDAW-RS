@@ -61,7 +61,7 @@ Every section page ends with **How it works** (the algorithms and formulas behin
 | [Corroder (bit crusher)](bitcrusher/README.md) | Distortion | Bit depth and sample-rate reduction. |
 | [Obsidian (soft clipper)](clipper/README.md) | Distortion | Soft clipper: clean below the threshold, a smooth shoulder up to the ceiling, post gain; plus input drive, soft / hybrid / hard shapes, up to 4× oversampling and a clip-only listen. |
 | [Wyrmstack (amp & cabinet)](amp/README.md) | Distortion | Guitar and bass amplifier with speaker cabinet for direct input: five amps (clean, crunch, lead, bass, fuzz), gate, tone stack, presence, power-amp sag, four cabinets and three microphone positions. |
-| [Grimoire (lo-fi)](lofi/README.md) | Distortion | Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction. |
+| [Codex (lo-fi)](lofi/README.md) | Distortion | Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction. |
 | [Wisp (exciter)](exciter/README.md) | Distortion | Harmonic exciter: generates new harmonics above a chosen frequency (odd or even), adds air on top and, if asked, sub harmonics below the low end |
 | [Alembic (filter)](filter/README.md) | Filter | Filter: two filters (serial or parallel), low / high / band pass, notch, peak and shelves, 12 / 24 / 48 dB slopes, styles (clean, smooth, ram, hack), drive, stereo spread, LFO and envelope follower. |
 | [Phial (utility)](utility/README.md) | Utility | Gain, balance, stereo width, polarity per side, swap, mono and DC filter. |

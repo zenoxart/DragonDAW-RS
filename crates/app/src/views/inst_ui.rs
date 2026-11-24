@@ -16,7 +16,7 @@ use crate::state::State;
 use crate::theme;
 use dragon_engine::effects::{EffectDef, ParamInfo, ParamKind};
 use dragon_engine::model::*;
-use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui, Vec2};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -712,6 +712,213 @@ fn pad_screen(ui: &mut Ui, st: &mut State, pads: &[Pad], sel: usize, ph: Color32
     let choke = if pad.choke == 0 { "no choke".to_string() } else { format!("choke group {}", pad.choke) };
     p.text(Pos2::new(inner.left(), inner.bottom() - 20.0), egui::Align2::LEFT_TOP, format!("{layers} layer{}  ·  {choke}", if layers == 1 { "" } else { "s" }), egui::FontId::monospace(9.5), dim(0.75));
     p.text(Pos2::new(inner.left(), inner.bottom() - 6.0), egui::Align2::LEFT_CENTER, "Pads and keys both play it", egui::FontId::proportional(9.0), dim(0.55));
+}
+
+// ------------------------------------------------------------------------------------ native instruments
+
+fn set_native(p: &mut Project, cid: Id, f: impl FnOnce(&mut dragon_engine::instruments::native::NativeParams)) {
+    if let Some(Instrument::Native(n)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
+        f(n);
+    }
+}
+
+/// The editor of Hearthfire, Basilica, Wyrmbass, Chorale and Sandstorm: their unit, a display, the factory
+/// presets and the designed panel.
+pub fn native(ui: &mut Ui, st: &mut State, cid: Id, np: dragon_engine::instruments::native::NativeParams) {
+    use dragon_engine::instruments::native;
+    let Some(def) = native::def(&np.kind) else { return };
+    let finish = analog::finish_of(def.id);
+    let accent = finish.accent().unwrap_or(theme::ACCENT);
+    let values: BTreeMap<String, f32> = def.params.iter().map(|p| (p.id.to_string(), np.v(p.id))).collect();
+    let file_key = egui::Id::new(("native.file", cid));
+    unit(ui, st, def, cid, |ui, st| {
+        let time = if st.settings.reduced_motion { None } else { Some(ui.input(|i| i.time) as f32) };
+        bezel(ui, finish, |ui| native_screen(ui, &np, time, super::fx_mod::phosphor(finish)));
+        if time.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(40));
+        }
+        ui.add_space(6.0);
+        // Factory presets (made from the parameter list, like the effects').
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("PRESET").small().color(theme::TEXT_DIM));
+            let presets = dragon_engine::effects::factory::cached(def);
+            ui.menu_button("Factory presets…", |ui| {
+                for g in dragon_engine::effects::factory::groups() {
+                    ui.menu_button(g, |ui| {
+                        for pr in presets.iter().filter(|p| p.group == g) {
+                            if ui.button(&pr.name).clicked() {
+                                let params = pr.params.clone();
+                                st.session.edit(&format!("Preset {}", pr.name), |p| set_native(p, cid, |n| n.params = params));
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                }
+                ui.separator();
+                if ui.button("Default").clicked() {
+                    let d = def.defaults();
+                    st.session.edit("Default preset", |p| set_native(p, cid, |n| n.params = d));
+                    ui.close_menu();
+                }
+            });
+        });
+        ui.add_space(4.0);
+        let mut band = 1usize;
+        let source = def.name.split(" (").next().unwrap_or(def.name);
+        let file = np.file.clone();
+        let mut touch = |_ui: &mut Ui, t: fx_panel::Touch| {
+            let prm = t.prm;
+            let v = t.value;
+            if t.resp.hovered() || t.resp.dragged() || t.resp.changed() {
+                st.hint(source, prm.name, prm.format(v));
+            }
+            let key = prm.id.to_string();
+            match prm.kind {
+                ParamKind::Choice(_) | ParamKind::Toggle => {
+                    if t.resp.changed() {
+                        st.session.edit(prm.name, |p| {
+                            set_native(p, cid, |n| {
+                                n.params.insert(key.clone(), v);
+                            })
+                        });
+                    }
+                }
+                _ => {
+                    let r = t.resp.on_hover_text(format!("{} – drag, Shift = fine, double-click or Ctrl+click resets", prm.name));
+                    super::widgets::apply(st, &r, prm.name, |p| {
+                        set_native(p, cid, |n| {
+                            n.params.insert(key.clone(), v);
+                        })
+                    });
+                }
+            }
+        };
+        let mut custom = |ui: &mut Ui, name: &str| {
+            if name == "inst.file" {
+                ui.vertical(|ui| {
+                    ui.set_width(170.0);
+                    ui.label(RichText::new("SAMPLE").small());
+                    let label = file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Built-in texture".into());
+                    ui.add(egui::Label::new(RichText::new(label).strong()).truncate());
+                    ui.horizontal(|ui| {
+                        if ui.button("Load…").clicked() {
+                            ui.data_mut(|d| d.insert_temp(file_key, 1u8));
+                        }
+                        if file.is_some() && ui.button("Built-in").clicked() {
+                            ui.data_mut(|d| d.insert_temp(file_key, 2u8));
+                        }
+                    });
+                });
+            }
+        };
+        fx_panel::show(ui, fx_panel::View { def, params: &values, accent, salt: egui::Id::new(("native.panel", cid)) }, &mut band, &mut touch, &mut custom);
+        match ui.data_mut(|d| d.remove_temp::<u8>(file_key)) {
+            Some(1) => {
+                if let Some(f) = pick_audio() {
+                    st.session.edit("Load sample", |p| set_native(p, cid, |n| n.file = Some(f.clone())));
+                }
+            }
+            Some(2) => st.session.edit("Built-in texture", |p| set_native(p, cid, |n| n.file = None)),
+            _ => {}
+        }
+    });
+}
+
+/// The display: what each instrument is doing, drawn from its settings.
+fn native_screen(ui: &mut Ui, np: &dragon_engine::instruments::native::NativeParams, time: Option<f32>, ph: Color32) {
+    use dragon_engine::instruments::native::{ALGORITHMS, ENSEMBLES};
+    let w = ui.available_width().max(300.0);
+    let (r, _) = ui.allocate_exact_size(egui::vec2(w, 150.0), egui::Sense::hover());
+    let p = ui.painter_at(r);
+    super::fx_mod::screen(&p, r, 6.0);
+    let t = time.unwrap_or(0.0);
+    let text = |at: Pos2, a: egui::Align2, s: String, size: f32| {
+        p.text(at, a, s, egui::FontId::proportional(size), theme::TEXT);
+    };
+    let inner = r.shrink2(egui::vec2(16.0, 18.0));
+    match np.kind.as_str() {
+        "fm" => {
+            // The four operators as boxes in their algorithm's layout, each with its envelope.
+            let alg = np.v("algorithm").round() as usize;
+            text(Pos2::new(r.left() + 10.0, r.top() + 4.0), egui::Align2::LEFT_TOP, format!("ALGORITHM {}  ·  {}", alg + 1, ALGORITHMS.get(alg).copied().unwrap_or("")), 11.0);
+            let bw = inner.width() / 4.0;
+            for k in 0..4 {
+                let n = k + 1;
+                let x = inner.left() + k as f32 * bw;
+                let b = Rect::from_min_size(Pos2::new(x + 6.0, inner.top() + 14.0), egui::vec2(bw - 12.0, inner.height() - 18.0));
+                p.rect_stroke(b, 4.0, Stroke::new(1.0_f32, ph.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+                let (a, d, s, rr) = (np.v(&format!("op{n}_attack")), np.v(&format!("op{n}_decay")), np.v(&format!("op{n}_sustain")), np.v(&format!("op{n}_release")));
+                let level = np.v(&format!("op{n}_level"));
+                let total = a + d + 300.0 + rr;
+                let xs = |ms: f32| b.left() + 4.0 + ms / total * (b.width() - 8.0);
+                let ys = |v: f32| b.bottom() - 4.0 - v * level * (b.height() - 22.0);
+                let pts = vec![Pos2::new(xs(0.0), ys(0.0)), Pos2::new(xs(a), ys(1.0)), Pos2::new(xs(a + d), ys(s)), Pos2::new(xs(a + d + 300.0), ys(s)), Pos2::new(xs(total), ys(0.0))];
+                p.add(Shape::line(pts, Stroke::new(2.0_f32, ph)));
+                p.text(b.left_top() + egui::vec2(4.0, 2.0), egui::Align2::LEFT_TOP, format!("OP{n} ×{:.2}", np.v(&format!("op{n}_ratio"))), egui::FontId::monospace(9.5), theme::TEXT_DIM);
+            }
+        }
+        "organ" => {
+            // Drawbars pulled out like the real ones (longer = louder), coloured by their family.
+            text(Pos2::new(r.left() + 10.0, r.top() + 4.0), egui::Align2::LEFT_TOP, "DRAWBARS".into(), 11.0);
+            let bw = inner.width() / 9.0;
+            for k in 0..9 {
+                let v = np.v(&format!("d{}", k + 1)) / 8.0;
+                let c = match k {
+                    0 | 1 => Color32::from_rgb(0x9a, 0x5a, 0x3a),
+                    4 | 6 | 7 => Color32::from_rgb(0x30, 0x30, 0x30),
+                    _ => Color32::from_rgb(0xe8, 0xe0, 0xd0),
+                };
+                let x = inner.left() + k as f32 * bw + bw * 0.25;
+                let bar = Rect::from_min_size(Pos2::new(x, inner.top() + 12.0), egui::vec2(bw * 0.5, (inner.height() - 14.0) * (0.15 + 0.85 * v)));
+                p.rect_filled(bar, 3.0, c);
+                p.rect_stroke(bar, 3.0, Stroke::new(1.0_f32, ph.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+            }
+            let rot = ["", "ROTARY SLOW", "ROTARY FAST"][(np.v("rotary").round() as usize).min(2)];
+            text(Pos2::new(r.right() - 10.0, r.top() + 4.0), egui::Align2::RIGHT_TOP, rot.into(), 11.0);
+        }
+        "bass808" => {
+            // Pitch (top) and level (bottom) over the first second.
+            let (amt, pt, dec) = (np.v("pitch_amt"), np.v("pitch_time"), np.v("decay"));
+            let n = 120;
+            let pitch: Vec<Pos2> =
+                (0..=n).map(|i| i as f32 / n as f32).map(|u| Pos2::new(inner.left() + u * inner.width(), inner.top() + 10.0 + (1.0 - (amt / 36.0) * (-u * 1000.0 / pt).exp()) * inner.height() * 0.4)).collect();
+            let amp: Vec<Pos2> = (0..=n).map(|i| i as f32 / n as f32).map(|u| Pos2::new(inner.left() + u * inner.width(), inner.bottom() - (-6.9 * u * 1000.0 / dec).exp() * inner.height() * 0.45)).collect();
+            p.add(Shape::line(pitch, Stroke::new(2.0_f32, ph)));
+            p.add(Shape::line(amp, Stroke::new(2.0_f32, ph.gamma_multiply(0.6))));
+            text(Pos2::new(r.left() + 10.0, r.top() + 4.0), egui::Align2::LEFT_TOP, format!("PITCH DROP {amt:.0} st / {pt:.0} ms   ·   DECAY {dec:.0} ms"), 11.0);
+        }
+        "ensemble" => {
+            // The unison voices fanned out by detune and width.
+            let mode = np.v("mode").round() as usize;
+            let u = np.v("voices").round().max(1.0) as usize;
+            let (det, width) = (np.v("detune"), np.v("width") / 100.0);
+            for k in 0..u {
+                let pos = if u == 1 { 0.0 } else { k as f32 / (u - 1) as f32 * 2.0 - 1.0 };
+                let x = inner.center().x + pos * width * inner.width() * 0.45;
+                let wob = (t * (0.7 + k as f32 * 0.13) + k as f32).sin() * det * 0.08;
+                let pts: Vec<Pos2> = (0..=40).map(|i| i as f32 / 40.0).map(|v| Pos2::new(x + (v * 12.0 + t * 2.0 + k as f32).sin() * 3.0 + wob, inner.top() + 14.0 + v * (inner.height() - 14.0))).collect();
+                p.add(Shape::line(pts, Stroke::new(2.0_f32, ph.gamma_multiply(0.4 + 0.6 * (1.0 - pos.abs() * 0.5)))));
+            }
+            text(Pos2::new(r.left() + 10.0, r.top() + 4.0), egui::Align2::LEFT_TOP, format!("{}  ·  {u} voices  ·  ±{det:.0} ct", ENSEMBLES.get(mode).copied().unwrap_or("").to_uppercase()), 11.0);
+        }
+        _ => {
+            // Sandstorm: the source and the grain window on it.
+            let pos = np.v("position") / 100.0;
+            let spray = np.v("spray") / 100.0;
+            let n = 160;
+            let wave: Vec<Pos2> = (0..=n)
+                .map(|i| i as f32 / n as f32)
+                .map(|u| Pos2::new(inner.left() + u * inner.width(), inner.center().y + ((u * 37.0).sin() * 0.5 + (u * 91.0).sin() * 0.3) * (0.4 + 0.3 * (u * 5.0).sin().abs()) * inner.height() * 0.45))
+                .collect();
+            p.add(Shape::line(wave, Stroke::new(1.0_f32, ph.gamma_multiply(0.5))));
+            let x = inner.left() + pos * inner.width();
+            let wspan = spray * inner.width() * 0.5;
+            p.rect_filled(Rect::from_min_max(Pos2::new(x - wspan, inner.top()), Pos2::new(x + wspan, inner.bottom())), 3.0, ph.gamma_multiply(0.15));
+            p.line_segment([Pos2::new(x, inner.top()), Pos2::new(x, inner.bottom())], Stroke::new(2.0_f32, ph));
+            let label = np.file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "BUILT-IN TEXTURE".into());
+            text(Pos2::new(r.left() + 10.0, r.top() + 4.0), egui::Align2::LEFT_TOP, label, 11.0);
+        }
+    }
 }
 
 #[cfg(test)]

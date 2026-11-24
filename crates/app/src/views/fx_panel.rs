@@ -525,6 +525,49 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
             ],
         },
+        "fm" => {
+            let op = |n: u8| -> Section {
+                let id = |s: &str| format!("op{n}_{s}");
+                sec(format!("Operator {n}"), vec![k(id("ratio"), "Ratio"), k(id("detune"), "Detune"), big(id("level"), "Level"), k(id("attack"), "A"), k(id("decay"), "D"), k(id("sustain"), "S"), k(id("release"), "R")])
+            };
+            Panel { skin: STUDIO, bands: None, sections: vec![sec("Voice", vec![p("algorithm", "Algorithm"), k("feedback", "Feedback"), k("velocity", "Velocity"), k("gain", "Gain")]), op(1), op(2), op(3), op(4)] }
+        }
+        "organ" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Drawbars", (1..=9).map(|n| fad(format!("d{n}"), ["16'", "5 1/3'", "8'", "4'", "2 2/3'", "2'", "1 3/5'", "1 1/3'", "1'"][n - 1])).collect()),
+                sec("Percussion", vec![p("percussion", "Percussion"), p("perc_fast", "Fast decay"), k("click", "Key click")]),
+                sec("Cabinet", vec![p("vibrato", "Vibrato / chorus"), p("rotary", "Rotary"), k("drive", "Drive"), k("gain", "Gain")]),
+            ],
+        },
+        "bass808" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Pitch", vec![k("tune", "Tune"), big("pitch_amt", "Pitch drop"), k("pitch_time", "Pitch time"), k("glide", "Glide")]),
+                sec("Body", vec![big("decay", "Decay"), p("hold", "Hold"), k("sub", "Sub"), k("click", "Click")]),
+                sec("Tone", vec![k("drive", "Drive"), k("tone", "Tone"), k("gain", "Gain")]),
+            ],
+        },
+        "ensemble" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Ensemble", vec![p("mode", "Ensemble"), big("voices", "Unison"), k("detune", "Detune"), k("width", "Width")]),
+                sec("Shape", vec![k("attack", "Attack"), k("release", "Release"), k("brightness", "Brightness"), k("air", "Breath")]),
+                sec("Vibrato", vec![k("vibrato", "Depth"), k("vib_rate", "Rate"), k("gain", "Gain")]),
+            ],
+        },
+        "granular_inst" => Panel {
+            skin: MODERN,
+            bands: None,
+            sections: vec![
+                sec("Source", vec![Ctl::Custom("inst.file"), big("position", "Position"), k("scan", "Scan"), k("spray", "Spray")]),
+                sec("Grains", vec![big("size", "Grain size"), k("density", "Density"), k("pitch_rand", "Pitch random"), k("reverse", "Reverse"), k("spread", "Spread")]),
+                sec("Voice", vec![k("attack", "Attack"), k("release", "Release"), k("gain", "Gain")]),
+            ],
+        },
         _ => return None,
     };
     // Every stock effect is an analog unit in its own finish.

@@ -1,4 +1,4 @@
-//! Grimoire (lo-fi: tape wow and flutter, age, hiss, vinyl crackle, bit and rate reduction), Wisp (harmonic
+//! Codex (lo-fi: tape wow and flutter, age, hiss, vinyl crackle, bit and rate reduction), Wisp (harmonic
 //! exciter) and Familiar (auto-filter with LFO and envelope).
 
 use super::{Effect, EffectDef, ParamInfo};
@@ -22,19 +22,19 @@ const LOFI_PARAMS: &[ParamInfo] = &[
 pub fn lofi_def() -> EffectDef {
     EffectDef {
         id: "lofi",
-        name: "Grimoire (lo-fi)",
+        name: "Codex (lo-fi)",
         category: "Distortion",
         description: "Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.",
         params: LOFI_PARAMS,
         uses_sidechain: false,
-        create: |rate| Box::new(Grimoire::new(rate)),
+        create: |rate| Box::new(Codex::new(rate)),
     }
 }
 
 /// Centre of the wow / flutter delay (ms): the modulation swings around it.
 const LOFI_BASE_MS: f32 = 6.0;
 
-pub struct Grimoire {
+pub struct Codex {
     rate: f32,
     wow: f32,
     flutter: f32,
@@ -60,10 +60,10 @@ pub struct Grimoire {
     tele: [f32; 2],
 }
 
-impl Grimoire {
+impl Codex {
     pub fn new(rate: f32) -> Self {
         let n = ((LOFI_BASE_MS * 2.5) * 0.001 * rate) as usize + 4;
-        let mut g = Grimoire {
+        let mut g = Codex {
             rate,
             wow: 0.25,
             flutter: 0.15,
@@ -104,7 +104,7 @@ impl Grimoire {
     }
 }
 
-impl Effect for Grimoire {
+impl Effect for Codex {
     fn set_param(&mut self, id: &str, v: f32) {
         match id {
             "wow" => self.wow = v.clamp(0.0, 100.0) / 100.0,
@@ -583,7 +583,7 @@ mod tests {
     fn lofi_age_darkens() {
         let rate = 48000.0;
         let energy_hi = |age: f32| {
-            let mut g = Grimoire::new(rate);
+            let mut g = Codex::new(rate);
             for (k, v) in [("wow", 0.0), ("flutter", 0.0), ("hiss", -90.0), ("crackle", 0.0), ("drive", 0.0), ("age", age)] {
                 g.set_param(k, v);
             }

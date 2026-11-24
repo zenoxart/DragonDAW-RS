@@ -60,13 +60,18 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.separator();
         ui.menu_button("+ Channel", |ui| {
             // Stock instruments, then the scanned third-party instruments – one searchable list.
-            const STOCK: [(&str, &str, &str); 6] = [
+            const STOCK: [(&str, &str, &str); 11] = [
                 ("add.sampler", "Grimoire", "sampler"),
                 ("add.synth", "Cinnabar", "synth"),
                 ("add.wavetable", "Transmuter", "wavetable synth"),
                 ("add.guitar", "Drakestring", "guitar"),
                 ("add.piano", "Emberkeys", "piano"),
                 ("add.drums", "Wyrmdrum", "drum pads"),
+                ("add.fm", "Hearthfire", "FM synth"),
+                ("add.organ", "Basilica", "tonewheel organ"),
+                ("add.bass808", "Wyrmbass", "808 bass"),
+                ("add.ensemble", "Chorale", "strings, choir, pads"),
+                ("add.granular_inst", "Sandstorm", "granular sampler"),
             ];
             let plugins: Vec<_> = st.settings.plugins.iter().filter(|p| p.instrument).cloned().collect();
             let mut items: Vec<widgets::PickItem> = STOCK.iter().map(|(_, n, d)| widgets::PickItem { name: n.to_string(), detail: d.to_string(), group: "Stock instruments", tip: String::new() }).collect();

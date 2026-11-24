@@ -156,6 +156,15 @@ fn instruments_launcher_and_monitoring_do_not_allocate() {
         Instrument::Guitar(Box::new(dragon_engine::gtr::GuitarParams { mode: dragon_engine::gtr::PlayMode::Chord, ..Default::default() })),
         Instrument::Guitar(Box::new(dragon_engine::gtr::GuitarParams { mode: dragon_engine::gtr::PlayMode::Pattern, ..Default::default() })),
     ];
+    let mut kinds = kinds;
+    for k in ["fm", "organ", "bass808", "ensemble", "granular_inst"] {
+        let mut np = dragon_engine::instruments::native::NativeParams::new(k);
+        if k == "organ" {
+            np.params.insert("rotary".into(), 2.0);
+            np.params.insert("percussion".into(), 1.0);
+        }
+        kinds.push(Instrument::Native(Box::new(np)));
+    }
     let pat = p.add_pattern();
     let launch_pat = p.add_pattern();
     for (k, ins) in kinds.into_iter().enumerate() {

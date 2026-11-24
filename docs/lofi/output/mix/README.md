@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Output › Mix
+# Codex (lo-fi) › Output › Mix
 
-[Back to Output](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Output](../README.md) · [Codex (lo-fi)](../../README.md)
 
 Blends the processed signal with the dry one: 0 leaves the input untouched, the top of the range is fully processed. The dry path is delay-compensated, so blending never smears or combs.
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** 0.00 % … 100 % (default: 100 %)
 

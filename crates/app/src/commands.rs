@@ -190,6 +190,11 @@ const TABLE: &[(&str, &str, &str, i32, &str)] = &[
     ("add.guitar", "Drakestring (guitar, bass, banjo …)", "Add/Instrument", 1, ""),
     ("add.piano", "Emberkeys (piano, electric piano …)", "Add/Instrument", 1, ""),
     ("add.drums", "Wyrmdrum (drum pads)", "Add/Instrument", 1, ""),
+    ("add.fm", "Hearthfire (FM synth: electric piano, bells, bass …)", "Add/Instrument", 1, ""),
+    ("add.organ", "Basilica (tonewheel organ)", "Add/Instrument", 1, ""),
+    ("add.bass808", "Wyrmbass (808 bass)", "Add/Instrument", 1, ""),
+    ("add.ensemble", "Chorale (strings, choir, pads)", "Add/Instrument", 1, ""),
+    ("add.granular_inst", "Sandstorm (granular sampler)", "Add/Instrument", 1, ""),
     ("add.mixer", "Mixer bus", "Add", 2, ""),
     ("add.recording", "Recording channel", "Add", 2, ""),
     ("add.vca", "VCA fader", "Add", 2, ""),
@@ -1145,6 +1150,16 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             // Starts on the first steel-string preset rather than a bare init patch.
             let first = dragon_engine::gtr_library::library().first().map(|p| p.params.clone()).unwrap_or_default();
             let cid = st.session.edit("Add Drakestring", |p| p.add_channel("Drakestring", Instrument::Guitar(Box::new(first))));
+            st.ui.channel = Some(cid);
+            if !st.ui.instrument_windows.contains(&cid) {
+                st.ui.instrument_windows.push(cid);
+            }
+        }
+        "add.fm" | "add.organ" | "add.bass808" | "add.ensemble" | "add.granular_inst" => {
+            let kind = &id["add.".len()..];
+            let p = dragon_engine::instruments::native::NativeParams::new(kind);
+            let name = dragon_engine::instruments::native::def(kind).map(|d| d.name.split(" (").next().unwrap_or(d.name)).unwrap_or("Instrument");
+            let cid = st.session.edit(&format!("Add {name}"), |pr| pr.add_channel(name, Instrument::Native(Box::new(p))));
             st.ui.channel = Some(cid);
             if !st.ui.instrument_windows.contains(&cid) {
                 st.ui.instrument_windows.push(cid);

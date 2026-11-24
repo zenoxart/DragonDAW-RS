@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Noise › Crackle
+# Codex (lo-fi) › Noise › Crackle
 
-[Back to Noise](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Noise](../README.md) · [Codex (lo-fi)](../../README.md)
 
 Sets the crackle.
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** 0.00 % … 100 % (default: 20.0 %)
 

@@ -172,6 +172,11 @@ pub fn finish_of(id: &str) -> Finish {
     match id {
         "eq" | "filter" | "utility" | "imager" | "tune" | "analyzer" | "tuner" => Finish::Aluminium,
         "amp" => Finish::Tolex,
+        "fm" => Finish::Gold,
+        "organ" => Finish::Basalt,
+        "bass808" => Finish::Forged,
+        "ensemble" => Finish::Amethyst,
+        "granular_inst" => Finish::Nightshade,
         "vocoder" | "freqshift" | "freeze" => Finish::Verdigris,
         "stutter" | "tape_stop" | "granular" => Finish::Nightshade,
         "convolver" | "shimmer" => Finish::Amethyst,

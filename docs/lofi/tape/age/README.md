@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Tape › Age
+# Codex (lo-fi) › Tape › Age
 
-[Back to Tape](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Tape](../README.md) · [Codex (lo-fi)](../../README.md)
 
 Sets the age.
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** 0.00 % … 100 % (default: 40.0 %)
 

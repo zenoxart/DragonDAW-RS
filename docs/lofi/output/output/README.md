@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Output › Output
+# Codex (lo-fi) › Output › Output
 
-[Back to Output](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Output](../README.md) · [Codex (lo-fi)](../../README.md)
 
 The output level after the effect, to match the loudness before and after (compare with the power button).
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** -24.0 dB … 12.0 dB (default: 0.00 dB)
 

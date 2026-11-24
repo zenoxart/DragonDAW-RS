@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Digital › Sample rate
+# Codex (lo-fi) › Digital › Sample rate
 
-[Back to Digital](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Digital](../README.md) · [Codex (lo-fi)](../../README.md)
 
 How fast the modulation moves (in Hz, or locked to the song when Sync is on).
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** 2.00 kHz … 48.00 kHz (default: 48.00 kHz, logarithmic scale)
 

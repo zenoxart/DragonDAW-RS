@@ -470,7 +470,7 @@ fn granular(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     label(p, Pos2::new(r.left() + 12.0, r.top() + 6.0), egui::Align2::LEFT_TOP, format!("{:.0} grains/s · {:.0} ms · {:+.1} st{frz}", h.v("density"), h.v("size"), h.v("pitch")), 11.0, theme::TEXT);
 }
 
-/// Grimoire: the worn band (the age filters' response) and a wobbling pitch line (wow and flutter).
+/// Codex: the worn band (the age filters' response) and a wobbling pitch line (wow and flutter).
 fn lofi(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     use dragon_engine::dsp::{Biquad, BiquadKind};
     grid(p, r, true);

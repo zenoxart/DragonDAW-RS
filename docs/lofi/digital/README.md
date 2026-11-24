@@ -1,6 +1,6 @@
-# Grimoire (lo-fi) › Digital
+# Codex (lo-fi) › Digital
 
-[Back to Grimoire (lo-fi)](../README.md)
+[Back to Codex (lo-fi)](../README.md)
 
 | Control | Range |
 |---|---|

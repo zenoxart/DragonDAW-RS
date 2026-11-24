@@ -90,7 +90,7 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
         // Rack units get the width their layout needs (the synth's sections side by side).
         let width = match st.session.project.channel(c).map(|x| &x.instrument) {
             Some(Instrument::Wavetable(_) | Instrument::Guitar(_) | Instrument::Piano(_)) => 1300.0_f32,
-            Some(Instrument::Synth(_)) => 1180.0,
+            Some(Instrument::Synth(_) | Instrument::Native(_)) => 1180.0,
             Some(Instrument::DrumPads(_)) => 900.0,
             _ => 460.0,
         };
@@ -1228,6 +1228,7 @@ fn instrument_editor(ui: &mut Ui, st: &mut State, cid: Id) {
         Instrument::Wavetable(w) => super::wave_ui::editor(ui, st, cid, *w),
         Instrument::Guitar(g) => super::guitar_ui::editor(ui, st, cid, *g),
         Instrument::Piano(g) => super::piano_ui::editor(ui, st, cid, *g),
+        Instrument::Native(p) => super::inst_ui::native(ui, st, cid, *p),
     }
 }
 

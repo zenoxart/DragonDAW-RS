@@ -1,4 +1,4 @@
-# Grimoire (lo-fi) (lofi)
+# Codex (lo-fi) (lofi)
 
 *Distortion*
 

@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Digital › Bits
+# Codex (lo-fi) › Digital › Bits
 
-[Back to Digital](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Digital](../README.md) · [Codex (lo-fi)](../../README.md)
 
 The bit depth the signal is reduced to; fewer bits sound grittier.
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** 4.00 bit … 24.0 bit (default: 24.0 bit)
 

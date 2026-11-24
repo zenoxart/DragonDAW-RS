@@ -1,10 +1,10 @@
-# Grimoire (lo-fi) › Noise › Hiss
+# Codex (lo-fi) › Noise › Hiss
 
-[Back to Noise](../README.md) · [Grimoire (lo-fi)](../../README.md)
+[Back to Noise](../README.md) · [Codex (lo-fi)](../../README.md)
 
 Sets the hiss.
 
-Part of **Grimoire (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
+Part of **Codex (lo-fi)** – Lo-fi ageing: tape wow and flutter, a narrowing worn-out band, saturation, tape hiss, vinyl crackle, and bit-depth and sample-rate reduction.
 
 **Range:** -90.0 dB … -30.0 dB (default: -66.0 dB)
 

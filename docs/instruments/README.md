@@ -45,6 +45,51 @@ string's length.
 **Sampler.** Playback rate $r = 2^{(n - n_0)/12 + c/1200}$ for note $n$, root $n_0$ and fine tune $c$ cents; slide notes
 move $r$ towards the new note's with a one-pole of the glide time, $r \leftarrow r + (r^* - r)(1 - e^{-1/(t_g f_s)})$.
 
+## Hearthfire, Basilica, Wyrmbass, Chorale, Sandstorm
+
+Five more instruments, under **Add › Instrument** (or the command palette, *Add FM synth* … *Add granular instrument*).
+Each has the themed faceplate of the stock units, a live display and a factory preset menu.
+
+| Instrument | What it is |
+|---|---|
+| Hearthfire (FM synth) | Four operators, eight algorithms, feedback on operator 4, an ADSR per operator; velocity brightens. Electric pianos, bells, basses, brass. |
+| Basilica (tonewheel organ) | Nine drawbars, percussion (2nd / 3rd, soft / fast), scanner vibrato and chorus V1–C3, key click, drive and a rotary speaker (off / slow / fast). |
+| Wyrmbass (808 bass) | A sine with a pitch drop, long decay or hold, glide between overlapping notes, drive, tone, click and a sub octave. One note at a time. |
+| Chorale (strings, choir, pads) | Strings, two choirs (aah / ooh), warm and glass pads and brass from up to seven detuned unison voices with formant filters, vibrato and breath or bow noise. |
+| Sandstorm (granular) | Clouds of grains from a sample (**Load sample…**) or its built-in texture, played across the keyboard: position, scan, spray, grain size, density, pitch randomness, reverse, stereo spread. |
+
+### How they work
+
+**Hearthfire.** Each operator $k$ is a sine oscillator at $f_k = f_0 r_k 2^{d_k/1200}$ (ratio $r_k$, detune $d_k$ cents)
+whose phase is offset by the summed outputs of its modulators: $y_k = L_k e_k \sin(2\pi\phi_k + 2\pi\sum_{m} y_m)$.
+Operator 4 also feeds back the average of its last two outputs scaled by *Feedback*. The algorithm decides which
+operators modulate which and which are carriers (heard); the carriers' sum is scaled by $0.5/\sqrt{N_c}$. Carriers
+follow $\sqrt{v}$ of the velocity, modulators $1 - s + s\,v$ for velocity sensitivity $s$ – a harder note is brighter.
+
+**Basilica.** The drawbars mix sines at $0.5, 1.5, 1, 2, 3, 4, 5, 6, 8 \times f_0$ (16′ … 1′), normalised by the sum of
+the drawbar settings. Keys open and close with 5 ms ramps; percussion adds a decaying sine at the 2nd or 3rd harmonic,
+and the key click a short burst of noise. The scanner vibrato is a delay swept at 6.9 Hz (up to 1.2 ms deep); the
+chorus settings mix it with the dry signal. Drive is $\tanh(kx)/\sqrt{k}$ with $k = 1 + 4D$. The rotary speaker
+splits at 800 Hz: horn and drum spin towards 0.8 / 0.7 Hz (slow) or 6.7 / 5.8 Hz (fast) with inertias of 0.6 s and
+2.5 s, and their rotation drives amplitude and Doppler delay in each ear.
+
+**Wyrmbass.** Frequency $f = 440\cdot 2^{(n + t + P e_p - 69)/12}$ with the pitch envelope $e_p$ falling from 1 with the
+*Pitch time*; a new note while one is held glides there with a one-pole of the glide time,
+$n \leftarrow n + (n^* - n)(1 - e^{-1/(t_g f_s)})$, without restarting. The click is a short burst at six times the
+fundamental, the sub octave a sine at $f/2$; drive is $\tanh(kx)/k^{0.35}$ with $k = 1 + 9D$, then the tone low-pass.
+The level decays by 60 dB over *Decay*, or stays while the key is held with *Hold* on.
+
+**Chorale.** Each note is $U$ unison sawtooth-rich voices spread evenly over ±*Detune* cents and across the stereo
+width, with a vibrato LFO. A low-pass tracks the key ($f_c \propto (f/261.6)^{0.3}$, opened by *Brightness*); the choir
+modes pass the voices through three band-pass formants of the vowel *a* (730, 1090, 2440 Hz) or *u* (300, 870,
+2240 Hz). *Breath / bow noise* adds filtered noise that follows the envelope.
+
+**Sandstorm.** Each held note starts grains at the *Density* rate (±25 % jitter). A grain reads the sample at
+position $p + \text{spray}\cdot u$ (random $u$) at speed $2^{(n-60)/12 + \rho u'/12}$ (*Pitch random* $\rho$), backwards
+with the *Reverse* probability, under a Hann window of the grain size, panned at random within the *Spread*. The
+read position advances at *Scan* % of the sample per second. The sum is scaled by $1/\sqrt{\text{density}\cdot\text{size}}$
+so overlapping grains keep a steady level.
+
 ## MIDI effects
 
 Every channel has a chain of MIDI effects in its instrument window (**MIDI effects › Add**): notes pass through

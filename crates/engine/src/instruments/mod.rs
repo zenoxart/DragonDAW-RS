@@ -6,6 +6,7 @@ pub(crate) mod diversity;
 mod drums;
 mod guitar;
 pub mod kit;
+pub mod native;
 mod piano;
 mod sampler;
 mod synth;
@@ -99,6 +100,7 @@ pub fn create(model: &Model, rate: f32, cache: &SampleCache) -> Option<Box<dyn I
         Model::Wavetable(_) => Box::new(Wavetable::new(rate)),
         Model::Guitar(_) => Box::new(Guitar::new(rate)),
         Model::Piano(_) => Box::new(Piano::new(rate)),
+        Model::Native(p) => native::create(p, rate)?,
         Model::Plugin(_) => return None,
     };
     i.update(model, cache);
