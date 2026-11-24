@@ -622,28 +622,106 @@ pub fn split_by_channel(p: &mut Project, pat: Id) -> Vec<Id> {
         new_patterns.push(part);
     }
     p.patterns.splice(k..=k, new_patterns);
-    // Replace the clips.
-    let mut placements: Vec<(usize, Clip)> = Vec::new();
-    for (ti, t) in p.tracks.iter().enumerate() {
+    // Replace the clips: the first part where the clip was, the others on the tracks below – an empty one,
+    // or a new track inserted right there when the next one already holds other material (the parts stay
+    // together and never land in someone else's track).
+    let mut placements: Vec<(Id, Clip)> = Vec::new();
+    for t in &p.tracks {
         for c in t.clips.iter().filter(|c| clip_pattern(c) == Some(pat)) {
-            placements.push((ti, c.clone()));
+            placements.push((t.id, c.clone()));
         }
     }
     for t in p.tracks.iter_mut() {
         t.clips.retain(|c| clip_pattern(c) != Some(pat));
     }
-    for (ti, c) in placements {
+    // Tracks this split filled (they may take further parts of other clips at other times).
+    let mut ours: Vec<Id> = Vec::new();
+    for (tid, c) in placements {
+        let Some(mut ti) = p.tracks.iter().position(|t| t.id == tid) else { continue };
         for (j, id) in new_ids.iter().enumerate() {
-            while p.tracks.len() <= ti + j {
-                let n = p.tracks.len() + 1;
-                p.add_track(&format!("Track {n}"));
+            if j > 0 {
+                ti += 1;
+                let free = p.tracks.get(ti).is_some_and(|t| t.clips.is_empty() || ours.contains(&t.id) && !t.clips.iter().any(|x| x.start < c.end() && x.end() > c.start));
+                if !free {
+                    let n = p.tracks.len() + 1;
+                    p.add_track(&format!("Track {n}"));
+                    let t = p.tracks.pop().expect("just added");
+                    p.tracks.insert(ti, t);
+                }
             }
             let cid = p.next_id();
             let (name, color) = p.pattern(*id).map(|x| (x.name.clone(), x.color)).unwrap_or_default();
-            p.tracks[ti + j].clips.push(Clip { id: cid, name, start: c.start, length: c.length, muted: c.muted, color, kind: ClipKind::Pattern { pattern: *id } });
+            ours.push(p.tracks[ti].id);
+            p.tracks[ti].clips.push(Clip { id: cid, name, start: c.start, length: c.length, muted: c.muted, color, kind: ClipKind::Pattern { pattern: *id } });
         }
     }
     new_ids
+}
+
+/// "Split pads into channels": a drum-pads channel becomes one channel per pad that is played anywhere
+/// (notes in any pattern, or steps – they play note 60). Each new channel is a drum-pads instrument with
+/// just that pad (its layers, gain, pan, pitch), plays into the same mixer channel with the source's
+/// volume, pan, pitch and envelope, and gets that pad's notes in every pattern – the song sounds the same,
+/// but every sound has its own row, notes and settings. The new channels take the source's place in the
+/// rack; the source is removed. Returns the new channels (empty when it's not a drum-pads channel or
+/// fewer than two pads are used).
+pub fn split_drum_pads(p: &mut Project, ch: Id) -> Vec<Id> {
+    let Some(ci) = p.channels.iter().position(|c| c.id == ch) else { return Vec::new() };
+    let src = p.channels[ci].clone();
+    let Instrument::DrumPads(pads) = &src.instrument else { return Vec::new() };
+    let pads = pads.clone();
+    let pad_of = |note: u8| pad_for_note(&pads, note);
+    // Which pads are played.
+    let mut used: Vec<usize> = Vec::new();
+    for pt in &p.patterns {
+        if let Some(pc) = pt.channels.get(&ch) {
+            for n in &pc.notes {
+                if let Some(k) = pad_of(n.pitch) {
+                    if !used.contains(&k) {
+                        used.push(k);
+                    }
+                }
+            }
+            if pc.steps.iter().any(|s| s.on) {
+                if let Some(k) = pad_of(60) {
+                    if !used.contains(&k) {
+                        used.push(k);
+                    }
+                }
+            }
+        }
+    }
+    if used.len() < 2 {
+        return Vec::new();
+    }
+    used.sort_by_key(|&k| pads[k].note);
+    let mut new_ids = Vec::new();
+    let mut new_channels = Vec::new();
+    for (j, &k) in used.iter().enumerate() {
+        let id = p.next_id();
+        let pad = &pads[k];
+        let name = if pad.name.is_empty() { format!("{} {}", src.name, j + 1) } else { pad.name.clone() };
+        let mut c = src.clone();
+        c.id = id;
+        c.name = name;
+        c.color = PALETTE[(ci + j + 3) % PALETTE.len()];
+        c.instrument = Instrument::DrumPads(vec![pad.clone()]);
+        c.group = src.group.clone();
+        new_ids.push((k, id));
+        new_channels.push(c);
+    }
+    p.channels.splice(ci..=ci, new_channels);
+    for pt in p.patterns.iter_mut() {
+        let Some(pc) = pt.channels.remove(&ch) else { continue };
+        for &(k, id) in &new_ids {
+            let notes: Vec<Note> = pc.notes.iter().filter(|n| pad_of(n.pitch) == Some(k)).copied().collect();
+            let steps = if pad_of(60) == Some(k) { pc.steps.clone() } else { Vec::new() };
+            if !notes.is_empty() || steps.iter().any(|s| s.on) {
+                pt.channels.insert(id, PatternChannel { steps, notes });
+            }
+        }
+    }
+    new_ids.into_iter().map(|(_, id)| id).collect()
 }
 
 /// Cuts a pattern in two at `at` beats (on the step grid; on a bar line when it has notes, because note
@@ -829,6 +907,55 @@ mod tests {
         assert_eq!(p.tracks[0].clips.len(), 1);
         assert_eq!(p.tracks[1].clips.len(), 1, "second part on the next track");
         assert_eq!(heard(&p), before, "the song plays the same notes");
+    }
+
+    /// A drum-pads channel splits into one channel per played pad, each with its pad and notes; the song
+    /// plays the same notes at the same times.
+    #[test]
+    fn split_drum_pads_gives_each_sound_its_channel() {
+        use super::*;
+        let mut p = Project::new_default();
+        let pad = |name: &str, note: u8| Pad { name: name.into(), note, ..Default::default() };
+        let drums = p.add_channel("Drums", Instrument::DrumPads(vec![pad("Kick", 36), pad("Snare", 38), pad("Hat", 42), pad("Unused", 49)]));
+        let pat = p.patterns[0].id;
+        let n = |pitch: u8, beat: u32| Note { pitch, start: beat * PPQ, length: PPQ / 2, velocity: 0.8, ..Default::default() };
+        p.pattern_mut(pat).unwrap().channels.insert(drums, PatternChannel { steps: vec![], notes: vec![n(36, 0), n(42, 0), n(38, 1), n(42, 1), n(36, 2), n(38, 3)] });
+        let id = p.next_id();
+        p.tracks[0].clips.push(Clip { id, name: "P".into(), start: 0.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Pattern { pattern: pat } });
+        let notes_heard = |p: &Project| heard(p).into_iter().map(|(b, _, n)| (b, n)).collect::<Vec<_>>();
+        let before = notes_heard(&p);
+        let parts = split_drum_pads(&mut p, drums);
+        assert_eq!(parts.len(), 3, "kick, snare, hat – the unused pad gets no channel");
+        assert!(p.channel(drums).is_none(), "the source is replaced");
+        let names: Vec<&str> = parts.iter().map(|c| p.channel(*c).unwrap().name.as_str()).collect();
+        assert_eq!(names, ["Kick", "Snare", "Hat"]);
+        let pt = p.pattern(pat).unwrap();
+        assert_eq!(pt.channels[&parts[0]].notes.len(), 2);
+        assert_eq!(pt.channels[&parts[2]].notes.len(), 2);
+        assert_eq!(notes_heard(&p), before, "same notes at the same times");
+    }
+
+    /// The parts never land on a track that already holds other material: a new track is inserted there.
+    #[test]
+    fn split_by_channel_makes_new_tracks_when_the_next_is_taken() {
+        use super::*;
+        let (mut p, pat, _, _) = beat_project();
+        while p.tracks.len() < 2 {
+            p.add_track("Track");
+        }
+        let other = p.next_id();
+        let audio_track = p.tracks[1].id;
+        p.tracks[1].clips.push(Clip { id: other, name: "vocal".into(), start: 40.0, length: 4.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip::default()) });
+        let before = heard(&p);
+        let n = p.tracks.len();
+        let parts = split_by_channel(&mut p, pat);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(p.tracks.len(), n + 1, "a track inserted");
+        assert_eq!(p.tracks[1].clips.len(), 1, "the second part on the new track right below");
+        assert!(matches!(p.tracks[1].clips[0].kind, ClipKind::Pattern { .. }));
+        assert_eq!(p.tracks[2].id, audio_track, "the vocal track moved down, untouched");
+        assert_eq!(p.tracks[2].clips.len(), 1);
+        assert_eq!(heard(&p), before);
     }
 
     #[test]

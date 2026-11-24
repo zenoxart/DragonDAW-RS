@@ -525,6 +525,20 @@ fn channel_menu(ui: &mut Ui, st: &mut State, c: &RackChannel) {
         st.ui.midi_learn = Some(Target::ChannelVolume(cid));
         ui.close_menu();
     }
+    if matches!(c.instrument, Instrument::DrumPads(_)) {
+        ui.separator();
+        if ui.button("Split pads into channels").on_hover_text("One channel per pad you play, each with that pad's sound and notes in every pattern – the song sounds the same, every sound gets its own row").clicked() {
+            let parts = st.session.edit("Split pads into channels", |p| dragon_engine::edit::split_drum_pads(p, cid));
+            if parts.is_empty() {
+                st.toast("Play at least two pads in a pattern to split them", redhive_contracts::ui::Severity::Info);
+            } else {
+                st.ui.channel = parts.first().copied();
+                st.ui.piano_channel = parts.first().copied();
+                st.toast(format!("Split into {} channels", parts.len()), redhive_contracts::ui::Severity::Success);
+            }
+            ui.close_menu();
+        }
+    }
     ui.separator();
     if ui.button("Delete channel").clicked() {
         st.session.edit("Delete channel", |p| {
