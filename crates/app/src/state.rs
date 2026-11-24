@@ -1719,7 +1719,7 @@ impl State {
                     self.settings.controller_buttons.push((b, bind));
                     self.ui.button_learn = None;
                     self.save_settings();
-                    self.toast(format!("{} → {}", b.label(), bind.describe()), Severity::Success);
+                    self.toast(format!("{}: {}", b.label(), bind.describe()), Severity::Success);
                     continue;
                 }
             }
