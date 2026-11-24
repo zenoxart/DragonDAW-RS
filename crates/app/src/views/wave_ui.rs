@@ -27,6 +27,70 @@ const SCREEN: Color32 = Color32::from_rgb(0x0c, 0x0d, 0x12);
 const BAR: Color32 = Color32::from_rgb(0x12, 0x14, 0x18);
 /// The editor's width (fixed: laying out to the window's width would grow the window every frame).
 const W: f32 = 1270.0;
+/// The alchemist's gold: engraved titles, hairlines, the active page.
+const GOLD: Color32 = super::analog::GNOSTIC_GOLD;
+const GOLD_DIM: Color32 = Color32::from_rgb(0x8a, 0x72, 0x44);
+
+/// An alchemical sigil (drawn, so it needs no font): the element of a module.
+#[derive(Clone, Copy)]
+enum Sigil {
+    /// △ fire – the oscillators.
+    Fire,
+    /// ▽ water – the filters.
+    Water,
+    /// △ with a bar – air: noise.
+    Air,
+    /// ▽ with a bar – earth: the sub.
+    Earth,
+    /// ☿ mercury – the moving things: envelopes, LFOs, macros.
+    Mercury,
+    /// ☉ the sun (gold) – everything else.
+    Sun,
+}
+
+fn sigil_for(title: &str) -> Sigil {
+    let t = title.to_ascii_lowercase();
+    if t.starts_with("osc") {
+        Sigil::Fire
+    } else if t.contains("filter") {
+        Sigil::Water
+    } else if t.contains("noise") {
+        Sigil::Air
+    } else if t.contains("sub") {
+        Sigil::Earth
+    } else if t.contains("env") || t.contains("lfo") || t.contains("macro") || t.contains("mod") {
+        Sigil::Mercury
+    } else {
+        Sigil::Sun
+    }
+}
+
+fn draw_sigil(p: &egui::Painter, c: Pos2, r: f32, sigil: Sigil, col: Color32) {
+    let st = Stroke::new(1.3_f32, col);
+    let tri = |up: bool| {
+        let s = if up { -1.0 } else { 1.0 };
+        vec![c + Vec2::new(0.0, s * r), c + Vec2::new(-r * 0.9, -s * r * 0.6), c + Vec2::new(r * 0.9, -s * r * 0.6)]
+    };
+    match sigil {
+        Sigil::Fire | Sigil::Water | Sigil::Air | Sigil::Earth => {
+            let up = matches!(sigil, Sigil::Fire | Sigil::Air);
+            p.add(egui::Shape::closed_line(tri(up), st));
+            if matches!(sigil, Sigil::Air | Sigil::Earth) {
+                p.line_segment([c + Vec2::new(-r * 0.75, 0.0), c + Vec2::new(r * 0.75, 0.0)], st);
+            }
+        }
+        Sigil::Mercury => {
+            p.circle_stroke(c + Vec2::new(0.0, -r * 0.15), r * 0.45, st);
+            p.line_segment([c + Vec2::new(0.0, r * 0.3), c + Vec2::new(0.0, r)], st);
+            p.line_segment([c + Vec2::new(-r * 0.35, r * 0.68), c + Vec2::new(r * 0.35, r * 0.68)], st);
+            p.add(egui::Shape::line(vec![c + Vec2::new(-r * 0.45, -r * 1.0), c + Vec2::new(0.0, -r * 0.6), c + Vec2::new(r * 0.45, -r * 1.0)], st));
+        }
+        Sigil::Sun => {
+            p.circle_stroke(c, r * 0.8, st);
+            p.circle_filled(c, r * 0.2, col);
+        }
+    }
+}
 
 fn set(p: &mut Project, cid: Id, f: impl FnOnce(&mut WavetableParams)) {
     if let Some(Instrument::Wavetable(w)) = p.channel_mut(cid).map(|c| &mut c.instrument) {
@@ -329,24 +393,35 @@ fn mod_handle(ui: &mut Ui, src: ModSource) -> egui::Response {
 #[allow(clippy::too_many_arguments)]
 fn module(ui: &mut Ui, st: &mut State, title: &str, color: Color32, power: Option<bool>, width: f32, height: f32, header: impl FnOnce(&mut Ui, &mut State), body: impl FnOnce(&mut Ui, &mut State)) -> bool {
     let mut toggled = false;
-    egui::Frame::NONE.fill(theme::PANEL).stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x30, 0x35, 0x3d))).corner_radius(4.0).show(ui, |ui| {
+    // A pane of smoked glass set into the stone, framed in gold; the header is an engraved band with the
+    // module's alchemical sigil and a gem as its power switch.
+    egui::Frame::NONE.fill(Color32::from_black_alpha(165)).stroke(Stroke::new(1.0_f32, GOLD_DIM.gamma_multiply(0.7))).corner_radius(6.0).show(ui, |ui| {
         ui.set_width(width);
         ui.set_min_height(height);
         ui.vertical(|ui| {
-            egui::Frame::NONE.fill(BAR).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+            let head = egui::Frame::NONE.fill(Color32::from_black_alpha(140)).corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
                 ui.set_width(width - 12.0);
                 ui.horizontal(|ui| {
                     if let Some(on) = power {
-                        let (rect, r) = ui.allocate_exact_size(Vec2::new(12.0, 12.0), Sense::click());
-                        ui.painter().rect_filled(rect, 2.0, if on { color } else { theme::GRID });
+                        // A gem: lit in the module's colour when on.
+                        let (rect, r) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), Sense::click());
+                        let c = rect.center();
+                        let gem = [c + Vec2::new(0.0, -6.0), c + Vec2::new(5.5, 0.0), c + Vec2::new(0.0, 6.0), c + Vec2::new(-5.5, 0.0)];
+                        if on {
+                            ui.painter().circle_filled(c, 8.0, color.gamma_multiply(0.18));
+                        }
+                        ui.painter().add(egui::Shape::convex_polygon(gem.to_vec(), if on { color } else { Color32::from_gray(40) }, Stroke::new(1.0_f32, GOLD_DIM)));
                         if r.on_hover_text(if on { "On – click to switch off" } else { "Off – click to switch on" }).clicked() {
                             toggled = true;
                         }
                     }
-                    ui.label(RichText::new(title).strong().size(12.0).color(if power != Some(false) { theme::TEXT } else { theme::TEXT_DIM }));
+                    let (sr, _) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), Sense::hover());
+                    draw_sigil(ui.painter(), sr.center(), 6.0, sigil_for(title), if power == Some(false) { GOLD_DIM } else { GOLD });
+                    ui.label(RichText::new(title.to_uppercase()).strong().size(11.0).extra_letter_spacing(0.4).color(if power != Some(false) { GOLD } else { GOLD_DIM }));
                     header(ui, st);
                 });
             });
+            ui.painter().line_segment([head.response.rect.left_bottom(), head.response.rect.right_bottom()], Stroke::new(1.0_f32, GOLD_DIM.gamma_multiply(0.6)));
             egui::Frame::NONE.inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
                 ui.set_width(width - 12.0);
                 ui.vertical(|ui| body(ui, st));
@@ -401,6 +476,32 @@ fn star(ui: &mut Ui, on: bool) -> egui::Response {
 // ------------------------------------------------------------------------------------------------ the editor
 
 pub fn editor(ui: &mut Ui, st: &mut State, cid: Id, p: WavetableParams) {
+    // The whole instrument is one slab of dark amethyst rock (painted behind once its size is known), the
+    // modules set into it as gold-framed glass – the same family as the alchemy effects.
+    let slab_at = ui.painter().add(egui::Shape::Noop);
+    let top = ui.cursor().min;
+    editor_body(ui, st, cid, p);
+    let rect = Rect::from_min_max(top - Vec2::new(4.0, 4.0), Pos2::new(top.x + W + 4.0, ui.min_rect().bottom() + 4.0));
+    let mut shapes = Vec::new();
+    match super::analog::plate_texture(ui.ctx(), super::analog::Finish::Amethyst) {
+        Some(t) => {
+            let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, (rect.height() / rect.width()).min(1.0)));
+            let mut m = egui::Mesh::with_texture(t.id());
+            m.add_rect_with_uv(rect, uv, Color32::from_gray(150));
+            shapes.push(egui::Shape::mesh(m));
+        }
+        None => shapes.push(egui::Shape::rect_filled(rect, 8.0, Color32::from_rgb(0x1c, 0x18, 0x22))),
+    }
+    shapes.push(egui::Shape::rect_stroke(rect, 8.0, Stroke::new(2.0_f32, GOLD_DIM), egui::StrokeKind::Inside));
+    // Brass screws in the corners.
+    for c in [rect.left_top() + Vec2::new(9.0, 9.0), rect.right_top() + Vec2::new(-9.0, 9.0), rect.left_bottom() + Vec2::new(9.0, -9.0), rect.right_bottom() + Vec2::new(-9.0, -9.0)] {
+        shapes.push(egui::Shape::circle_filled(c, 4.0, GOLD_DIM));
+        shapes.push(egui::Shape::line_segment([c + Vec2::new(-2.5, -2.5), c + Vec2::new(2.5, 2.5)], Stroke::new(1.0_f32, Color32::from_black_alpha(160))));
+    }
+    ui.painter().set(slab_at, egui::Shape::Vec(shapes));
+}
+
+fn editor_body(ui: &mut Ui, st: &mut State, cid: Id, p: WavetableParams) {
     let page_id = egui::Id::new(("wave.page", cid));
     let mut page: Page = ui.data(|d| d.get_temp::<u8>(page_id)).map(|t| Page::ALL[t as usize % 5]).unwrap_or_default();
     top_bar(ui, st, cid, &p, &mut page);
@@ -426,20 +527,30 @@ pub fn editor(ui: &mut Ui, st: &mut State, cid: Id, p: WavetableParams) {
 }
 
 fn top_bar(ui: &mut Ui, st: &mut State, cid: Id, p: &WavetableParams, page: &mut Page) {
-    egui::Frame::NONE.fill(BAR).corner_radius(4.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+    egui::Frame::NONE.fill(Color32::from_black_alpha(175)).stroke(Stroke::new(1.0_f32, GOLD_DIM)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
         ui.set_width(W - 16.0);
         ui.horizontal(|ui| {
+            // The ouroboros seal and the engraved name.
+            let (sr, _) = ui.allocate_exact_size(Vec2::new(36.0, 36.0), Sense::hover());
+            match super::fx_mod::art(ui.ctx(), "fx-ouroboros", super::fx_mod::OUROBOROS) {
+                Some(t) => {
+                    ui.painter().image(t.id(), sr, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), GOLD);
+                }
+                None => draw_sigil(ui.painter(), sr.center(), 14.0, Sigil::Sun, GOLD),
+            }
             ui.vertical(|ui| {
-                ui.label(RichText::new("TRANSMUTER").size(17.0).strong().color(theme::ACCENT));
-                ui.label(RichText::new("wavetable synth").size(9.0).color(theme::TEXT_DIM));
+                ui.label(RichText::new("TRANSMUTER").size(18.0).strong().extra_letter_spacing(2.5).color(GOLD));
+                ui.label(RichText::new("ALCHEMICAL WAVETABLE ENGINE").size(8.5).extra_letter_spacing(1.0).color(GOLD_DIM));
             });
             ui.add_space(8.0);
             for pg in Page::ALL {
                 let on = *page == pg && !st.ui.wave.open;
-                let b = egui::Button::new(RichText::new(pg.name()).strong().size(13.0).color(if on { theme::TEXT } else { theme::TEXT_DIM })).fill(if on { theme::PANEL_2 } else { BAR }).min_size(Vec2::new(70.0, 34.0));
+                let b = egui::Button::new(RichText::new(pg.name()).strong().size(13.0).extra_letter_spacing(1.0).color(if on { GOLD } else { theme::TEXT_DIM }))
+                    .fill(if on { Color32::from_rgba_unmultiplied(0xe2, 0xc0, 0x76, 22) } else { Color32::TRANSPARENT })
+                    .min_size(Vec2::new(70.0, 34.0));
                 let r = ui.add(b);
                 if on {
-                    ui.painter().line_segment([r.rect.left_top() + Vec2::new(8.0, 1.0), r.rect.right_top() + Vec2::new(-8.0, 1.0)], Stroke::new(2.0_f32, theme::ACCENT));
+                    ui.painter().line_segment([r.rect.left_bottom() + Vec2::new(8.0, -1.0), r.rect.right_bottom() + Vec2::new(-8.0, -1.0)], Stroke::new(2.0_f32, GOLD));
                 }
                 if r.clicked() {
                     *page = pg;

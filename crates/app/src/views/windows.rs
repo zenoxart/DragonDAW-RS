@@ -103,6 +103,8 @@ pub fn show(ctx: &egui::Context, st: &mut State) {
             .resizable(true)
             .vscroll(true)
             .default_width(width.min(sw))
+            // The big racks open tall enough to show their keyboard.
+            .default_height(if width >= 1180.0 { (ctx.screen_rect().height() - 80.0).min(940.0) } else { 0.0 })
             .min_width((width * 0.75).min(sw))
             .max_width((width * 1.2).min(sw))
             .max_height(ctx.screen_rect().height() - 60.0)
