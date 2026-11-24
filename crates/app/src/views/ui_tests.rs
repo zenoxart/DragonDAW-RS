@@ -2209,6 +2209,9 @@ fn undo_history_is_saved_with_the_project_and_reopens() {
     // Reopen in a fresh state: every step is back and can be undone.
     let mut h2 = Harness::new();
     h2.st.open_path(&path);
+    // The test never runs the frames that would clear the "opening" marker: clear it, or the next start
+    // of the app would think this project crashed it.
+    crate::crash::clear(&h2.st.ctx.paths.local, "opening");
     assert_eq!(h2.st.session.history.timeline(), steps);
     assert_eq!(h2.st.session.project.bpm, 120.0);
     // The browser lists it under Current project / History.
