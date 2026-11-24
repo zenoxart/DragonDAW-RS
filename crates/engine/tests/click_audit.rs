@@ -288,3 +288,52 @@ fn dump_spike() {
         println!("cycle {c:+}: min {lo:+.3} max {hi:+.3}");
     }
 }
+
+/// CPU of every stock effect at its defaults on music, as % of one core in real time
+/// (`cargo test --release -p dragon-engine --test click_audit cpu_table -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn cpu_table() {
+    dragon_engine::dsp::denormal::flush_to_zero();
+    let n = (RATE * 6.0) as usize;
+    let (inl, inr) = music(n);
+    let mut rows = Vec::new();
+    for def in registry() {
+        let mut e = create(def.id, RATE, &def.defaults()).unwrap();
+        e.set_tempo(BPM);
+        let (mut l, mut r) = (inl.clone(), inr.clone());
+        // Warm-up second, then measure.
+        let warm = RATE as usize;
+        for (a, b) in l[..warm].chunks_mut(256).zip(r[..warm].chunks_mut(256)) {
+            e.process(a, b, None);
+        }
+        let t0 = std::time::Instant::now();
+        for (a, b) in l[warm..].chunks_mut(256).zip(r[warm..].chunks_mut(256)) {
+            e.process(a, b, None);
+        }
+        let pct = t0.elapsed().as_secs_f64() / ((n - warm) as f64 / RATE as f64) * 100.0;
+        rows.push((pct, def.id));
+    }
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let total: f64 = rows.iter().map(|r| r.0).sum();
+    for (pct, id) in &rows {
+        println!("{id:<16} {pct:6.3} %");
+    }
+    println!("mean per effect: {:.3} % of a core", total / rows.len() as f64);
+}
+
+/// One effect for a profiler: `AUDIT_ONLY=<id>` (ignored).
+#[test]
+#[ignore]
+fn profile_one() {
+    let Ok(id) = std::env::var("AUDIT_ONLY") else { return };
+    dragon_engine::dsp::denormal::flush_to_zero();
+    let def = registry().iter().find(|d| d.id == id).unwrap();
+    let n = (RATE * 2.0) as usize;
+    let (inl, inr) = music(n);
+    let mut e = create(def.id, RATE, &def.defaults()).unwrap();
+    let (mut l, mut r) = (inl, inr);
+    for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+        e.process(a, b, None);
+    }
+}

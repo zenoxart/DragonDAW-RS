@@ -50,7 +50,10 @@ pub fn tube_curve(t: &TubeModel, bias: f32, x: f32) -> f32 {
     // Pentode: symmetric with a flatter top (odd harmonics).
     let pen = {
         let u = t.k * x;
-        u / (1.0 + u.abs().powf(2.5)).powf(0.4) / t.k.max(0.3)
+        // |u|^2.5 = u²·√|u|; (1 + p)^0.4 through the fast log / exp (same curve, no powf).
+        let a = u.abs();
+        let p = a * a * a.sqrt();
+        u / super::fast_exp2(0.4 * super::fast_log2(1.0 + p)) / t.k.max(0.3)
     };
     let y = tri * (1.0 - t.pentode) + pen * t.pentode;
     y * 1.15

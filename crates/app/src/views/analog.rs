@@ -677,8 +677,11 @@ pub fn nameplate(ui: &mut egui::Ui, pl: &Plate) {
         let vr = Rect::from_min_size(Pos2::new(right - 40.0, r.top() + 4.0), Vec2::new(40.0, h - 8.0));
         valve(&p, vr, g, t);
     }
-    if moving || (motion && pl.enabled) {
+    if moving {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    } else if motion && pl.enabled {
+        // Ambient glow only: a slower tick keeps it alive without redrawing at full rate.
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
 }
 

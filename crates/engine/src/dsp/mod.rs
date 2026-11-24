@@ -2,6 +2,33 @@
 //! level conversions. Everything is allocation-free after construction.
 
 pub mod denormal;
+
+#[cfg(test)]
+mod fast_math_tests {
+    use super::*;
+
+    /// The fast conversions match libm to well below anything audible (1e-4 dB, 1e-5 relative).
+    #[test]
+    fn fast_db_conversions_are_exact_enough() {
+        let mut worst = (0.0f32, 0.0f32);
+        let mut g = 1e-8f32;
+        while g < 1e4 {
+            let a = gain_to_db(g);
+            let b = 20.0 * g.log10();
+            worst.0 = worst.0.max((a - b).abs());
+            g *= 1.0137;
+        }
+        let mut db = -170.0f32;
+        while db < 80.0 {
+            let a = db_to_gain(db);
+            let b = 10f32.powf(db / 20.0);
+            worst.1 = worst.1.max(((a - b) / b).abs());
+            db += 0.0731;
+        }
+        assert!(worst.0 < 1e-4, "gain_to_db off by {} dB", worst.0);
+        assert!(worst.1 < 1e-5, "db_to_gain off by {} relative", worst.1);
+    }
+}
 pub mod loudness;
 pub mod oversample;
 pub mod spectrum;
@@ -10,9 +37,40 @@ pub mod tube;
 
 use crate::model::Envelope;
 
+/// log₂(x) for x > 0, to about 2e-7 (the dB conversions run per sample in every detector; libm's
+/// log10f is several times slower). Exponent from the bits, the mantissa reduced to [√½, √2) and
+/// log₂(m) = 2/ln 2 · atanh((m − 1)/(m + 1)) as its odd series to t⁹.
+#[inline]
+pub fn fast_log2(x: f32) -> f32 {
+    let bits = x.to_bits();
+    let mut e = ((bits >> 23) & 0xff) as i32 - 127;
+    let mut m = f32::from_bits((bits & 0x007f_ffff) | 0x3f80_0000);
+    if m > std::f32::consts::SQRT_2 {
+        m *= 0.5;
+        e += 1;
+    }
+    let t = (m - 1.0) / (m + 1.0);
+    let t2 = t * t;
+    let s = t * (1.0 + t2 * (1.0 / 3.0 + t2 * (1.0 / 5.0 + t2 * (1.0 / 7.0 + t2 * (1.0 / 9.0)))));
+    e as f32 + s * (2.0 / std::f32::consts::LN_2)
+}
+
+/// 2^y, relative error about 2e-7 (|y| < 126): integer part into the exponent bits, the fraction by a
+/// degree-7 polynomial on [−½, ½].
+#[inline]
+pub fn fast_exp2(y: f32) -> f32 {
+    let y = y.clamp(-126.0, 126.0);
+    let i = y.round();
+    let f = y - i;
+    let z = f * std::f32::consts::LN_2;
+    let p = 1.0 + z * (1.0 + z * (0.5 + z * (1.0 / 6.0 + z * (1.0 / 24.0 + z * (1.0 / 120.0 + z * (1.0 / 720.0 + z * (1.0 / 5040.0)))))));
+    p * f32::from_bits(((i as i32 + 127) as u32) << 23)
+}
+
 #[inline]
 pub fn db_to_gain(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
+    // 10^(dB/20) = 2^(dB · log₂10 / 20).
+    fast_exp2(db * (std::f32::consts::LOG2_10 / 20.0))
 }
 
 #[inline]
@@ -20,7 +78,7 @@ pub fn gain_to_db(g: f32) -> f32 {
     if g <= 1e-9 {
         -180.0
     } else {
-        20.0 * g.log10()
+        fast_log2(g) * (20.0 / std::f32::consts::LOG2_10)
     }
 }
 

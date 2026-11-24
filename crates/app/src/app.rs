@@ -14,6 +14,7 @@ pub struct DragonApp {
     /// The startup sound has played (or was skipped).
     sound_played: bool,
     styled: bool,
+    window_title: String,
     quit_confirmed: bool,
     confirm_quit: bool,
     last_compile: std::time::Instant,
@@ -82,7 +83,7 @@ impl DragonApp {
         let dock = DockManager::load(&st.ctx.paths);
         let splash = st.settings.show_splash.then(|| Splash::new(&cc.egui_ctx, st.settings.reduced_motion));
         cc.egui_ctx.set_zoom_factor(st.settings.ui_scale.clamp(0.6, 2.5));
-        DragonApp { st, dock, splash, sound_played: false, styled: false, quit_confirmed: false, confirm_quit: false, last_compile: std::time::Instant::now() }
+        DragonApp { st, dock, splash, sound_played: false, styled: false, window_title: String::new(), quit_confirmed: false, confirm_quit: false, last_compile: std::time::Instant::now() }
     }
 
     fn run_command(&mut self, id: &str, ctx: &egui::Context) {
@@ -370,6 +371,9 @@ impl eframe::App for DragonApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if std::env::var_os("DRAGON_REPAINT_LOG").is_some() {
+            eprintln!("frame {} causes {:?}", ctx.cumulative_pass_nr(), ctx.repaint_causes());
+        }
         if !self.styled {
             theme::apply(ctx);
             self.styled = true;
@@ -388,7 +392,13 @@ impl eframe::App for DragonApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_quit = true;
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} – Dragon DAW", self.st.session.title())));
+        // Only on change: every viewport command forces another frame, so sending it each frame kept the
+        // UI redrawing continuously even when nothing moved.
+        let title = format!("{} – Dragon DAW", self.st.session.title());
+        if self.window_title != title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
 
         self.handle_input(ctx);
         self.pump(ctx);
@@ -483,8 +493,12 @@ impl eframe::App for DragonApp {
         let playing = self.st.transport().playing || self.splash.is_some();
         if playing {
             ctx.request_repaint();
+        } else if self.st.audio.meters().hot() {
+            // Meters still falling (or a monitored input): a smooth but capped rate.
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            // Idle: input events repaint at once anyway, so a slow tick is enough for clocks and polls.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
         if self.st.ctx.toasts.iter().any(|t| t.severity == Severity::Error) {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));

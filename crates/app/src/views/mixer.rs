@@ -762,7 +762,7 @@ fn cables(ui: &mut Ui, st: &mut State, all: &[MixerChannel], rects: &[(Id, egui:
         }
     }
     if animate {
-        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
     }
 }
 

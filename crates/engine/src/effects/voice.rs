@@ -11,7 +11,7 @@ use crate::dsp::{Biquad, BiquadKind};
 
 fn to_db(x: f32) -> f32 {
     if x > 1e-7 {
-        20.0 * x.log10()
+        crate::dsp::gain_to_db(x)
     } else {
         -120.0
     }
@@ -21,7 +21,7 @@ fn from_db(db: f32) -> f32 {
     if db <= -120.0 {
         0.0
     } else {
-        10f32.powf(db * 0.05)
+        crate::dsp::db_to_gain(db)
     }
 }
 

@@ -29,6 +29,19 @@ pub type SharedEffect = Arc<Mutex<Box<dyn Effect>>>;
 pub struct DryDelay {
     buf: [Vec<f32>; 2],
     pos: usize,
+    /// Blocks in a row with silent input and silent output: past [`QUIET_BLOCKS`] a stock effect is
+    /// skipped until sound comes back (an idle track's effects cost nothing).
+    quiet: u32,
+}
+
+/// Silent-in / silent-out blocks before a stock effect is skipped (its latency, delay lines and tails
+/// have gone through by then: the output was silent for these blocks too).
+const QUIET_BLOCKS: u32 = 4;
+
+/// Below −120 dBFS.
+#[inline]
+fn silent(l: &[f32], r: &[f32]) -> bool {
+    l.iter().chain(r.iter()).all(|x| x.abs() < 1e-6)
 }
 
 impl DryDelay {
@@ -401,6 +414,8 @@ struct CInsert {
     sidechain: Option<usize>,
     mods: Vec<CMod>,
     dry: SharedDry,
+    /// A built-in effect (may be skipped in silence); hosted plugins always run.
+    stock: bool,
 }
 
 /// A compiled modulation route of a built-in effect.
@@ -614,6 +629,7 @@ impl Song {
                     sidechain: ins.sidechain.and_then(|s| strip_index.get(&s).copied()).filter(|&s| s != i),
                     mods,
                     dry,
+                    stock: ins.plugin.is_none(),
                 });
             }
             let audible = !c.muted && (!any_solo || solo_ok.contains(&i));
@@ -1095,6 +1111,10 @@ impl Meters {
 
     pub fn snapshot(&self) -> MeterValues {
         self.inner.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+    /// Whether any meter still shows signal (the UI keeps animating until they have fallen).
+    pub fn hot(&self) -> bool {
+        self.inner.lock().map(|m| m.strips.values().any(|v| v.0 > 1e-4 || v.1 > 1e-4)).unwrap_or(false)
     }
     /// Lets the meters fall (called by the UI each frame).
     pub fn decay(&self, factor: f32) {
@@ -1830,6 +1850,12 @@ impl Renderer {
                             // A latent effect's dry line is fed every block, so a mix moving below 100 % finds
                             // the recent dry signal in it.
                             let mut dly = ins.dry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let quiet_in = ins.stock && silent(bl, br);
+                            if quiet_in && dly.quiet >= QUIET_BLOCKS {
+                                // Silence in, and its output has been silent too: nothing to do.
+                                slot.lv.push(block_level(ins.id, bl, br));
+                                continue;
+                            }
                             if mix >= 0.999 && mix0 >= 0.999 && dly.len() == 0 {
                                 e.process(bl, br, None);
                             } else {
@@ -1846,6 +1872,7 @@ impl Renderer {
                                 }
                             }
                             guard_finite(&mut **e, ins.id, bl, br);
+                            dly.quiet = if quiet_in && silent(bl, br) { dly.quiet + 1 } else { 0 };
                             slot.lv.push(block_level(ins.id, bl, br));
                             let g = e.gain_reduction();
                             if g > 0.01 {
@@ -1944,6 +1971,11 @@ impl Renderer {
                         e.set_position(b0, playing);
                         crate::fault::set_current(Some(ins.id));
                         let mut dly = ins.dry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let quiet_in = ins.stock && silent(bl, br) && sc.is_none_or(|(a, b)| silent(a, b));
+                        if quiet_in && dly.quiet >= QUIET_BLOCKS {
+                            lv.push(block_level(ins.id, bl, br));
+                            continue;
+                        }
                         if mix >= 0.999 && mix0 >= 0.999 && dly.len() == 0 {
                             e.process(bl, br, sc);
                         } else {
@@ -1960,6 +1992,7 @@ impl Renderer {
                             }
                         }
                         guard_finite(&mut **e, ins.id, bl, br);
+                        dly.quiet = if quiet_in && silent(bl, br) { dly.quiet + 1 } else { 0 };
                         lv.push(block_level(ins.id, bl, br));
                         let g = e.gain_reduction();
                         if g > 0.01 {
@@ -2780,6 +2813,102 @@ mod tests {
         let step = out[512 * 19..512 * 22].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
         assert!(step < 0.06, "step {step}");
         assert!(out[512 * 30..].iter().fold(0.0f32, |m, x| m.max(x.abs())) < 0.05, "volume applied");
+    }
+
+    /// 400 stock effects at once: 50 tracks, 8 effects each (every stock effect in turn), music on 25
+    /// of them (the others silent, as in a real project), rendered for 10 s through the mixer with its
+    /// worker threads. Prints the load (`cargo test --release -p dragon-engine bench_400 -- --ignored
+    /// --nocapture`).
+    #[test]
+    #[ignore]
+    fn bench_400_effects() {
+        crate::dsp::denormal::flush_to_zero();
+        let dir = tempfile::tempdir().unwrap();
+        let f = sine_file(dir.path(), "a.wav", 12.0);
+        let reg = crate::effects::registry();
+        let mut p = Project::empty();
+        let mut k = 0;
+        for t in 0..50 {
+            let tid = p.add_track(&format!("T{t}"));
+            if t % 2 == 0 || std::env::var("BENCH_ALL").is_ok() {
+                let id = p.next_id();
+                p.track_mut(tid).unwrap().clips.push(Clip {
+                    id,
+                    name: "a".into(),
+                    start: 0.0,
+                    length: 24.0,
+                    muted: false,
+                    color: Rgb::default(),
+                    kind: ClipKind::Audio(AudioClip { source: f.clone(), ..Default::default() }),
+                });
+            }
+            let m = p.track(tid).unwrap().mixer;
+            for _ in 0..8 {
+                let def = &reg[k % reg.len()];
+                k += 1;
+                let iid = p.next_id();
+                p.mixer.get_mut(m).unwrap().inserts.push(Insert {
+                    id: iid,
+                    effect: def.id.into(),
+                    enabled: true,
+                    mix: 1.0,
+                    params: def.defaults(),
+                    sidechain: None,
+                    plugin: None,
+                    preset: String::new(),
+                    mods: Vec::new(),
+                });
+            }
+        }
+        p.bpm = 120.0;
+        let cache = SampleCache::default();
+        let mut pool = Pool::new();
+        let mut r = offline_renderer(&p, &cache, 48000.0, &mut pool);
+        crate::mixpool::MixPool::global().set_always(true);
+        r.play(PlayMode::Song);
+        let (mut l, mut rr) = (vec![0.0; 256], vec![0.0; 256]);
+        // Warm up 1 s, measure 10 s.
+        for _ in 0..(48000 / 256) {
+            r.render(&mut l, &mut rr, &[]);
+        }
+        let blocks = 48000 * 10 / 256;
+        let t0 = std::time::Instant::now();
+        let mut worst = 0.0f64;
+        for _ in 0..blocks {
+            let b0 = std::time::Instant::now();
+            r.render(&mut l, &mut rr, &[]);
+            worst = worst.max(b0.elapsed().as_secs_f64());
+        }
+        let secs = t0.elapsed().as_secs_f64();
+        let threads = crate::mixpool::MixPool::global().threads();
+        println!("400 stock effects, 10 s of audio: {:.2} s on {threads} threads -> {:.0} % of real time (worst block {:.1} % of its 5.3 ms)", secs, secs / 10.0 * 100.0, worst / (256.0 / 48000.0) * 100.0);
+        println!("single-core equivalent: {:.0} % of one core", secs / 10.0 * 100.0 * threads as f64);
+    }
+
+    /// A silent track's effects are skipped once their output is silent too – the reverb tail after a
+    /// clip still plays out in full, and a clip after the silence is processed again.
+    #[test]
+    fn silent_effects_are_skipped_without_losing_tails() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = sine_file(dir.path(), "a.wav", 0.5);
+        let mut p = Project::new_default();
+        for start in [0.0, 12.0] {
+            let id = p.next_id();
+            p.tracks[0].clips.push(Clip { id, name: "a".into(), start, length: 1.0, muted: false, color: Rgb::default(), kind: ClipKind::Audio(AudioClip { source: f.clone(), ..Default::default() }) });
+        }
+        let m = p.tracks[0].mixer;
+        let iid = p.next_id();
+        let params = crate::effects::find("reverb").unwrap().defaults();
+        p.mixer.get_mut(m).unwrap().inserts.push(Insert { id: iid, effect: "reverb".into(), enabled: true, mix: 1.0, params, sidechain: None, plugin: None, preset: String::new(), mods: Vec::new() });
+        p.bpm = 120.0;
+        let (l, _) = render_secs(&p, 8.0);
+        let rms = |a: usize, b: usize| (l[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt();
+        let sec = |s: f32| (s * 44100.0) as usize;
+        // The clip ends at 0.5 s; the tail goes on after it.
+        assert!(rms(sec(0.6), sec(0.9)) > 1e-3, "the tail plays: {}", rms(sec(0.6), sec(0.9)));
+        // Long after: silence (skipped), then the second clip at 6 s comes through the reverb again.
+        assert!(rms(sec(5.0), sec(5.9)) < 1e-5, "silence");
+        assert!(rms(sec(6.1), sec(6.4)) > 1e-2, "the next clip is processed");
     }
 
     /// Recording notes in pattern mode loops the pattern with its channels playing (it used to switch to
