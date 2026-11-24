@@ -332,6 +332,10 @@ pub fn mini_knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32,
     r
 }
 
+/// The height of every control in the app's toolbars (transport, channel rack, playlist, piano roll):
+/// buttons, menus, combo boxes and fields all line up.
+pub const BAR_H: f32 = 24.0;
+
 /// The level scale shared by the mixer's dB scale, meters and faders, so a number, a meter's top and a
 /// fader cap at the same level sit at the same height. A console taper: linear in dB between these
 /// points (more room around 0 dB, where you balance), the last stretch to −∞ linear in gain.

@@ -858,7 +858,13 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             }
         }
         "edit.duplicate" => {
-            if !st.ui.clips.is_empty() {
+            // The focused editor decides: in the piano roll the notes (all of them when none is selected,
+            // like FL Studio), even if clips are still selected in the playlist.
+            if st.ui.editor == crate::state::Editor::PianoRoll && st.ui.notes.is_empty() {
+                let n = st.ui.piano_channel.and_then(|c| st.session.project.pattern(st.ui.pattern).and_then(|p| p.channels.get(&c))).map(|x| x.notes.len()).unwrap_or(0);
+                st.ui.notes = (0..n).collect();
+            }
+            if st.ui.editor != crate::state::Editor::PianoRoll && !st.ui.clips.is_empty() {
                 let ids = st.ui.clips.clone();
                 st.ui.clips = st.session.edit("Duplicate clips", |p| dragon_engine::edit::duplicate_clips(p, &ids));
             } else {

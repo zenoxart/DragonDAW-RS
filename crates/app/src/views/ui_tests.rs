@@ -1850,23 +1850,34 @@ fn master_spectrum_rotates_with_a_drag() {
     assert_eq!(view(&h), before, "double-click resets the view");
 }
 
-/// Arrow keys in the playlist: with clips selected they move the clips, without they scroll the view.
+/// Arrow keys in the playlist: with clips selected they move the clips; without, Left / Right move the
+/// playhead (faster while held) and Up / Down scroll the tracks.
 #[test]
-fn playlist_arrow_keys_move_clips_or_scroll() {
+fn playlist_arrow_keys_move_clips_or_playhead() {
     let mut h = Harness::new();
     h.st.ui.editor = crate::state::Editor::Playlist;
     let run = |h: &mut Harness, id: &str| {
         let ctx = h.ctx.clone();
         crate::commands::execute(&mut h.st, id, &ctx);
     };
-    // Nothing selected: Right scrolls a bar, Down a track.
     h.st.ui.clips.clear();
-    let (x0, y0) = (h.st.ui.pl_x, h.st.ui.pl_y);
-    run(&mut h, "dragon.nav.right");
+    let y0 = h.st.ui.pl_y;
     run(&mut h, "dragon.rack.down");
-    assert!(h.st.ui.pl_x > x0 && h.st.ui.pl_y > y0, "scrolled: {} {}", h.st.ui.pl_x, h.st.ui.pl_y);
+    assert!(h.st.ui.pl_y > y0, "scrolled down a track");
+    // Right: a beat per press at first …
+    run(&mut h, "dragon.nav.right");
+    let first = h.st.ui.nav_hold.map(|x| x.3).unwrap();
+    assert!((first - 1.0).abs() < 1e-9, "a beat: {first}");
+    // … held for two seconds: four bars at a time.
+    let since = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    h.st.ui.nav_hold = Some(("nav.right", since, std::time::Instant::now(), first));
+    run(&mut h, "dragon.nav.right");
+    let fast = h.st.ui.nav_hold.map(|x| x.3).unwrap();
+    assert!((fast - 16.0).abs() < 1e-9, "on to the next 4-bar line: {fast}");
+    // Left after a pause starts slow again.
+    h.st.ui.nav_hold = None;
     run(&mut h, "dragon.nav.left");
-    assert!((h.st.ui.pl_x - x0).abs() < 1e-9, "back");
+    assert!(h.st.ui.nav_hold.is_some(), "left moves the playhead");
     // A clip selected: Right moves it later.
     let (cid, start) = h.st.session.project.tracks.iter().flat_map(|t| t.clips.iter()).map(|c| (c.id, c.start)).next().expect("the demo has clips");
     h.st.ui.clips = vec![cid];
@@ -2058,4 +2069,32 @@ fn mixer_dock_and_sticky_channels() {
     assert!(x(&h, track) < t0 - 50.0, "the scrolling strips moved: {t0} -> {}", x(&h, track));
     assert_eq!(x(&h, master), m0, "the master stays");
     assert_eq!(x(&h, right), r_right, "the sticky right channel stays");
+}
+
+/// The event lane, like FL Studio: one fast sweep across it sets the velocity of every note it passes
+/// (none skipped), a right-drag ramps them, the Pan tab draws pan.
+#[test]
+fn piano_roll_lane_paints_and_ramps() {
+    let notes: Vec<Note> = (0..8).map(|k| Note { pitch: 60, start: k * PPQ, length: PPQ / 2, velocity: 0.78, ..Default::default() }).collect();
+    let mut h = piano_with_notes(&notes);
+    let g = h.rect("pr.grid");
+    let lane = h.rect("pr.lane");
+    let lane_y = |v: f32| lane.bottom() - 2.0 - v * (lane.height() - 6.0);
+    let _ = g;
+    let x0 = h.pr_pos(0.0, 60).x.max(lane.left() + 1.0);
+    let x1 = h.pr_pos(7.0 * PPQ as f64, 60).x + 10.0;
+    // Low across the whole lane (the drag helper moves in 8 big steps).
+    h.drag(piano, Pos2::new(x0, lane_y(0.2)), Pos2::new(x1, lane_y(0.2)), PointerButton::Primary, Modifiers::NONE);
+    let v: Vec<f32> = h.notes().iter().map(|n| n.velocity).collect();
+    assert!(v.iter().all(|x| *x < 0.6), "every note swept: {v:?}");
+    // Right-drag: a ramp, rising left to right.
+    h.drag(piano, Pos2::new(x0, lane_y(0.1)), Pos2::new(x1, lane_y(0.9)), PointerButton::Secondary, Modifiers::NONE);
+    let v: Vec<f32> = h.notes().iter().map(|n| n.velocity).collect();
+    assert!(v.windows(2).all(|w| w[1] > w[0]), "ramp: {v:?}");
+    // Ctrl + click on empty grid with the draw tool only deselects.
+    h.st.ui.notes = vec![0];
+    let n0 = h.notes().len();
+    h.click(piano, h.pr_pos(2.25 * PPQ as f64, 66), PointerButton::Primary, Modifiers::CTRL);
+    assert_eq!(h.notes().len(), n0, "no note drawn");
+    assert!(h.st.ui.notes.is_empty(), "deselected");
 }

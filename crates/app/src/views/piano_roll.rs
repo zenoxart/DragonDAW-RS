@@ -36,7 +36,15 @@ pub enum Drag {
     Select {
         from: Pos2,
     },
-    Velocity,
+    /// Painting the event lane (velocity / pan / release): every note the pointer sweeps over since `last`
+    /// takes the value along the swept line (fast strokes don't skip notes).
+    Velocity {
+        last: Option<Pos2>,
+    },
+    /// Right-drag in the event lane: a straight ramp from `from` to the pointer over the notes between.
+    VelLine {
+        from: Pos2,
+    },
     Paint {
         last_tick: u32,
     },
@@ -113,7 +121,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     p.rect_filled(rect, 0.0, theme::BG);
     let grid = Rect::from_min_max(Pos2::new(rect.left() + KEYS_W, rect.top() + RULER), Pos2::new(rect.right(), rect.bottom() - VEL_H));
     let vel = Rect::from_min_max(Pos2::new(grid.left(), grid.bottom() + 4.0), rect.max);
-    ui.data_mut(|d| d.insert_temp(egui::Id::new("pr.grid"), grid));
+    ui.data_mut(|d| {
+        d.insert_temp(egui::Id::new("pr.grid"), grid);
+        d.insert_temp(egui::Id::new("pr.lane"), vel);
+    });
     let max_y = |kh: f32| (128.0 * kh - grid.height()).max(0.0);
     // Animated zoom.
     if let Some(t) = st.ui.pr_anim {
@@ -422,23 +433,78 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     if st.ui.released.iter().flatten().any(|t| t.elapsed().as_secs_f32() < 0.3) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
     }
-    // velocity lane
+    // The event lane: velocity, pan or release of each note (tabs at its left, or F / Shift+F). Drag to
+    // paint the values across the notes, right-drag for a straight ramp (like FL Studio).
     p.rect_filled(vel, 0.0, theme::PANEL);
     let vp = p.with_clip_rect(vel);
-    // The event lane shows velocity, pan or release (F / Shift+F).
+    let lane_h = vel.height() - 6.0;
+    let y_of_v = |v: f32| vel.bottom() - 2.0 - v.clamp(0.0, 1.0) * lane_h;
+    let pan_lane = st.ui.pr_prop == 1;
     let prop_of = |n: &Note| match st.ui.pr_prop {
         1 => (n.pan + 1.0) * 0.5,
         2 => n.release,
         _ => n.velocity,
     };
+    // Guides: 50 % (pan centre) and 100 %.
+    for (v, strong) in [(0.5f32, pan_lane), (1.0, false)] {
+        vp.line_segment([Pos2::new(vel.left(), y_of_v(v)), Pos2::new(vel.right(), y_of_v(v))], Stroke::new(1.0_f32, if strong { theme::GRID_BAR } else { theme::GRID }));
+    }
     for (i, n) in notes.iter().enumerate() {
         let x = x_of(n.start as f64);
-        let h = prop_of(n) * (vel.height() - 6.0);
         let sel = st.ui.notes.contains(&i);
-        vp.line_segment([Pos2::new(x, vel.bottom() - 2.0), Pos2::new(x, vel.bottom() - 2.0 - h)], Stroke::new(3.0_f32, if sel { Color32::WHITE } else { ch_color }));
-        vp.circle_filled(Pos2::new(x, vel.bottom() - 2.0 - h), 3.0, if sel { Color32::WHITE } else { ch_color });
+        let col = if sel { Color32::WHITE } else { ch_color };
+        let top = y_of_v(prop_of(n));
+        // Pan grows up or down from the centre line; velocity and release from the bottom.
+        let base = if pan_lane { y_of_v(0.5) } else { vel.bottom() - 2.0 };
+        vp.line_segment([Pos2::new(x, base), Pos2::new(x, top)], Stroke::new(3.0_f32, col));
+        vp.circle_filled(Pos2::new(x, top), 3.0, col);
     }
-    p.text(Pos2::new(rect.left() + 4.0, vel.center().y), egui::Align2::LEFT_CENTER, ["velocity", "pan", "release"][st.ui.pr_prop.min(2)], egui::FontId::proportional(10.0), theme::TEXT_DIM);
+    // Tabs (in the keys column beside the lane).
+    let tabs_r = Rect::from_min_max(Pos2::new(rect.left(), vel.top()), Pos2::new(grid.left() - 2.0, vel.bottom()));
+    for (k, label) in ["Velocity", "Pan", "Release"].iter().enumerate() {
+        let tr = Rect::from_min_size(Pos2::new(tabs_r.left() + 2.0, tabs_r.top() + 2.0 + k as f32 * 21.0), Vec2::new(tabs_r.width() - 2.0, 19.0));
+        let r = ui.interact(tr, egui::Id::new(("pr.lane.tab", k)), Sense::click());
+        let on = st.ui.pr_prop.min(2) == k;
+        p.rect_filled(
+            tr,
+            3.0,
+            if on {
+                ch_color.gamma_multiply(0.45)
+            } else if r.hovered() {
+                theme::PANEL_2
+            } else {
+                theme::BG
+            },
+        );
+        p.text(tr.center(), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(10.0), if on { Color32::WHITE } else { theme::TEXT_DIM });
+        if r.on_hover_text(format!("Show and draw the notes' {} (F / Shift+F)", label.to_lowercase())).clicked() {
+            st.ui.pr_prop = k;
+        }
+    }
+    // Hover: the value under the pointer.
+    let lane_v = |y: f32| ((vel.bottom() - 2.0 - y) / lane_h).clamp(0.0, 1.0);
+    let fmt_v = |prop: usize, v: f32| match prop {
+        1 => {
+            let pan = v * 2.0 - 1.0;
+            if pan.abs() < 0.02 {
+                "centre".to_string()
+            } else if pan < 0.0 {
+                format!("{:.0} % L", -pan * 100.0)
+            } else {
+                format!("{:.0} % R", pan * 100.0)
+            }
+        }
+        _ => format!("{:.0} %", v * 100.0),
+    };
+    if let Some(hp) = resp.hover_pos().filter(|p| vel.contains(*p)) {
+        if st.ui.pr_drag.is_none() {
+            vp.line_segment([Pos2::new(vel.left(), hp.y), Pos2::new(vel.right(), hp.y)], Stroke::new(1.0_f32, Color32::from_white_alpha(70)));
+        }
+        vp.text(Pos2::new(hp.x + 8.0, hp.y - 2.0), egui::Align2::LEFT_BOTTOM, fmt_v(st.ui.pr_prop, lane_v(hp.y)), egui::FontId::proportional(10.0), Color32::WHITE);
+    }
+    if let (Some(Drag::VelLine { from }), Some(cur)) = (&st.ui.pr_drag, ui.input(|i| i.pointer.interact_pos())) {
+        vp.line_segment([*from, cur], Stroke::new(1.5_f32, Color32::WHITE));
+    }
 
     // ---------------- interaction
     let grid_ticks = (st.ui.snap * PPQ as f64).round().max(0.0);
@@ -477,6 +543,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         }
     }
     // Slice tool (or Right-Shift), right-drag: slice and delete the smaller piece (Right-Shift+right-click).
+    if resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pr_drag.is_none() {
+        if let Some(from) = ui.input(|i| i.pointer.press_origin()).filter(|p| vel.contains(*p)) {
+            st.ui.pr_drag = Some(Drag::VelLine { from });
+        }
+    }
     if (tool == Tool::Slice || rsh) && resp.drag_started_by(egui::PointerButton::Secondary) && st.ui.pr_drag.is_none() && !ui.input(|i| i.modifiers.ctrl) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|p| grid.contains(*p)) {
             st.ui.pr_drag = Some(Drag::Knife { from: pos, delete_small: true });
@@ -487,7 +558,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         if let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()) {
             let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.ctrl));
             if vel.contains(pos) {
-                st.ui.pr_drag = Some(Drag::Velocity);
+                st.ui.pr_drag = Some(Drag::Velocity { last: Some(pos) });
             } else if grid.contains(pos) {
                 match note_at(pos) {
                     Some((i, r)) if tool != Tool::Erase && tool != Tool::Slice && tool != Tool::Mute => {
@@ -662,24 +733,63 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                     st.ui.pr_anim = Some(ViewTarget { zoom: nz, x: b0.max(0.0), vscale: nkh, y: (rows_top * nkh).clamp(0.0, max_y(nkh)) });
                 }
             }
-            Drag::Velocity => {
-                if vel.x_range().contains(pos.x) {
-                    let v = ((vel.bottom() - 2.0 - pos.y) / (vel.height() - 6.0)).clamp(0.02, 1.0);
-                    let hit: Vec<usize> = notes.iter().enumerate().filter(|(i, n)| (x_of(n.start as f64) - pos.x).abs() < 5.0 && (st.ui.notes.is_empty() || st.ui.notes.contains(i))).map(|(i, _)| i).collect();
-                    let prop = st.ui.pr_prop;
-                    if !hit.is_empty() {
-                        st.session.gesture(["Velocity", "Note pan", "Note release"][prop.min(2)], |p| {
-                            if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
-                                for i in hit {
-                                    match prop {
-                                        1 => c.notes[i].pan = v * 2.0 - 1.0,
-                                        2 => c.notes[i].release = v,
-                                        _ => c.notes[i].velocity = v,
-                                    }
-                                }
+            Drag::Velocity { last } => {
+                // Every note whose start lies between the last and the current pointer x takes the value of
+                // the swept line there.
+                let a = last.unwrap_or(pos);
+                let (x0, x1) = if a.x <= pos.x { (a.x - 4.0, pos.x + 4.0) } else { (pos.x - 4.0, a.x + 4.0) };
+                let prop = st.ui.pr_prop;
+                let sel = st.ui.notes.clone();
+                let hits: Vec<(usize, f32)> = notes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, n)| {
+                        let x = x_of(n.start as f64);
+                        x >= x0 && x <= x1 && (sel.is_empty() || sel.contains(i))
+                    })
+                    .map(|(i, n)| {
+                        let x = x_of(n.start as f64);
+                        let t = if (pos.x - a.x).abs() < 0.5 { 1.0 } else { ((x - a.x) / (pos.x - a.x)).clamp(0.0, 1.0) };
+                        (i, lane_v(a.y + (pos.y - a.y) * t))
+                    })
+                    .collect();
+                if !hits.is_empty() {
+                    st.session.gesture(["Velocity", "Note pan", "Note release"][prop.min(2)], |p| {
+                        if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                            for (i, v) in &hits {
+                                set_prop(&mut c.notes[*i], prop, *v);
                             }
-                        });
-                    }
+                        }
+                    });
+                }
+                st.ui.pr_drag = Some(Drag::Velocity { last: Some(pos) });
+            }
+            Drag::VelLine { from } => {
+                // A straight ramp from where the right-drag started to the pointer, over the notes between.
+                let (x0, x1) = (from.x.min(pos.x), from.x.max(pos.x));
+                let prop = st.ui.pr_prop;
+                let sel = st.ui.notes.clone();
+                let hits: Vec<(usize, f32)> = notes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, n)| {
+                        let x = x_of(n.start as f64);
+                        x >= x0 && x <= x1 && (sel.is_empty() || sel.contains(i))
+                    })
+                    .map(|(i, n)| {
+                        let x = x_of(n.start as f64);
+                        let t = if (pos.x - from.x).abs() < 0.5 { 1.0 } else { ((x - from.x) / (pos.x - from.x)).clamp(0.0, 1.0) };
+                        (i, lane_v(from.y + (pos.y - from.y) * t))
+                    })
+                    .collect();
+                if !hits.is_empty() {
+                    st.session.gesture(["Velocity ramp", "Pan ramp", "Release ramp"][prop.min(2)], |p| {
+                        if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                            for (i, v) in &hits {
+                                set_prop(&mut c.notes[*i], prop, *v);
+                            }
+                        }
+                    });
                 }
             }
             Drag::Paint { last_tick } => {
@@ -805,6 +915,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                         st.ui.last_note_len = notes[i].length;
                     }
                 }
+            } else if ui.input(|i| i.modifiers.ctrl) {
+                // Ctrl + click on empty space only deselects (like FL Studio) – no note, whatever the tool.
+                st.ui.notes.clear();
             } else if matches!(tool, Tool::Draw | Tool::Paint) {
                 let start = snap_tick_floor(tick) as u32;
                 let pitch = snap_pitch(st, pitch_of(pos.y));
@@ -881,6 +994,15 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     }
 }
 
+/// Sets a note's velocity, pan or release (`prop` 0 / 1 / 2) from a lane value 0 … 1.
+fn set_prop(n: &mut Note, prop: usize, v: f32) {
+    match prop {
+        1 => n.pan = if (v - 0.5).abs() < 0.015 { 0.0 } else { v * 2.0 - 1.0 },
+        2 => n.release = v,
+        _ => n.velocity = v.max(0.02),
+    }
+}
+
 fn snap_pitch(st: &State, pitch: u8) -> u8 {
     match st.ui.scale {
         Some(i) => edit::snap_to_scale(pitch, st.ui.scale_root, SCALES[i].1),
@@ -889,9 +1011,29 @@ fn snap_pitch(st: &State, pitch: u8) -> u8 {
 }
 
 fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
-    ui.horizontal_wrapped(|ui| {
-        let name = st.session.project.channel(ch).map(|c| c.name.clone()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("pr.channel").selected_text(name).width(110.0).show_ui(ui, |ui| {
+    // One row of fixed height: nothing in it appears or disappears with the selection, so the grid below
+    // never moves under the pointer. The rest lives in dropdown menus.
+    const KEYS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    let h = widgets::BAR_H;
+    let (row, _) = ui.allocate_exact_size(egui::Vec2::new(ui.available_width(), h + 6.0), Sense::hover());
+    let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(egui::Vec2::new(2.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    bar.set_clip_rect(row);
+    let ui = &mut bar;
+    ui.spacing_mut().interact_size.y = h;
+    widgets::tool_buttons(ui, st);
+    ui.separator();
+    let cur = widgets::SNAPS.iter().find(|s| (s.1 - st.ui.snap).abs() < 1e-9).map(|s| s.0).unwrap_or("custom");
+    egui::ComboBox::from_id_salt("pr.snap").selected_text(format!("Snap {cur}")).width(96.0).show_ui(ui, |ui| {
+        for (n, v) in widgets::SNAPS {
+            ui.selectable_value(&mut st.ui.snap, *v, *n);
+        }
+    });
+    // The sound (rack channel) being edited, next to the snap.
+    let name = st.session.project.channel(ch).map(|c| c.name.clone()).unwrap_or_default();
+    egui::ComboBox::from_id_salt("pr.channel")
+        .selected_text(format!("🎹 {name}"))
+        .width(130.0)
+        .show_ui(ui, |ui| {
             for c in &st.session.project.channels {
                 if ui.selectable_label(c.id == ch, &c.name).clicked() {
                     st.ui.piano_channel = Some(c.id);
@@ -899,54 +1041,72 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                     st.ui.notes.clear();
                 }
             }
-        });
-        if ui.button("Import MIDI…").on_hover_text("Open a MIDI file (.mid) – its notes come in as a new pattern (Ctrl+M is the metronome)").clicked() {
-            if let Some(f) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
-                st.import_midi(&f);
-            }
-        }
-        widgets::tool_buttons(ui, st);
-        ui.separator();
-        let cur = widgets::SNAPS.iter().find(|s| (s.1 - st.ui.snap).abs() < 1e-9).map(|s| s.0).unwrap_or("custom");
-        egui::ComboBox::from_id_salt("pr.snap").selected_text(format!("Snap {cur}")).width(100.0).show_ui(ui, |ui| {
-            for (n, v) in widgets::SNAPS {
-                ui.selectable_value(&mut st.ui.snap, *v, *n);
-            }
-        });
-        // Key (root note) and scale are picked separately; the grid lights up the notes of the scale.
-        const KEYS: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-        ui.label(RichText::new("Key").small().color(theme::TEXT_DIM));
-        egui::ComboBox::from_id_salt("pr.key").selected_text(KEYS[st.ui.scale_root as usize % 12]).width(46.0).show_ui(ui, |ui| {
+        })
+        .response
+        .on_hover_text("The sound whose notes you edit");
+    ui.separator();
+    // Key / scale.
+    let scale_name = st.ui.scale.map(|i| SCALES[i].0).unwrap_or("no scale");
+    ui.menu_button(format!("🎼 {} {scale_name}", KEYS[st.ui.scale_root as usize % 12]), |ui| {
+        ui.menu_button("Key (root note)", |ui| {
             for (r, k) in KEYS.iter().enumerate() {
-                ui.selectable_value(&mut st.ui.scale_root, r as u8, *k);
+                if ui.selectable_label(st.ui.scale_root == r as u8, *k).clicked() {
+                    st.ui.scale_root = r as u8;
+                    ui.close_menu();
+                }
             }
         });
-        let scale_name = st.ui.scale.map(|i| SCALES[i].0).unwrap_or("No scale");
-        egui::ComboBox::from_id_salt("pr.scale").selected_text(scale_name).width(150.0).height(420.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut st.ui.scale, None, "No scale");
-            for (i, (n, iv)) in SCALES.iter().enumerate() {
-                let notes: Vec<&str> = iv.iter().map(|x| KEYS[(st.ui.scale_root + x) as usize % 12]).collect();
-                ui.selectable_value(&mut st.ui.scale, Some(i), *n).on_hover_text(notes.join(" "));
-            }
+        ui.menu_button("Scale", |ui| {
+            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                if ui.selectable_label(st.ui.scale.is_none(), "No scale").clicked() {
+                    st.ui.scale = None;
+                    ui.close_menu();
+                }
+                for (i, (n, iv)) in SCALES.iter().enumerate() {
+                    let notes: Vec<&str> = iv.iter().map(|x| KEYS[(st.ui.scale_root + x) as usize % 12]).collect();
+                    if ui.selectable_label(st.ui.scale == Some(i), *n).on_hover_text(notes.join(" ")).clicked() {
+                        st.ui.scale = Some(i);
+                        ui.close_menu();
+                    }
+                }
+            });
         });
         if let Some(i) = st.ui.scale {
             let notes: Vec<&str> = SCALES[i].1.iter().map(|x| KEYS[(st.ui.scale_root + x) as usize % 12]).collect();
+            ui.separator();
             ui.label(RichText::new(notes.join(" ")).small().monospace().color(theme::ACCENT_2));
         }
-        let chord_name = if st.ui.chord == 0 { "Single notes".to_string() } else { CHORDS[st.ui.chord - 1].0.to_string() };
-        egui::ComboBox::from_id_salt("pr.chord").selected_text(format!("Stamp: {chord_name}")).width(130.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut st.ui.chord, 0, "Single notes");
+    })
+    .response
+    .on_hover_text("Key and scale – the grid lights up the notes of the scale");
+    // Stamp.
+    let chord_name = if st.ui.chord == 0 { "off".to_string() } else { CHORDS[st.ui.chord - 1].0.to_string() };
+    ui.menu_button(format!("✋ Stamp: {chord_name}"), |ui| {
+        if ui.selectable_label(st.ui.chord == 0, "Off (single notes)").clicked() {
+            st.ui.chord = 0;
+            ui.close_menu();
+        }
+        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
             for (i, (n, _)) in CHORDS.iter().enumerate() {
-                ui.selectable_value(&mut st.ui.chord, i + 1, *n);
+                if ui.selectable_label(st.ui.chord == i + 1, *n).clicked() {
+                    st.ui.chord = i + 1;
+                    ui.close_menu();
+                }
             }
         });
-        ui.separator();
-        for (id, label) in [("edit.quantize", "Quantize"), ("edit.legato", "Legato"), ("edit.strum", "Strum"), ("edit.humanize", "Humanize")] {
-            if ui.small_button(label).clicked() {
+    })
+    .response
+    .on_hover_text("Stamp: a click draws a whole chord");
+    // Edit tools.
+    ui.menu_button("🛠 Edit", |ui| {
+        for (id, label, key) in [("edit.quantize", "Quantize", "Ctrl+Q"), ("edit.legato", "Legato", "Ctrl+L"), ("edit.strum", "Strum", ""), ("edit.humanize", "Humanize", ""), ("edit.flam", "Flam", "Alt+F")] {
+            let t = if key.is_empty() { label.to_string() } else { format!("{label}   ({key})") };
+            if ui.button(t).clicked() {
                 st.ctx.run(&format!("dragon.{id}"), serde_json::Value::Null);
+                ui.close_menu();
             }
         }
-        ui.menu_button("Arp", |ui| {
+        ui.menu_button("Arpeggiate", |ui| {
             for (mode, n) in [(ArpMode::Up, "Up"), (ArpMode::Down, "Down"), (ArpMode::UpDown, "Up-down"), (ArpMode::Random, "Random")] {
                 if ui.button(n).clicked() {
                     let sel = st.ui.notes.clone();
@@ -965,20 +1125,15 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 }
             }
         });
-        ui.menu_button("Tools", |ui| {
-            if ui.button("Flam (Alt+F)").clicked() {
-                st.ctx.run("dragon.edit.flam", serde_json::Value::Null);
-                ui.close_menu();
-            }
-            ui.separator();
+        ui.menu_button("Note tools", |ui| {
             for (t, name, key) in crate::views::note_tools::Tool::ALL {
-                if ui.button(format!("{name}… ({key})")).clicked() {
+                if ui.button(format!("{name}…   ({key})")).clicked() {
                     crate::views::note_tools::open(st, t);
                     ui.close_menu();
                 }
             }
         });
-        ui.menu_button("Progression", |ui| {
+        ui.menu_button("Chord progression", |ui| {
             let scale = st.ui.scale.unwrap_or(0);
             ui.label(RichText::new(format!("in {} {}", note_name(st.ui.scale_root + 48), SCALES[scale].0)).small());
             for (name, degrees) in [("I–V–vi–IV", &[0usize, 4, 5, 3][..]), ("vi–IV–I–V", &[5, 3, 0, 4]), ("ii–V–I", &[1, 4, 0, 0]), ("i–VI–III–VII", &[0, 5, 2, 6])] {
@@ -995,12 +1150,18 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                 }
             }
         });
-        let sel = st.ui.notes.clone();
-        if let Some(&i) = sel.first() {
-            ui.separator();
-            if let Some(n) = st.session.project.pattern(pat).and_then(|pt| pt.channels.get(&ch)).and_then(|c| c.notes.get(i)).copied() {
+    })
+    .response
+    .on_hover_text("Quantize, legato, strum, humanize, flam, arpeggiate, note tools, chord progressions");
+    // The selected notes' slide and pan – in a menu, so the row never changes.
+    let sel = st.ui.notes.clone();
+    let first = sel.first().and_then(|&i| st.session.project.pattern(pat).and_then(|pt| pt.channels.get(&ch)).and_then(|c| c.notes.get(i)).copied());
+    ui.add_enabled_ui(first.is_some(), |ui| {
+        ui.menu_button("♪ Note", |ui| {
+            if let Some(n) = first {
+                ui.label(RichText::new(format!("{} selected", sel.len())).small().color(theme::TEXT_DIM));
                 let mut slide = n.slide;
-                if ui.checkbox(&mut slide, "slide").changed() {
+                if ui.checkbox(&mut slide, "Slide").changed() {
                     st.session.edit("Slide", |p| {
                         if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
                             for k in &sel {
@@ -1012,7 +1173,7 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                     });
                 }
                 let mut pan = n.pan;
-                let r = ui.add(egui::Slider::new(&mut pan, -1.0..=1.0).text("pan").show_value(false));
+                let r = ui.add(egui::Slider::new(&mut pan, -1.0..=1.0).text("Pan"));
                 widgets::apply(st, &r, "Note pan", |p| {
                     if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
                         for k in &sel {
@@ -1022,9 +1183,29 @@ fn toolbar(ui: &mut Ui, st: &mut State, pat: Id, ch: Id) {
                         }
                     }
                 });
+                let mut vel = n.velocity;
+                let r = ui.add(egui::Slider::new(&mut vel, 0.0..=1.0).text("Velocity"));
+                widgets::apply(st, &r, "Velocity", |p| {
+                    if let Some(c) = p.pattern_mut(pat).and_then(|pt| pt.channels.get_mut(&ch)) {
+                        for k in &sel {
+                            if let Some(x) = c.notes.get_mut(*k) {
+                                x.velocity = vel;
+                            }
+                        }
+                    }
+                });
             }
-        }
+        })
+        .response
+        .on_hover_text("Slide, pan and velocity of the selected notes")
+        .on_disabled_hover_text("Select notes to set their slide, pan and velocity");
     });
+    ui.separator();
+    if ui.button("📂 Import MIDI").on_hover_text("Open a MIDI file (.mid) – its notes come in as a new pattern").clicked() {
+        if let Some(f) = rfd::FileDialog::new().add_filter("MIDI", &["mid", "midi"]).pick_file() {
+            st.import_midi(&f);
+        }
+    }
 }
 
 /// How lit a key is (0 … 1): held keys by their velocity, released ones fading out over 0.3 s.
