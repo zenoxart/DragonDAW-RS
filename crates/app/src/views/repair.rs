@@ -15,7 +15,7 @@
 use crate::state::State;
 use crate::theme;
 use dragon_engine::model::{ClipKind, Id};
-use dragon_engine::repair::{self, Diagnosis, NoiseProfile, NoteBlob, PitchEdit};
+use dragon_engine::repair::{self, Diagnosis, NoiseProfile, NoteBlob, NoteShape, PitchEdit};
 use dragon_engine::samples::AudioData;
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use redhive_contracts::ui::Severity;
@@ -45,11 +45,56 @@ const TOOLS: [(Tool, &str, &str); 8] = [
     (Tool::Dehum, "De-hum", "Mains hum (50 / 60 Hz) and its overtones"),
     (Tool::Declick, "De-click", "Clicks, pops, crackle and mouth noise"),
     (Tool::Declip, "De-clip", "Peaks cut flat because the level was too high"),
-    (Tool::Distortion, "Distortion repair", "Peaks squashed by soft clipping or an overdriven preamp"),
+    (Tool::Distortion, "Distortion", "Peaks squashed by soft clipping or an overdriven preamp"),
     (Tool::Dereverb, "De-reverb", "Too much room sound"),
-    (Tool::Spectral, "Spectral attenuate", "Take out one sound: draw a box around it (Shift+drag)"),
+    (Tool::Spectral, "Spectral", "Take out one sound: draw a box around it (Shift+drag)"),
     (Tool::Gain, "Gain", "Louder or quieter (the selection, or everything)"),
 ];
+
+/// The icon of a repair tool.
+fn tool_icon(t: Tool) -> &'static str {
+    match t {
+        Tool::Denoise => "☁",
+        Tool::Dehum => "⚡",
+        Tool::Declick => "✨",
+        Tool::Declip => "📈",
+        Tool::Distortion => "🔥",
+        Tool::Dereverb => "🏠",
+        Tool::Spectral => "🎯",
+        Tool::Gain => "🔊",
+        Tool::Pitch => "🎵",
+    }
+}
+
+/// A square tool tile: a big icon over its name, lit when chosen.
+fn tile(ui: &mut Ui, icon: &str, name: &str, selected: bool, size: Vec2) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let p = ui.painter();
+    let fill = if selected {
+        theme::ACCENT_2
+    } else if resp.hovered() {
+        Color32::from_white_alpha(22)
+    } else {
+        Color32::from_white_alpha(10)
+    };
+    p.rect_filled(rect, 8.0, fill);
+    if selected {
+        p.rect_stroke(rect, 8.0, egui::Stroke::new(1.5_f32, Color32::from_white_alpha(90)), egui::StrokeKind::Inside);
+    }
+    let ink = if selected { Color32::BLACK } else { theme::TEXT };
+    p.text(rect.center_top() + Vec2::new(0.0, rect.height() * 0.38), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(22.0), ink);
+    p.text(rect.center_bottom() - Vec2::new(0.0, 10.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(11.5), ink);
+    resp
+}
+
+/// A slider with an icon in front (the note shape controls).
+fn icon_slider(ui: &mut Ui, icon: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, text: &str, suffix: &str, tip: &str) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(icon).size(17.0)).on_hover_text(tip);
+        ui.add(egui::Slider::new(v, range).text(text).suffix(suffix)).on_hover_text(tip).changed()
+    })
+    .inner
+}
 
 /// The note editor's tools .
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -71,7 +116,7 @@ type MakeProcess = Box<dyn Fn() -> Process>;
 /// A note's pitch curve: (seconds, MIDI pitch).
 type Curve = Vec<(f64, f32)>;
 /// Note edits that can be undone: the notes (split changes them), their moves and their modulation.
-type NoteState = (Vec<NoteBlob>, Vec<f32>, Vec<f32>);
+type NoteState = (Vec<NoteBlob>, Vec<f32>, Vec<f32>, Vec<NoteShape>);
 
 /// Everything the tab keeps between frames.
 #[derive(Default)]
@@ -114,6 +159,8 @@ pub struct RepairUi {
     shifts: Vec<f32>,
     /// Vibrato / drift scale per note (1 = as recorded, 0 = flat, 2 = double).
     mods: Vec<f32>,
+    /// Tail, transition, fade-in and volume per note.
+    shapes: Vec<NoteShape>,
     sel_notes: Vec<usize>,
     note_tool: NoteTool,
     no_snap: bool,
@@ -161,7 +208,7 @@ impl RepairUi {
     }
 
     fn snapshot(&mut self) {
-        self.history.push((self.notes.clone(), self.shifts.clone(), self.mods.clone()));
+        self.history.push((self.notes.clone(), self.shifts.clone(), self.mods.clone(), self.shapes.clone()));
         if self.history.len() > 100 {
             self.history.remove(0);
         }
@@ -194,6 +241,10 @@ impl RepairUi {
         let (s, m) = (self.shifts[k], self.mods[k]);
         self.shifts.insert(k + 1, s);
         self.mods.insert(k + 1, m);
+        // The second half starts mid-note: no fade-in of its own; the first half has no tail.
+        let sh = self.shapes[k];
+        self.shapes.insert(k + 1, NoteShape { fade_in: 0.0, ..sh });
+        self.shapes[k].tail = 0.0;
         self.sel_notes = vec![k, k + 1];
     }
 
@@ -211,11 +262,12 @@ impl RepairUi {
         for k in self.targets() {
             self.shifts[k] = 0.0;
             self.mods[k] = 1.0;
+            self.shapes[k] = NoteShape::default();
         }
     }
 
     fn edited(&self, k: usize) -> bool {
-        self.shifts[k].abs() > 0.005 || (self.mods[k] - 1.0).abs() > 0.005
+        self.shifts[k].abs() > 0.005 || (self.mods[k] - 1.0).abs() > 0.005 || self.shapes[k].changes_sound()
     }
 }
 
@@ -307,6 +359,7 @@ fn ensure_loaded(ui: &Ui, st: &mut State, path: &PathBuf) {
                 .collect();
             r.shifts = vec![0.0; l.notes.len()];
             r.mods = vec![1.0; l.notes.len()];
+            r.shapes = vec![NoteShape::default(); l.notes.len()];
             r.history.clear();
             r.notes = l.notes;
             r.sel_notes.clear();
@@ -491,11 +544,12 @@ pub fn key(st: &mut State, id: &str) -> bool {
         "edit.delete" if notes => st.ui.repair.reset_targets(),
         "edit.delete" => st.ui.repair.sel = None,
         "edit.undo_toggle" if notes => match st.ui.repair.history.pop() {
-            Some((n, s, m)) => {
+            Some((n, s, m, sh)) => {
                 let r = &mut st.ui.repair;
                 r.notes = n;
                 r.shifts = s;
                 r.mods = m;
+                r.shapes = sh;
                 let len = r.notes.len();
                 r.sel_notes.retain(|k| *k < len);
             }
@@ -1162,15 +1216,15 @@ fn repair_panel(ui: &mut Ui, st: &mut State) {
         }
     });
     card(ui, "Tools", |ui| {
-        egui::Grid::new("repair.tools").num_columns(2).spacing([6.0, 6.0]).show(ui, |ui| {
+        // Icon tiles, four to a row, as wide as the panel allows.
+        let w = ((ui.available_width() - 18.0) / 4.0).clamp(56.0, 90.0);
+        egui::Grid::new("repair.tools").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
             for (k, (t, name, tip)) in TOOLS.iter().enumerate() {
                 let sel = st.ui.repair.tool == *t;
-                let b =
-                    egui::Button::new(RichText::new(*name).color(if sel { Color32::BLACK } else { theme::TEXT })).fill(if sel { theme::ACCENT_2 } else { Color32::from_white_alpha(10) }).min_size(Vec2::new(142.0, 26.0));
-                if ui.add(b).on_hover_text(*tip).clicked() {
+                if tile(ui, tool_icon(*t), name, sel, Vec2::new(w, 56.0)).on_hover_text(*tip).clicked() {
                     st.ui.repair.tool = *t;
                 }
-                if k % 2 == 1 {
+                if k % 4 == 3 {
                     ui.end_row();
                 }
             }
@@ -1183,7 +1237,7 @@ fn repair_panel(ui: &mut Ui, st: &mut State) {
         Some((a, b, None)) => format!("Works on {:.2} – {:.2} s (Esc: the whole clip)", a.min(b), a.max(b)),
         None => "Works on the whole clip – drag to pick a part, Ctrl+A for all".into(),
     };
-    card(ui, title, |ui| {
+    card(ui, &format!("{} {title}", tool_icon(tool)), |ui| {
         ui.label(RichText::new(tip).small().color(theme::TEXT_DIM));
         ui.label(RichText::new(scope).small().color(theme::ACCENT_2));
         ui.add_space(4.0);
@@ -1271,15 +1325,13 @@ fn repair_panel(ui: &mut Ui, st: &mut State) {
 fn pitch_panel(ui: &mut Ui, st: &mut State) {
     card(ui, "Tool", |ui| {
         ui.horizontal(|ui| {
-            for (t, name, tip) in [
-                (NoteTool::Move, "Move", "Drag notes up / down (snaps to semitones; Alt = free). Drag on empty space to select several."),
-                (NoteTool::Modulation, "Vibrato", "Drag a note up / down: more or less vibrato and drift (100 % = as sung)"),
-                (NoteTool::Split, "Split", "Click a note where it should be cut in two (double-click works with any tool)"),
+            for (t, icon, name, tip) in [
+                (NoteTool::Move, "✋", "Move", "Drag notes up / down (snaps to semitones; Alt = free). Drag on empty space to select several."),
+                (NoteTool::Modulation, "〰", "Vibrato", "Drag a note up / down: more or less vibrato and drift (100 % = as sung)"),
+                (NoteTool::Split, "✂", "Split", "Click a note where it should be cut in two (double-click works with any tool)"),
             ] {
                 let sel = st.ui.repair.note_tool == t;
-                let b =
-                    egui::Button::new(RichText::new(name).color(if sel { Color32::BLACK } else { theme::TEXT })).fill(if sel { theme::ACCENT_2 } else { Color32::from_white_alpha(10) }).min_size(Vec2::new(92.0, 26.0));
-                if ui.add(b).on_hover_text(tip).clicked() {
+                if tile(ui, icon, name, sel, Vec2::new(72.0, 52.0)).on_hover_text(tip).clicked() {
                     st.ui.repair.note_tool = t;
                 }
             }
@@ -1321,18 +1373,19 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
             }
         }
         ui.horizontal(|ui| {
-            if ui.button("Reset").on_hover_text("Back to how it was sung (Delete)").clicked() {
+            if ui.button("⟲ Reset").on_hover_text("Back to how it was sung (Delete)").clicked() {
                 st.ui.repair.reset_targets();
             }
-            if ui.add_enabled(!st.ui.repair.history.is_empty(), egui::Button::new("Undo")).on_hover_text("Ctrl+Z").clicked() {
+            if ui.add_enabled(!st.ui.repair.history.is_empty(), egui::Button::new("↶ Undo")).on_hover_text("Ctrl+Z").clicked() {
                 key(st, "edit.undo_toggle");
             }
-            if ui.button("Select all").on_hover_text("Ctrl+A").clicked() {
+            if ui.button("☑ Select all").on_hover_text("Ctrl+A").clicked() {
                 select_all(st);
             }
         });
     });
-    card(ui, "Correct pitch", |ui| {
+    shape_card(ui, st, &what);
+    card(ui, "🎯 Correct pitch", |ui| {
         ui.label(RichText::new(format!("For {what}: pull each note onto its semitone, and calm its vibrato and drift.")).small().color(theme::TEXT_DIM));
         let r = &mut st.ui.repair;
         let mut c = r.centre_amount * 100.0;
@@ -1359,7 +1412,7 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
             return;
         }
         let notes = r.notes.clone();
-        let edits: Vec<PitchEdit> = edited.into_iter().map(|k| PitchEdit { note: k, shift: r.shifts[k], drift: 1.0 - r.mods[k] }).collect();
+        let edits: Vec<PitchEdit> = edited.into_iter().map(|k| PitchEdit { note: k, shift: r.shifts[k], drift: 1.0 - r.mods[k], shape: r.shapes[k] }).collect();
         actions(
             ui,
             st,
@@ -1369,6 +1422,45 @@ fn pitch_panel(ui: &mut Ui, st: &mut State) {
                 Box::new(move |d: &AudioData| repair::apply_pitch(d, &n, &e))
             }),
         );
+    });
+}
+
+/// Tail, transition, fade-in and volume of the selected notes (or all of them). One undo step per drag.
+fn shape_card(ui: &mut Ui, st: &mut State, what: &str) {
+    card(ui, "🎚 Shape", |ui| {
+        let r = &mut st.ui.repair;
+        let targets = r.targets();
+        let Some(&first) = targets.first() else {
+            ui.label(RichText::new("No notes found yet.").small().color(theme::TEXT_DIM));
+            return;
+        };
+        ui.label(RichText::new(format!("For {what}. A single hit or one-shot is one note: shape it the same way.")).small().color(theme::TEXT_DIM));
+        let mut sh = r.shapes[first];
+        let mut tail = sh.tail * 1000.0;
+        let mut trans = sh.transition * 1000.0;
+        let mut fade = sh.fade_in * 1000.0;
+        let mut changed = false;
+        changed |= icon_slider(ui, "⏳", &mut tail, 0.0..=2000.0, "tail", " ms", "How long after the note the move continues – the ring-out of a one-shot or the release of a held note follows the new pitch");
+        changed |= icon_slider(ui, "🔀", &mut trans, 1.0..=200.0, "transition", " ms", "How smoothly the pitch and level glide in and out at the note's edges");
+        changed |= icon_slider(ui, "📶", &mut fade, 0.0..=1000.0, "fade in", " ms", "Fades the note in from silence at its start (softens a hard attack)");
+        changed |= icon_slider(ui, "🔊", &mut sh.gain_db, -24.0..=12.0, "volume", " dB", "The note's level");
+        if changed {
+            // The first change of a drag makes the undo step.
+            let id = egui::Id::new("repair.shape.drag");
+            let dragging = ui.input(|i| i.pointer.any_down());
+            if !ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+                r.snapshot();
+            }
+            ui.data_mut(|d| d.insert_temp(id, dragging));
+            sh.tail = tail / 1000.0;
+            sh.transition = trans / 1000.0;
+            sh.fade_in = fade / 1000.0;
+            for k in targets {
+                r.shapes[k] = sh;
+            }
+        } else if !ui.input(|i| i.pointer.any_down()) {
+            ui.data_mut(|d| d.remove::<bool>(egui::Id::new("repair.shape.drag")));
+        }
     });
 }
 

@@ -564,7 +564,34 @@ pub struct NoteBlob {
     pub level: f32,
 }
 
-/// What to do with a note: shift it and flatten its drift / vibrato.
+/// How a corrected note is shaped beyond its pitch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoteShape {
+    /// Seconds after the note's detected end that still follow its move (a one-shot's ring-out, a held
+    /// note's release), so the tail does not snap back to the old pitch.
+    pub tail: f32,
+    /// Seconds over which the pitch and level move in and out at the note's edges.
+    pub transition: f32,
+    /// Seconds over which the note fades in from silence at its start (0 = as recorded).
+    pub fade_in: f32,
+    /// Level change of the note, dB.
+    pub gain_db: f32,
+}
+
+impl Default for NoteShape {
+    fn default() -> Self {
+        NoteShape { tail: 0.0, transition: 0.015, fade_in: 0.0, gain_db: 0.0 }
+    }
+}
+
+impl NoteShape {
+    /// Whether the shape changes anything by itself (tail and transition only shape a pitch move).
+    pub fn changes_sound(&self) -> bool {
+        self.fade_in > 1e-4 || self.gain_db.abs() > 1e-3
+    }
+}
+
+/// What to do with a note: shift it, flatten its drift / vibrato and shape it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PitchEdit {
     /// Index into the detected notes.
@@ -573,6 +600,13 @@ pub struct PitchEdit {
     pub shift: f32,
     /// 0 = keep the pitch movement, 1 = flatten it onto the note's centre.
     pub drift: f32,
+    pub shape: NoteShape,
+}
+
+impl PitchEdit {
+    pub fn new(note: usize, shift: f32, drift: f32) -> Self {
+        PitchEdit { note, shift, drift, shape: NoteShape::default() }
+    }
 }
 
 const PITCH_WIN: usize = 2048;
@@ -629,7 +663,65 @@ pub fn detect_notes(data: &AudioData) -> Vec<NoteBlob> {
         }
     }
     flush(&mut cur, &mut notes);
+    if notes.is_empty() {
+        notes.extend(one_shot(data));
+    }
     notes
+}
+
+/// A one-shot (a single hit, pluck, 808 or sample too short or too percussive for the note tracker): the
+/// whole sounding part as one note, at the pitch found in it – the tracker's steady frames with a looser
+/// confidence, else the strongest spectral peak.
+pub fn one_shot(data: &AudioData) -> Option<NoteBlob> {
+    let x = mono(data);
+    let rate = data.rate as f32;
+    let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    if peak < 1e-4 {
+        return None;
+    }
+    // The sounding part: from the first to the last sample above −50 dB of the peak.
+    let floor = peak * 0.00316;
+    let first = x.iter().position(|v| v.abs() > floor)?;
+    let last = x.iter().rposition(|v| v.abs() > floor)?;
+    if last <= first {
+        return None;
+    }
+    // Pitch: short windows (a one-shot may be shorter than the tracker's), loose confidence.
+    let win = 1024.min(last - first + 1).max(256);
+    let mut curve = Vec::new();
+    let mut i = first;
+    while i + win <= x.len() && i <= last {
+        let w = &x[i..i + win];
+        let lvl = w.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        if lvl > peak * 0.05 {
+            if let Some((hz, _)) = detect_pitch(w, rate, 30.0, 2000.0).filter(|(_, c)| *c > 0.6) {
+                curve.push(((i + win / 2) as f64 / rate as f64, hz_to_midi(hz)));
+            }
+        }
+        i += win / 4;
+    }
+    let midi = if curve.is_empty() {
+        // The strongest spectral peak of the loudest stretch.
+        let n = 8192.min((last - first + 1).next_power_of_two()).max(1024);
+        let mut buf: Vec<Complex<f32>> = (0..n).map(|k| Complex::new(x.get(first + k).copied().unwrap_or(0.0) * (0.5 - 0.5 * (2.0 * PI * k as f32 / n as f32).cos()), 0.0)).collect();
+        FftPlanner::new().plan_fft_forward(n).process(&mut buf);
+        let lo = (30.0 * n as f32 / rate) as usize;
+        let (bin, _) = buf.iter().enumerate().take(n / 2).skip(lo.max(1)).fold((0, 0.0f32), |b, (k, c)| if c.norm() > b.1 { (k, c.norm()) } else { b });
+        if bin == 0 {
+            return None;
+        }
+        hz_to_midi(bin as f32 * rate / n as f32)
+    } else {
+        let mut v: Vec<f32> = curve.iter().map(|c| c.1).collect();
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    let start = first as f64 / rate as f64;
+    let end = (last + 1) as f64 / rate as f64;
+    if curve.is_empty() {
+        curve = vec![(start, midi), (end, midi)];
+    }
+    Some(NoteBlob { start, end, midi, curve, level: peak })
 }
 
 /// The MIDI pitch of `note` at time `t` (from its curve).
@@ -653,13 +745,20 @@ pub fn apply_pitch(data: &AudioData, notes: &[NoteBlob], edits: &[PitchEdit]) ->
     // Semitones to move each sample by, and how much of the shifted signal to use.
     let mut offset = vec![0.0f32; n];
     let mut wet = vec![0.0f32; n];
-    let ramp = (0.015 * rate) as usize;
+    // Level per sample (note volume and fade-in).
+    let mut amp = vec![1.0f32; n];
     for e in edits {
         let Some(note) = notes.get(e.note) else { continue };
-        if e.shift.abs() < 1e-3 && e.drift.abs() < 1e-3 {
+        let moves = e.shift.abs() >= 1e-3 || e.drift.abs() >= 1e-3;
+        if !moves && !e.shape.changes_sound() {
             continue;
         }
-        let (a, b) = (secs_to_frames(data, note.start), secs_to_frames(data, note.end));
+        let ramp = ((e.shape.transition.max(0.001) * rate) as usize).max(1);
+        let a = secs_to_frames(data, note.start);
+        // The tail keeps following the note's move after its detected end.
+        let b = secs_to_frames(data, note.end + e.shape.tail.max(0.0) as f64).min(n);
+        let fade = (e.shape.fade_in.max(0.0) * rate) as usize;
+        let g = 10f32.powf(e.shape.gain_db / 20.0);
         for i in a.saturating_sub(ramp)..(b + ramp).min(n) {
             let w = if i < a {
                 1.0 - (a - i) as f32 / ramp as f32
@@ -667,15 +766,33 @@ pub fn apply_pitch(data: &AudioData, notes: &[NoteBlob], edits: &[PitchEdit]) ->
                 1.0 - (i - b) as f32 / ramp as f32
             } else {
                 1.0
+            }
+            .max(0.0);
+            if moves {
+                let t = i as f64 / rate as f64;
+                // Flattening follows the detected curve; in the tail only the move continues.
+                let flatten = if t <= note.end { (note.midi - curve_at(note, t)) * e.drift } else { (note.midi - curve_at(note, note.end)) * e.drift };
+                offset[i] = (e.shift + flatten) * w;
+                wet[i] = wet[i].max(w);
+            }
+            // Fade-in from the note's start (silence before it inside the transition).
+            let f = if fade == 0 {
+                1.0
+            } else if i < a {
+                0.0
+            } else {
+                ((i - a) as f32 / fade as f32).min(1.0)
             };
-            let t = i as f64 / rate as f64;
-            let flatten = (note.midi - curve_at(note, t)) * e.drift;
-            offset[i] = (e.shift + flatten) * w.max(0.0);
-            wet[i] = wet[i].max(w.max(0.0));
+            let target = g * if fade > 0 && i < a { 1.0 - w } else { f };
+            amp[i] = 1.0 + (target - 1.0) * w;
         }
     }
+    let scale = |y: Vec<f32>| -> Vec<f32> { y.into_iter().zip(&amp).map(|(v, a)| v * a).collect() };
     if wet.iter().all(|w| *w == 0.0) {
-        return data.clone();
+        if amp.iter().all(|a| *a == 1.0) {
+            return data.clone();
+        }
+        return per_channel(data, |x| scale(x.to_vec()));
     }
     // Warm the shifter up on 0.2 s of silence, then line its output up with the dry signal.
     let pre = (0.2 * rate) as usize;
@@ -692,7 +809,7 @@ pub fn apply_pitch(data: &AudioData, notes: &[NoteBlob], edits: &[PitchEdit]) ->
             let o = offset.get(i).copied().unwrap_or(0.0);
             *s = sh.process(xi, 2f32.powf(o / 12.0)) / 0.8;
         }
-        (0..n).map(|i| x[i] + (shifted[i + delay] - x[i]) * wet[i]).collect()
+        scale((0..n).map(|i| x[i] + (shifted[i + delay] - x[i]) * wet[i]).collect())
     })
 }
 
@@ -977,6 +1094,43 @@ mod tests {
     }
 
     #[test]
+    fn one_shots_are_one_note() {
+        // A decaying 808-like tone, 0.4 s at 55 Hz, then silence.
+        let a = audio(|t| if t < 0.4 { 0.8 * (2.0 * PI * 55.0 * t).sin() * (-t * 6.0).exp() } else { 0.0 }, 0.6);
+        let notes = detect_notes(&a);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!((notes[0].midi - 33.0).abs() < 0.5, "A1 = 33: {}", notes[0].midi);
+        // A short pluck too short for the tracker.
+        let b = audio(|t| 0.6 * (2.0 * PI * 440.0 * t).sin() * (-t * 40.0).exp(), 0.12);
+        let nb = detect_notes(&b);
+        assert_eq!(nb.len(), 1);
+        assert!((nb[0].midi - 69.0).abs() < 0.5, "{}", nb[0].midi);
+    }
+
+    #[test]
+    fn note_shape_volume_fade_and_tail() {
+        let a = audio(|t| 0.5 * (2.0 * PI * 220.0 * t).sin(), 1.0);
+        let note = NoteBlob { start: 0.2, end: 0.6, midi: 57.0, curve: vec![(0.2, 57.0), (0.6, 57.0)], level: 0.5 };
+        let mut e = PitchEdit::new(0, 0.0, 0.0);
+        e.shape.gain_db = -6.0;
+        e.shape.fade_in = 0.1;
+        let y = apply_pitch(&a, std::slice::from_ref(&note), &[e]);
+        let seg = |d: &AudioData, t0: f32, t1: f32| rms(&d.l[(t0 * RATE as f32) as usize..(t1 * RATE as f32) as usize]);
+        assert!((seg(&y, 0.0, 0.18) - seg(&a, 0.0, 0.18)).abs() < 1e-4, "before the note untouched");
+        assert!(seg(&y, 0.2, 0.22) < seg(&a, 0.2, 0.22) * 0.2, "fades in from silence");
+        let r = seg(&y, 0.4, 0.58) / seg(&a, 0.4, 0.58);
+        assert!((r - 0.5).abs() < 0.03, "−6 dB: {r}");
+        assert!((seg(&y, 0.7, 1.0) - seg(&a, 0.7, 1.0)).abs() < 1e-4, "after the note untouched");
+        // A tail: the move continues 0.2 s after the note's end.
+        let mut t = PitchEdit::new(0, 12.0, 0.0);
+        t.shape.tail = 0.2;
+        let y = apply_pitch(&a, std::slice::from_ref(&note), &[t]);
+        let at = |d: &AudioData, t0: f32, hz: f32| tone_level(&d.l[(t0 * RATE as f32) as usize..((t0 + 0.1) * RATE as f32) as usize], hz);
+        assert!(at(&y, 0.66, 440.0) > at(&y, 0.66, 220.0), "the tail is up an octave too");
+        assert!(at(&y, 0.85, 220.0) > at(&y, 0.85, 440.0), "after the tail the original pitch");
+    }
+
+    #[test]
     fn notes_are_found_and_shifted() {
         // Two notes: A4 for 0.5 s, then C5 for 0.5 s (with a little vibrato).
         let a = audio(
@@ -992,7 +1146,7 @@ mod tests {
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!((notes[0].midi - 69.0).abs() < 0.3 && (notes[1].midi - 72.0).abs() < 0.3);
         // Move the first note up two semitones.
-        let y = apply_pitch(&a, &notes, &[PitchEdit { note: 0, shift: 2.0, drift: 0.0 }]);
+        let y = apply_pitch(&a, &notes, &[PitchEdit::new(0, 2.0, 0.0)]);
         let again = detect_notes(&y);
         assert!(again.iter().any(|n| (n.midi - 71.0).abs() < 0.35 && n.start < 0.2), "{again:?}");
         assert!(again.iter().any(|n| (n.midi - 72.0).abs() < 0.3 && n.start > 0.45), "the second note stays");
