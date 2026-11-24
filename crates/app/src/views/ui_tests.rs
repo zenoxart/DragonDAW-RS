@@ -2054,7 +2054,7 @@ fn mixer_dock_and_sticky_channels() {
     let x = |h: &Harness, id: Id| rects(h).iter().find(|r| r.0 == id).map(|r| r.1.left()).unwrap();
     let master = p.mixer.master.id;
     let bus = p.mixer.channels.iter().find(|c| c.name == "Vocals bus").unwrap().id;
-    let track = p.mixer.channels.iter().find(|c| c.name == "Vocals").unwrap().id;
+    let track = extra[0];
     assert!(x(&h, master) < x(&h, bus) && x(&h, bus) < x(&h, track), "master, then the docked buses, then the rest");
     let r_right = x(&h, right);
     assert_eq!(rects(&h).last().map(|r| r.0), Some(right), "docked right and sticky: drawn last, at the right");

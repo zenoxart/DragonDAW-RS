@@ -1,25 +1,28 @@
-//! Project templates: a project to start from. Two come with Dragon DAW – a mixing set-up and a beat set-up,
-//! both with four group buses – and any project can be saved as a template (File › Save as template…,
-//! kept in `<Projects>/Templates`). One template can be the default: File › New then starts from it.
+//! Project templates: a project to start from. Three come with Dragon DAW – mixing, beat making and
+//! recording – and any project can be saved as a template (File › Save as template…, kept in
+//! `<Projects>/Templates`). One template can be the default: File › New then starts from it.
 //!
-//! The group buses (each a mixer bus with its effect, fed by a track of the same name):
-//! Vocals → Purify, Melodies → Wingspan (stereo widening), Drums → Dragonforge, FX → Prism EQ.
-//! Master: Philosopher's Stone; the beat template puts the Obsidian soft clipper before it.
+//! Mixing and beats are only the four group buses (nothing else is added): Vocals → Purify, Melodies →
+//! Wingspan (stereo widening), Drums → Dragonforge, FX → Prism EQ; Philosopher's Stone on the master, the
+//! beat template with the Obsidian soft clipper before it. Recording: the mixing buses with every effect
+//! bypassed, a Main vocal and a Back vocal track (each with the channel strip) into the Vocals bus, and an
+//! armed Recording track that plays into the Main vocal.
 
 use crate::state::State;
 use crate::theme;
-use dragon_engine::model::{Id, Insert, Instrument, Project};
+use dragon_engine::model::{Id, Insert, Project};
 use egui::RichText;
 use redhive_contracts::ui::Severity;
 use std::path::{Path, PathBuf};
 
 /// The templates that come with Dragon DAW: (key, title, what it sets up).
-pub const BUILTIN: [(&str, &str, &str); 2] = [
-    ("builtin:mixing", "Mixing – four group buses", "Vocals (Purify), Melodies (Wingspan stereo widening), Drums (Dragonforge) and FX (Prism EQ) buses, each fed by its own track; Philosopher's Stone on the master."),
+pub const BUILTIN: [(&str, &str, &str); 3] = [
+    ("builtin:mixing", "Mixing – four group buses", "Only the buses: Vocals (Purify), Melodies (Wingspan stereo widening), Drums (Dragonforge) and FX (Prism EQ); Philosopher's Stone on the master."),
+    ("builtin:beats", "Beat making – four group buses", "Only the buses: Vocals, Melodies, Drums and FX; Obsidian soft clipper before Philosopher's Stone on the master."),
     (
-        "builtin:beats",
-        "Beat making – four group buses",
-        "The starter drum kit routed into the Drums bus (Dragonforge), plus Vocals, Melodies and FX buses; Obsidian soft clipper before Philosopher's Stone on the master.",
+        "builtin:recording",
+        "Recording vocals",
+        "The mixing buses with every effect bypassed, a Main vocal and a Back vocal track (channel strip on each) into the Vocals bus, and an armed Recording track that plays into the Main vocal.",
     ),
 ];
 
@@ -73,59 +76,60 @@ fn group_buses(p: &mut Project) -> Vec<(&'static str, Id)> {
     out
 }
 
-/// A track named `name` whose mixer channel plays into `bus`.
-fn track_into(p: &mut Project, name: &str, icon: &str, bus: Id) {
+/// A track named `name` whose mixer channel plays into `to`; returns (track, its mixer channel).
+fn track_into(p: &mut Project, name: &str, icon: &str, to: Id) -> (Id, Id) {
     let t = p.add_track(name);
     let m = p.track(t).map(|x| x.mixer).unwrap_or(0);
     if let Some(c) = p.mixer.get_mut(m) {
         c.icon = icon.into();
-        c.output = Some(bus);
+        c.output = Some(to);
     }
+    (t, m)
 }
 
-/// The mixing template.
+/// The mixing template: the four group buses and the Stone on the master, nothing else.
 pub fn mixing(p: &mut Project) {
     p.meta.name = "New mix".into();
     p.mode = "mix".into();
-    let buses = group_buses(p);
-    for ((name, icon, ..), (_, bus)) in GROUPS.iter().zip(buses) {
-        track_into(p, name, icon, bus);
-    }
+    group_buses(p);
     let m = p.mixer.master.id;
     insert(p, m, "dragon_particle", &[]);
 }
 
-/// The beat template, on a project that already has the starter kit (empty patterns).
+/// The beat template: the four group buses, the soft clipper before the Stone on the master.
 pub fn beats(p: &mut Project) {
     p.meta.name = "New beat".into();
     p.mode = "beat".into();
-    let buses = group_buses(p);
-    let bus = |n: &str| buses.iter().find(|b| b.0 == n).map(|b| b.1);
-    // The kit's channels play into the Drums bus, other instruments into Melodies.
-    let routes: Vec<(Id, bool)> = p.channels.iter().map(|c| (c.mixer, matches!(c.instrument, Instrument::DrumPads(_)) || is_drum_name(&c.name))).collect();
-    let master = p.mixer.master.id;
-    for (m, drum) in routes {
-        let to = if drum { bus("Drums") } else { bus("Melodies") };
-        if let (Some(c), Some(to)) = (p.mixer.get_mut(m), to) {
-            if c.id != master && c.output.is_none() {
-                c.output = Some(to);
-            }
-        }
-    }
-    for (name, icon) in [("Vocals", "vocal"), ("FX", "sfx")] {
-        if let Some(b) = bus(name) {
-            track_into(p, name, icon, b);
-        }
-    }
+    group_buses(p);
     let m = p.mixer.master.id;
     p.mixer.master.inserts.retain(|i| i.effect != "limiter");
     insert(p, m, "clipper", &[("threshold", -3.0), ("ceiling", -0.3)]);
     insert(p, m, "dragon_particle", &[]);
 }
 
-fn is_drum_name(n: &str) -> bool {
-    let n = n.to_lowercase();
-    ["kick", "snare", "clap", "hat", "perc", "drum", "tom", "crash", "ride", "rim", "808", "shaker"].iter().any(|k| n.contains(k))
+/// The recording template: the mixing buses with every effect bypassed, Main vocal and Back vocal (channel
+/// strip each) into the Vocals bus, an armed Recording track into the Main vocal.
+pub fn recording(p: &mut Project) {
+    mixing(p);
+    p.meta.name = "New recording".into();
+    p.mode = "record".into();
+    p.mixer.master.inserts.iter_mut().for_each(|i| i.enabled = false);
+    p.mixer.channels.iter_mut().flat_map(|c| c.inserts.iter_mut()).for_each(|i| i.enabled = false);
+    let vocals = p.mixer.channels.iter().find(|c| c.name == "Vocals bus").map(|c| c.id).unwrap_or(p.mixer.master.id);
+    let (main_t, main) = track_into(p, "Main vocal", "vocal", vocals);
+    let (back_t, back) = track_into(p, "Back vocal", "vocal", vocals);
+    for m in [main, back] {
+        insert(p, m, "class_a_strip", &[]);
+    }
+    let (rec, _) = track_into(p, "Recording", "vocal", main);
+    for t in [main_t, back_t, rec] {
+        if let Some(t) = p.track_mut(t) {
+            t.audio = true;
+        }
+    }
+    if let Some(t) = p.track_mut(rec) {
+        t.armed = true;
+    }
 }
 
 /// Starts a new project from template `key` (a built-in key or a template file).
@@ -136,20 +140,12 @@ pub fn new_from(st: &mut State, key: &str) {
             mixing(&mut st.session.project);
         }
         "builtin:beats" => {
-            st.new_demo_project();
-            let p = &mut st.session.project;
-            for t in &mut p.tracks {
-                t.clips.clear();
-            }
-            for pat in &mut p.patterns {
-                for c in pat.channels.values_mut() {
-                    c.notes.clear();
-                    for s in &mut c.steps {
-                        s.on = false;
-                    }
-                }
-            }
-            beats(p);
+            st.new_project();
+            beats(&mut st.session.project);
+        }
+        "builtin:recording" => {
+            st.new_project();
+            recording(&mut st.session.project);
         }
         file => match dragon_engine::project_io::load(Path::new(file)) {
             Ok(mut p) => {
@@ -301,29 +297,44 @@ mod tests {
     }
 
     #[test]
-    fn mixing_template_has_four_group_buses_and_the_stone() {
+    fn mixing_template_is_only_the_four_group_buses_and_the_stone() {
         let mut p = Project::empty();
         mixing(&mut p);
         for (name, effect) in [("Vocals bus", "clean_voice"), ("Melodies bus", "imager"), ("Drums bus", "drum_bus"), ("FX bus", "eq")] {
             let bus = p.mixer.channels.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("{name}"));
             assert_eq!(chain(&p, bus.id), [effect], "{name}");
-            let feeding = p.mixer.channels.iter().filter(|c| c.output == Some(bus.id)).count();
-            assert_eq!(feeding, 1, "a track plays into {name}");
         }
+        assert_eq!(p.mixer.channels.len(), 4, "only the buses");
+        assert!(p.tracks.is_empty() && p.channels.is_empty(), "no tracks or instruments added");
         assert_eq!(chain(&p, p.mixer.master.id), ["dragon_particle"]);
     }
 
     #[test]
-    fn beat_template_routes_the_kit_and_clips_before_the_stone() {
+    fn beat_template_is_only_buses_with_the_clipper_before_the_stone() {
         let mut st = State::new(redhive_client_framework::AppContext::new("en"), crate::state::Settings { show_splash: false, ..Default::default() });
         new_from(&mut st, "builtin:beats");
         let p = &st.session.project;
         assert_eq!(chain(p, p.mixer.master.id), ["clipper", "dragon_particle"], "soft clipper before the Stone");
-        let drums = p.mixer.channels.iter().find(|c| c.name == "Drums bus").unwrap().id;
-        let kick = p.channels.iter().find(|c| c.name.to_lowercase().contains("kick")).expect("the kit has a kick");
-        assert_eq!(p.mixer.get(kick.mixer).unwrap().output, Some(drums), "the kick plays into the Drums bus");
-        assert!(p.patterns.iter().all(|pt| pt.channels.values().all(|c| c.notes.is_empty() && c.steps.iter().all(|s| !s.on))), "nothing written yet");
+        assert_eq!(p.mixer.channels.len(), 4, "only the buses");
+        assert!(p.channels.is_empty() && p.tracks.is_empty(), "no kit, no tracks");
         assert_eq!(st.session.history.undo_len(), 0, "starts clean");
+    }
+
+    #[test]
+    fn recording_template_routes_the_vocals() {
+        let mut p = Project::empty();
+        recording(&mut p);
+        let id = |n: &str| p.mixer.channels.iter().find(|c| c.name == n).unwrap_or_else(|| panic!("{n}")).id;
+        let (vocals, main, back, rec) = (id("Vocals bus"), id("Main vocal"), id("Back vocal"), id("Recording"));
+        assert!(p.mixer.channels.iter().filter(|c| c.name.ends_with(" bus")).flat_map(|c| c.inserts.iter()).all(|i| !i.enabled), "the bus effects are bypassed");
+        assert!(p.mixer.master.inserts.iter().all(|i| !i.enabled));
+        for m in [main, back] {
+            assert_eq!(chain(&p, m), ["class_a_strip"]);
+            assert!(p.mixer.get(m).unwrap().inserts[0].enabled, "the channel strips are on");
+            assert_eq!(p.mixer.get(m).unwrap().output, Some(vocals), "into the Vocals bus");
+        }
+        assert_eq!(p.mixer.get(rec).unwrap().output, Some(main), "recording plays into the main vocal");
+        assert!(p.tracks.iter().find(|t| t.name == "Recording").unwrap().armed, "armed to record");
     }
 
     #[test]
