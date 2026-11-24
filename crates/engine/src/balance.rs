@@ -21,7 +21,11 @@
 //! 7. **Faders, not miracles.** Faders stay between −40 and +10 dB; a source that would need more is
 //!    reported, because that gain belongs at the source (clip gain, the instrument's level).
 //! 8. **Touch only what's yours to balance.** Muted and silent channels, buses, returns, VCAs and the
-//!    master keep their faders; pan, sends and effects are never changed. One undo step.
+//!    master keep their faders; pan and sends are never changed. One undo step.
+//! 9. **A Draconic Ghost per channel.** Every balanced channel gets the resonance suppressor first in its
+//!    chain, with a preset for its role ([`ghost_for`]) blended in with the slot's mix knob: more where the
+//!    channel has more energy in the range that preset watches. Its slot is marked as auto-balance's
+//!    ([`GHOST_TAG`]), so balancing again updates it and a Ghost you placed yourself is left alone.
 
 use crate::dsp::{Biquad, BiquadKind};
 use crate::model::{ChannelKind, ClipKind, Id, Instrument, Project};
@@ -570,9 +574,88 @@ pub fn trial_project(p: &Project, entries: &[Entry]) -> Project {
     q
 }
 
+// ------------------------------------------------------------------------------------- draconic ghost
+
+/// The preset name auto-balance gives the Draconic Ghost it places: how it recognises its own slots.
+pub const GHOST_TAG: &str = "Auto-balance";
+
+/// The Draconic Ghost auto-balance puts on a channel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GhostPlan {
+    /// The preset's name ("Auto-balance · Lead vocal").
+    pub preset: String,
+    /// The Ghost's parameters (its defaults with the role's settings).
+    pub params: std::collections::BTreeMap<String, f32>,
+    /// The slot's mix knob, 0 … 1.
+    pub mix: f32,
+}
+
+/// Whether an insert's preset name marks it as auto-balance's Ghost.
+pub fn is_auto_ghost(effect: &str, preset: &str) -> bool {
+    effect == "ghost" && preset.starts_with(GHOST_TAG)
+}
+
+/// The Ghost for a channel of `role` that sounds like `prof`. Each role has a preset that watches where
+/// that kind of source rings (a vocal's 2 – 6 kHz harshness, a kick's boxy 300 – 500 Hz, a bass's
+/// 150 – 250 Hz mud …) and leaves the rest alone (its low / high cut), and a base mix; the mix grows with
+/// the channel's energy share in the band the preset watches: `mix = base · (0.8 + 0.8 · share)`,
+/// 0.1 … 0.9.
+pub fn ghost_for(role: Role, prof: &Profile) -> GhostPlan {
+    // (depth %, sharpness, selectivity, attack ms, release ms, engine, low cut, high cut,
+    //  focus (node, freq, gain), base mix, watched band)
+    type Focus = &'static [(&'static str, f32, f32)];
+    let (depth, sharp, sel, atk, rel, engine, lo, hi, focus, base, band): (f32, f32, f32, f32, f32, f32, f32, f32, Focus, f32, usize) = match role {
+        Role::LeadVocal => (55.0, 6.0, 6.0, 2.0, 70.0, 1.0, 120.0, 16000.0, &[("4", 3000.0, 4.0), ("5", 5500.0, 3.0)], 0.6, 3),
+        Role::BackingVocal => (50.0, 6.0, 6.0, 2.0, 70.0, 1.0, 150.0, 16000.0, &[("4", 3000.0, 3.0), ("5", 5500.0, 3.0)], 0.55, 3),
+        Role::Kick => (30.0, 4.0, 5.0, 5.0, 80.0, 0.0, 150.0, 8000.0, &[("3", 400.0, 4.0)], 0.35, 2),
+        Role::Snare => (40.0, 6.0, 6.0, 2.0, 60.0, 0.0, 200.0, 12000.0, &[("3", 900.0, 3.0)], 0.4, 2),
+        Role::Toms => (40.0, 6.0, 6.0, 3.0, 90.0, 0.0, 80.0, 8000.0, &[("3", 300.0, 3.0)], 0.4, 2),
+        Role::Drums => (35.0, 5.0, 5.0, 3.0, 70.0, 0.0, 100.0, 16000.0, &[("3", 450.0, 2.0)], 0.35, 2),
+        Role::Bass => (35.0, 4.0, 5.0, 8.0, 120.0, 1.0, 60.0, 5000.0, &[("2", 200.0, 3.0)], 0.4, 1),
+        Role::Sub808 => (30.0, 4.0, 5.0, 10.0, 150.0, 1.0, 40.0, 2000.0, &[("2", 150.0, 2.0)], 0.3, 1),
+        Role::Lead => (45.0, 5.0, 6.0, 3.0, 80.0, 1.0, 150.0, 16000.0, &[("4", 2500.0, 3.0)], 0.45, 3),
+        Role::Chords => (45.0, 5.0, 5.0, 4.0, 100.0, 1.0, 150.0, 16000.0, &[("3", 600.0, 2.0), ("4", 2500.0, 2.0)], 0.45, 2),
+        Role::Pad => (50.0, 3.0, 4.0, 10.0, 150.0, 1.0, 120.0, 16000.0, &[("3", 800.0, 2.0)], 0.5, 2),
+        Role::Perc => (35.0, 6.0, 6.0, 1.0, 40.0, 0.0, 200.0, 18000.0, &[("5", 6000.0, 2.0)], 0.35, 4),
+        Role::Cymbals => (45.0, 6.0, 6.0, 1.0, 40.0, 1.0, 1000.0, 18000.0, &[("5", 7000.0, 3.0)], 0.4, 4),
+        Role::Fx | Role::Room | Role::Other => (40.0, 5.0, 5.0, 3.0, 80.0, 1.0, 100.0, 16000.0, &[], 0.3, 2),
+    };
+    let def = crate::effects::ghost::def();
+    let mut params: std::collections::BTreeMap<String, f32> = def.params.iter().map(|p| (p.id.to_string(), p.default)).collect();
+    for (k, v) in [("depth", depth), ("sharpness", sharp), ("selectivity", sel), ("attack", atk), ("release", rel), ("engine", engine), ("low_cut", lo), ("high_cut", hi)] {
+        params.insert(k.into(), v);
+    }
+    for &(n, f, g) in focus {
+        params.insert(format!("f{n}"), f);
+        params.insert(format!("g{n}"), g);
+    }
+    let share = prof.bands.get(band).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+    let mix = (base * (0.8 + 0.8 * share)).clamp(0.1, 0.9);
+    GhostPlan { preset: format!("{GHOST_TAG} · {}", role.label()), params, mix }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every role gets a Ghost whose parameters are in range; more energy where it listens = more mix.
+    #[test]
+    fn ghost_presets_fit_their_roles() {
+        let def = crate::effects::ghost::def();
+        for r in Role::ALL {
+            let g = ghost_for(r, &Profile::default());
+            assert!(is_auto_ghost("ghost", &g.preset) && g.preset.ends_with(r.label()));
+            assert!((0.1..=0.9).contains(&g.mix), "{r:?} {}", g.mix);
+            for p in def.params {
+                let v = g.params[p.id];
+                assert!(v >= p.min && v <= p.max, "{r:?} {} = {v}", p.id);
+            }
+        }
+        let quiet = Profile { bands: [0.3, 0.3, 0.3, 0.05, 0.05], ..Default::default() };
+        let harsh = Profile { bands: [0.1, 0.1, 0.3, 0.4, 0.1], ..Default::default() };
+        assert!(ghost_for(Role::LeadVocal, &harsh).mix > ghost_for(Role::LeadVocal, &quiet).mix);
+        assert!(!is_auto_ghost("ghost", "My vocal ghost") && !is_auto_ghost("eq", "Auto-balance · Kick"));
+    }
 
     fn prof(active: f32, bands: [f32; 5], peak: f32, presence: f32) -> Profile {
         Profile { active, integrated: active - 2.0, peak_db: peak, presence, bands }

@@ -3,8 +3,12 @@
 //! for, a level bar showing where it sat before and where it sits now, how far its fader moved and
 //! anything that needs a hand. The mix style, a Before / After switch to compare by ear, "keep my fader"
 //! per channel and role corrections all re-balance at once from the same measurement.
+//!
+//! Every balanced channel also gets a Draconic Ghost (resonance suppressor) with a preset for its role,
+//! blended in with the slot's mix knob. The report keeps it compact: one switch for all of them and a
+//! small "Ghost 45 %" tag per channel that opens a line with its preset, its mix, on / off and its editor.
 
-use crate::state::State;
+use crate::state::{GhostRow, State};
 use crate::theme;
 use dragon_engine::balance::{Entry, Group, Role, RoleSource, Style};
 use dragon_engine::model::Id;
@@ -19,6 +23,10 @@ enum Action {
     Remeasure,
     Revert,
     Done,
+    GhostAll(bool),
+    GhostToggle(Id),
+    GhostMix(Id, f32, bool),
+    GhostOpen(Id),
 }
 
 fn group_color(g: Group) -> Color32 {
@@ -49,13 +57,14 @@ pub fn window(ctx: &egui::Context, st: &mut State) {
             return;
         }
         let Some(rep) = st.balance_report.clone() else { return };
+        let ghosts = crate::state::ghost_rows(&st.session.project, &rep.entries, &rep.ghost);
         header(ui, &rep);
         ui.add_space(8.0);
         controls(ui, &rep, &mut act);
         ui.add_space(6.0);
         ui.separator();
         let footer_h = 44.0;
-        egui::ScrollArea::vertical().max_height((ui.available_height() - footer_h).max(120.0)).auto_shrink([false, true]).show(ui, |ui| list(ui, &rep, &mut act));
+        egui::ScrollArea::vertical().max_height((ui.available_height() - footer_h).max(120.0)).auto_shrink([false, true]).show(ui, |ui| list(ui, &rep, &ghosts, &mut act));
         ui.separator();
         footer(ui, &mut act);
     });
@@ -68,6 +77,10 @@ pub fn window(ctx: &egui::Context, st: &mut State) {
         Action::Remeasure => st.ctx.run("dragon.mixer.autobalance", serde_json::Value::Null),
         Action::Revert => st.revert_balance(),
         Action::Done => st.close_balance(),
+        Action::GhostAll(on) => st.set_balance_ghosts(on),
+        Action::GhostToggle(id) => st.toggle_balance_ghost(id),
+        Action::GhostMix(id, m, done) => st.set_balance_ghost_mix(id, m, done),
+        Action::GhostOpen(id) => st.open_balance_ghost(id),
     }
     if !open {
         if let Some(j) = &mut st.balance_job {
@@ -142,7 +155,12 @@ fn chip(ui: &mut Ui, text: String, color: Color32, hover: &str) {
 }
 
 fn header(ui: &mut Ui, rep: &crate::state::BalanceReport) {
-    ui.label(RichText::new("Every channel's volume is set for an even starting mix. Pan, effects and sends are not touched.").color(theme::TEXT_DIM));
+    let text = if rep.ghost.none {
+        "Every channel's volume is set for an even starting mix. Pan, effects and sends are not touched."
+    } else {
+        "Every channel's volume is set for an even starting mix, and a Draconic Ghost tames its resonances. Pan, sends and your own effects are not touched."
+    };
+    ui.label(RichText::new(text).color(theme::TEXT_DIM));
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
         let n = rep.entries.iter().filter(|e| !e.keep).count();
@@ -174,6 +192,17 @@ fn controls(ui: &mut Ui, rep: &crate::state::BalanceReport, act: &mut Action) {
                 *act = Action::Style(s);
             }
         }
+        ui.separator();
+        let mut on = !rep.ghost.none;
+        if ui
+            .checkbox(&mut on, "Ghost")
+            .on_hover_text(
+                "A Draconic Ghost (resonance suppressor) first on every balanced channel, with a preset for what the channel is, blended in with its mix knob. Each channel's tag shows how much – click it to change.",
+            )
+            .changed()
+        {
+            *act = Action::GhostAll(on);
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let after = ui.selectable_label(!rep.hearing_before, RichText::new("  After  ").strong()).on_hover_text("The balanced faders");
             let before = ui.selectable_label(rep.hearing_before, RichText::new("  Before  ").strong()).on_hover_text("Your old faders – press play and switch to hear the difference");
@@ -188,7 +217,7 @@ fn controls(ui: &mut Ui, rep: &crate::state::BalanceReport, act: &mut Action) {
     });
 }
 
-fn list(ui: &mut Ui, rep: &crate::state::BalanceReport, act: &mut Action) {
+fn list(ui: &mut Ui, rep: &crate::state::BalanceReport, ghosts: &[GhostRow], act: &mut Action) {
     let top = rep.entries.iter().map(|e| e.after_lufs()).fold(-200.0f32, f32::max);
     for g in Group::ALL {
         let rows: Vec<&Entry> = rep.entries.iter().filter(|e| e.role.group() == g).collect();
@@ -203,14 +232,16 @@ fn list(ui: &mut Ui, rep: &crate::state::BalanceReport, act: &mut Action) {
             ui.label(RichText::new(format!("{} channel{}", rows.len(), if rows.len() == 1 { "" } else { "s" })).small().color(theme::TEXT_DIM));
         });
         for e in rows {
-            row(ui, e, top, act);
+            row(ui, e, top, ghosts.iter().find(|g| g.id == e.id).filter(|_| !rep.ghost.none), act);
         }
     }
     ui.add_space(4.0);
 }
 
-fn row(ui: &mut Ui, e: &Entry, top: f32, act: &mut Action) {
+fn row(ui: &mut Ui, e: &Entry, top: f32, ghost: Option<&GhostRow>, act: &mut Action) {
     let col = group_color(e.role.group());
+    let open_id = egui::Id::new(("balance.ghost.open", e.id));
+    let mut open = ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
     egui::Frame::new().fill(theme::PANEL).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
         ui.horizontal(|ui| {
             // Name.
@@ -247,6 +278,11 @@ fn row(ui: &mut Ui, e: &Entry, top: f32, act: &mut Action) {
                 if ui.checkbox(&mut keep, "Keep mine").on_hover_text("Leave this channel's fader where you had it").changed() {
                     *act = Action::Keep(e.id);
                 }
+                if let Some(g) = ghost {
+                    if ghost_tag(ui, g, open).clicked() {
+                        open = !open;
+                    }
+                }
                 if !e.keep && e.short_db > 0.5 {
                     ui.label(RichText::new(format!("source too quiet by {:.0} dB", e.short_db)).small().color(theme::WARN))
                         .on_hover_text("The fader is already at its +10 dB top. Turn the source up instead: the clip's gain, the instrument's volume or the input gain when recording.");
@@ -256,8 +292,60 @@ fn row(ui: &mut Ui, e: &Entry, top: f32, act: &mut Action) {
                 }
             });
         });
+        if let (true, Some(g)) = (open, ghost) {
+            ghost_line(ui, g, act);
+        }
     });
+    ui.data_mut(|d| d.insert_temp(open_id, open));
     ui.add_space(2.0);
+}
+
+/// The compact Ghost tag of a row: its mix, or why there is none.
+fn ghost_tag(ui: &mut Ui, g: &GhostRow, open: bool) -> egui::Response {
+    let (text, color) = if g.own {
+        ("Ghost: yours".to_string(), theme::TEXT_DIM)
+    } else if g.full {
+        ("Ghost: no slot".to_string(), theme::WARN)
+    } else if !g.on {
+        ("Ghost off".to_string(), theme::TEXT_DIM)
+    } else {
+        (format!("Ghost {:.0} %", g.plan.mix * 100.0), Color32::from_rgb(0xb8, 0xc8, 0xff))
+    };
+    let arrow = if open { "⏷" } else { "▶" };
+    ui.add(egui::Button::new(RichText::new(format!("{arrow} {text}")).small().color(color)).frame(false))
+        .on_hover_text("Draconic Ghost, the resonance suppressor auto-balance put first on this channel – click for its preset and mix")
+}
+
+/// The opened Ghost line: on / off, its preset, the mix and its editor.
+fn ghost_line(ui: &mut Ui, g: &GhostRow, act: &mut Action) {
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        if g.own {
+            ui.label(RichText::new("This channel has a Draconic Ghost of yours – auto-balance leaves it alone.").small().color(theme::TEXT_DIM));
+            return;
+        }
+        if g.full {
+            ui.label(RichText::new("All effect slots are taken – free one to get a Ghost here.").small().color(theme::WARN));
+            return;
+        }
+        let mut on = g.on;
+        if ui.checkbox(&mut on, "").on_hover_text("This channel's Ghost on or off").changed() {
+            *act = Action::GhostToggle(g.id);
+        }
+        let preset = g.plan.preset.split(" · ").nth(1).unwrap_or(&g.plan.preset);
+        ui.label(RichText::new(format!("Draconic Ghost · {preset}")).small().strong());
+        if !g.on {
+            return;
+        }
+        let mut m = g.plan.mix * 100.0;
+        let r = ui.add(egui::Slider::new(&mut m, 0.0..=100.0).fixed_decimals(0).suffix(" %").text("mix")).on_hover_text("How much of the Ghost's preset is mixed in (the slot's mix knob)");
+        if r.changed() || r.drag_stopped() {
+            *act = Action::GhostMix(g.id, m / 100.0, !r.dragged());
+        }
+        if ui.small_button("Open").on_hover_text("The Ghost's own editor: tune its preset").clicked() {
+            *act = Action::GhostOpen(g.id);
+        }
+    });
 }
 
 fn role_menu(ui: &mut Ui, e: &Entry, act: &mut Action) {

@@ -5,7 +5,7 @@
 - **Routing:** route arrows send a channel to another; right-click routes to that channel only.
 - **Right-click a strip:** reset fader, make the channel sticky (stays visible), dock it, **clone it with its effects**.
 - Right-click an insert's enable LED to switch every channel or effect in the mixer back on.
-- **Tools › Auto-balance** sets the faders by the roles of the channels.
+- **Tools › Auto-balance** sets the faders by the roles of the channels and puts a Draconic Ghost (resonance suppressor) first on each one, with a preset for its role. The report shows each Ghost as a small tag ("Ghost 45 %"); click it for its preset, its mix, on / off and its editor, or switch all of them off with **Ghost**.
 
 ## How it works
 
@@ -48,5 +48,15 @@ silence, tails and bleed left out, and the loud half of what remains taken as it
 (channel, tracks, clips, instrument, samples) or, without a hint, from its sound (low-end and top energy, transience,
 how much of the song it plays in). The lead vocal (or the kick) is the reference; every role is set a fixed number
 of dB below it, and the sum is trimmed to leave −6 dB of headroom into the master.
+
+**Draconic Ghost per channel.** Each role has a Ghost preset that listens where that kind of source rings and
+leaves the rest alone: a vocal's 2 – 6 kHz harshness (low cut 120 Hz, focus +4 dB at 3 kHz and +3 dB at 5.5 kHz),
+a kick's boxy 400 Hz (low cut 150 Hz, the zero-latency engine), a bass's 200 Hz mud, cymbals above 1 kHz, and so on.
+The slot's mix knob blends it in: $m = m_r\,(0.8 + 0.8\,s)$, clamped to 0.1 … 0.9, where $m_r$ is the role's base
+mix (0.3 for effects and rooms … 0.6 for the lead vocal) and $s$ the channel's measured energy share in the band the
+preset watches (below 100 Hz, 100–250 Hz, 250 Hz–2 kHz, 2–6 kHz or above 6 kHz). The slot is named
+"Auto-balance · <role>": balancing again updates it (a new role brings its preset; otherwise only the mix changes, so
+your own tweaks stay), a Ghost you placed yourself is left alone and none is added next to it, **Before** compares
+without the Ghosts, and **Undo balance** takes them out.
 
 [Effects](../effects/README.md) · [Manual](../README.md)

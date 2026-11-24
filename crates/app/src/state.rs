@@ -481,12 +481,88 @@ pub struct BalanceReport {
     pub keep: Vec<Id>,
     /// A/B: the old faders are on right now (to compare).
     pub hearing_before: bool,
+    /// The Draconic Ghosts auto-balance puts on the channels.
+    pub ghost: GhostChoice,
+}
+
+/// What the user chose about auto-balance's Draconic Ghosts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GhostChoice {
+    /// No Ghosts at all.
+    pub none: bool,
+    /// Channels whose Ghost is switched off.
+    pub off: Vec<Id>,
+    /// Mixes the user set (0 … 1) instead of the planned ones.
+    pub mix: Vec<(Id, f32)>,
+}
+
+/// One balanced channel's Draconic Ghost, as the report shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GhostRow {
+    pub id: Id,
+    pub plan: dragon_engine::balance::GhostPlan,
+    /// Placed (not switched off, no Ghost of the user's own, a free slot).
+    pub on: bool,
+    /// The channel already has a Ghost the user placed: auto-balance leaves it alone.
+    pub own: bool,
+    /// No free effect slot.
+    pub full: bool,
+}
+
+/// The Ghost each balanced channel gets, with the user's choices (planned mix or theirs).
+pub fn ghost_rows(p: &Project, entries: &[dragon_engine::balance::Entry], g: &GhostChoice) -> Vec<GhostRow> {
+    use dragon_engine::balance::{ghost_for, is_auto_ghost};
+    entries
+        .iter()
+        .map(|e| {
+            let mut plan = ghost_for(e.role, &e.profile);
+            if let Some(&(_, m)) = g.mix.iter().find(|(i, _)| *i == e.id) {
+                plan.mix = m;
+            }
+            let ins = p.mixer.get(e.id).map(|c| c.inserts.as_slice()).unwrap_or(&[]);
+            let own = ins.iter().any(|i| i.effect == "ghost" && !is_auto_ghost(&i.effect, &i.preset));
+            let has = ins.iter().any(|i| is_auto_ghost(&i.effect, &i.preset));
+            let full = !has && ins.len() >= crate::chains::MAX_SLOTS;
+            GhostRow { id: e.id, plan, on: !g.none && !g.off.contains(&e.id) && !own && !full, own, full }
+        })
+        .collect()
+}
+
+/// Puts the Ghosts of `rows` into their channels (first in the chain), updates the ones already there
+/// and takes out those switched off. A Ghost whose role changed gets the new role's preset; otherwise
+/// its parameters are left as they are (the user may have tuned them) and only the mix follows.
+fn place_ghosts(p: &mut Project, rows: &[GhostRow]) {
+    use dragon_engine::balance::is_auto_ghost;
+    for r in rows {
+        let iid = p.next_id();
+        let Some(c) = p.mixer.get_mut(r.id) else { continue };
+        let at = c.inserts.iter().position(|i| is_auto_ghost(&i.effect, &i.preset));
+        match (at, r.on) {
+            (Some(k), false) => {
+                c.inserts.remove(k);
+            }
+            (Some(k), true) => {
+                let i = &mut c.inserts[k];
+                if i.preset != r.plan.preset {
+                    i.params = r.plan.params.clone();
+                    i.preset = r.plan.preset.clone();
+                }
+                i.mix = r.plan.mix;
+                i.enabled = true;
+            }
+            (None, true) => c.inserts.insert(
+                0,
+                Insert { id: iid, effect: "ghost".into(), enabled: true, mix: r.plan.mix, params: r.plan.params.clone(), sidechain: None, plugin: None, preset: r.plan.preset.clone(), mods: Vec::new(), file: None },
+            ),
+            (None, false) => {}
+        }
+    }
 }
 
 /// A running mixer auto-balance (see [`State::start_auto_balance`]).
 pub struct AutoBalanceJob {
     /// The style and kept channels of the previous report, carried into the new one.
-    pub carry: (dragon_engine::balance::Style, Vec<Id>),
+    pub carry: (dragon_engine::balance::Style, Vec<Id>, GhostChoice),
     /// The user closed the progress window (the result still opens when it's done).
     pub hidden: bool,
     pub progress: Arc<std::sync::atomic::AtomicU32>,
@@ -792,11 +868,11 @@ impl State {
             balance::finish(&mut entries, offset);
             if let Ok(mut r) = r2.lock() {
                 let base = entries.clone();
-                *r = Some(BalanceReport { profiles, entries, offset, sum, open: true, base, style: Default::default(), keep: Vec::new(), hearing_before: false });
+                *r = Some(BalanceReport { profiles, entries, offset, sum, open: true, base, style: Default::default(), keep: Vec::new(), hearing_before: false, ghost: GhostChoice::default() });
             }
             redhive_client_framework::runtime::request_repaint();
         });
-        let carry = self.balance_report.take().map(|r| (r.style, r.keep)).unwrap_or_default();
+        let carry = self.balance_report.take().map(|r| (r.style, r.keep, r.ghost)).unwrap_or_default();
         self.balance_job = Some(AutoBalanceJob { carry, hidden: false, progress, result });
     }
 
@@ -804,13 +880,14 @@ impl State {
     pub fn poll_auto_balance(&mut self) {
         let Some(job) = &self.balance_job else { return };
         let Some(mut report) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
-        let (style, keep) = job.carry.clone();
+        let (style, keep, ghost) = job.carry.clone();
         self.balance_job = None;
         if report.entries.is_empty() {
             self.toast("Auto-balance: no unmuted channel with audio to balance", Severity::Warning);
             return;
         }
-        self.apply_balance(&report.entries, "Auto-balance", None);
+        report.ghost = ghost;
+        self.apply_balance(&report.entries, "Auto-balance", None, &report.ghost);
         let n = report.entries.len();
         let short = report.entries.iter().filter(|e| e.short_db.abs() > 0.5).count();
         let extra = if short > 0 { format!(" – {short} need gain at the source, see the report") } else { String::new() };
@@ -825,8 +902,10 @@ impl State {
         }
     }
 
-    fn apply_balance(&mut self, entries: &[dragon_engine::balance::Entry], label: &str, role: Option<(Id, Option<dragon_engine::balance::Role>)>) {
+    fn apply_balance(&mut self, entries: &[dragon_engine::balance::Entry], label: &str, role: Option<(Id, Option<dragon_engine::balance::Role>)>, ghost: &GhostChoice) {
         let faders: Vec<(Id, f32)> = entries.iter().map(|e| (e.id, dragon_engine::dsp::db_to_gain(e.fader_db))).collect();
+        let entries = entries.to_vec();
+        let ghost = ghost.clone();
         self.session.edit(label, |p| {
             if let Some((id, r)) = role {
                 if let Some(c) = p.mixer.get_mut(id) {
@@ -838,6 +917,9 @@ impl State {
                     c.volume = *v;
                 }
             }
+            // The role change above is in `p` already: the Ghosts follow the new role.
+            let rows = ghost_rows(p, &entries, &ghost);
+            place_ghosts(p, &rows);
         });
     }
 
@@ -895,7 +977,8 @@ impl State {
         let mut entries = balance::plan_with(&p, &rep.profiles, &[], rep.style, &rep.keep);
         let offset = balance::carry_offset(&rep.base, rep.offset, &entries);
         balance::finish(&mut entries, offset);
-        self.apply_balance(&entries, label, role);
+        let ghost = rep.ghost.clone();
+        self.apply_balance(&entries, label, role, &ghost);
         if let Some(r) = &mut self.balance_report {
             r.entries = entries;
             r.hearing_before = false;
@@ -928,6 +1011,64 @@ impl State {
         self.rebalance("Auto-balance: keep fader", None);
     }
 
+    /// Ghosts on every balanced channel, or none (one undo step).
+    pub fn set_balance_ghosts(&mut self, on: bool) {
+        if let Some(r) = &mut self.balance_report {
+            r.ghost.none = !on;
+        }
+        self.reapply_ghosts(if on { "Auto-balance: Ghosts on" } else { "Auto-balance: Ghosts off" });
+    }
+
+    /// One channel's Ghost on or off (one undo step).
+    pub fn toggle_balance_ghost(&mut self, id: Id) {
+        if let Some(r) = &mut self.balance_report {
+            if let Some(k) = r.ghost.off.iter().position(|x| *x == id) {
+                r.ghost.off.remove(k);
+            } else {
+                r.ghost.off.push(id);
+            }
+        }
+        self.reapply_ghosts("Auto-balance: Ghost");
+    }
+
+    /// One channel's Ghost mix (0 … 1) while its slider moves; `done` ends the drag's undo step.
+    pub fn set_balance_ghost_mix(&mut self, id: Id, mix: f32, done: bool) {
+        let mix = mix.clamp(0.0, 1.0);
+        if let Some(r) = &mut self.balance_report {
+            r.ghost.mix.retain(|(i, _)| *i != id);
+            r.ghost.mix.push((id, mix));
+        }
+        self.session.gesture("Auto-balance: Ghost mix", |p| {
+            if let Some(c) = p.mixer.get_mut(id) {
+                for i in c.inserts.iter_mut().filter(|i| dragon_engine::balance::is_auto_ghost(&i.effect, &i.preset)) {
+                    i.mix = mix;
+                }
+            }
+        });
+        if done {
+            self.session.end_gesture();
+        }
+    }
+
+    /// Opens the editor of a channel's auto-balance Ghost.
+    pub fn open_balance_ghost(&mut self, id: Id) {
+        let iid = self.session.project.mixer.get(id).and_then(|c| c.inserts.iter().find(|i| dragon_engine::balance::is_auto_ghost(&i.effect, &i.preset)).map(|i| i.id));
+        if let Some(iid) = iid {
+            if !self.ui.effect_windows.contains(&(id, iid)) {
+                self.ui.effect_windows.push((id, iid));
+            }
+        }
+    }
+
+    fn reapply_ghosts(&mut self, label: &str) {
+        let Some(rep) = &self.balance_report else { return };
+        let (entries, ghost) = (rep.entries.clone(), rep.ghost.clone());
+        self.session.edit(label, |p| {
+            let rows = ghost_rows(p, &entries, &ghost);
+            place_ghosts(p, &rows);
+        });
+    }
+
     /// A/B: puts the old faders on (`true`) or the balanced ones back, to compare by ear. Not an undo
     /// step: the balance itself is one.
     pub fn hear_balance_before(&mut self, before: bool) {
@@ -936,6 +1077,10 @@ impl State {
         for e in &rep.entries {
             if let Some(c) = self.session.project.mixer.get_mut(e.id) {
                 c.volume = dragon_engine::dsp::db_to_gain(if before { e.before_db } else { e.fader_db });
+                // Before = without auto-balance's Ghosts too.
+                for i in c.inserts.iter_mut().filter(|i| dragon_engine::balance::is_auto_ghost(&i.effect, &i.preset)) {
+                    i.enabled = !before;
+                }
             }
         }
         self.session.history.touch();
@@ -949,10 +1094,11 @@ impl State {
             for (id, v) in &back {
                 if let Some(c) = p.mixer.get_mut(*id) {
                     c.volume = *v;
+                    c.inserts.retain(|i| !dragon_engine::balance::is_auto_ghost(&i.effect, &i.preset));
                 }
             }
         });
-        self.toast("Faders are back where they were", Severity::Info);
+        self.toast("Faders are back where they were, the Ghosts are gone", Severity::Info);
     }
 
     /// Closes the report, keeping what is on (the balance, unless the old faders were being compared:

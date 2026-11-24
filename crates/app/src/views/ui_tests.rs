@@ -1382,12 +1382,39 @@ fn mixer_auto_balance() {
     let (lufs, peak) = rep.sum;
     assert!(lufs <= -15.9 && peak <= -5.9, "headroom into the master: {:?}", rep.sum);
     assert!((lufs + 16.0).abs() < 0.2 || (peak + 6.0).abs() < 0.2, "the stricter target is met exactly: {:?}", rep.sum);
+    // A Draconic Ghost first on each balanced channel, with its role's preset and planned mix.
+    let ghost = |h: &Harness, id| h.st.session.project.mixer.get(id).unwrap().inserts.iter().find(|i| dragon_engine::balance::is_auto_ghost(&i.effect, &i.preset)).cloned();
+    for e in &rep.entries {
+        let c = h.st.session.project.mixer.get(e.id).unwrap();
+        let g = &c.inserts[0];
+        let plan = dragon_engine::balance::ghost_for(e.role, &e.profile);
+        assert!(g.effect == "ghost" && g.preset == plan.preset && (g.mix - plan.mix).abs() < 1e-6 && g.enabled, "{} {:?}", e.name, g.preset);
+    }
+    assert_eq!(ghost(&h, mk).unwrap().preset, "Auto-balance · Kick");
+    assert_eq!(h.st.session.history.labels().last().map(|s| s.as_str()), Some("Auto-balance"), "faders and Ghosts are one step");
     // Calling the pad a lead instrument (−4 instead of −12, no low-end penalty: still 1.5) moves only it.
     h.st.set_balance_role(mp, Some(dragon_engine::balance::Role::Lead));
     let (k2, p2) = (vol(&h, mk), vol(&h, mp));
     assert!(((p2 - k2) - (p - k) - 8.0).abs() < 0.05, "pad 8 dB closer to the kick: kick {k:.1} -> {k2:.1}, pad {p:.1} -> {p2:.1}");
     assert!(k2 < k, "the headroom is kept: everything else comes down a little");
     assert_eq!(h.st.session.project.mixer.get(mp).unwrap().balance_role, Some(dragon_engine::balance::Role::Lead), "remembered");
+    assert_eq!(ghost(&h, mp).unwrap().preset, "Auto-balance · Lead instrument", "the Ghost follows the role");
+    assert_eq!(h.st.session.project.mixer.get(mp).unwrap().inserts.iter().filter(|i| i.effect == "ghost").count(), 1, "updated, not added again");
+    // The Ghost's mix: one undo step per drag, kept when the balance is re-planned.
+    let steps = h.st.session.history.undo_len();
+    h.st.set_balance_ghost_mix(mk, 0.3, false);
+    h.st.set_balance_ghost_mix(mk, 0.2, true);
+    assert!((ghost(&h, mk).unwrap().mix - 0.2).abs() < 1e-6);
+    assert_eq!(h.st.session.history.undo_len(), steps + 1);
+    // One channel's Ghost off and on again; all of them off and on.
+    h.st.toggle_balance_ghost(mp);
+    assert!(ghost(&h, mp).is_none());
+    h.st.toggle_balance_ghost(mp);
+    assert!(ghost(&h, mp).is_some());
+    h.st.set_balance_ghosts(false);
+    assert!(ghost(&h, mk).is_none() && ghost(&h, mp).is_none());
+    h.st.set_balance_ghosts(true);
+    assert!((ghost(&h, mk).unwrap().mix - 0.2).abs() < 1e-6, "the user's mix comes back with it");
     // Keep my fader: the pad goes back to where it was before the balance.
     let pad_before = h.st.balance_report.as_ref().unwrap().base.iter().find(|e| e.id == mp).unwrap().before_db;
     h.st.toggle_balance_keep(mp);
@@ -1398,20 +1425,36 @@ fn mixer_auto_balance() {
     h.st.set_balance_style(dragon_engine::balance::Style::BeatDriven);
     let gap1 = vol(&h, mk) - vol(&h, mp);
     assert!((gap1 - gap0 - 2.0).abs() < 0.05, "{gap0} -> {gap1}");
+    assert!((ghost(&h, mk).unwrap().mix - 0.2).abs() < 1e-6, "re-planning keeps the user's Ghost mix");
     // A/B: Before puts the old faders on without an undo step, After brings the balance back.
     let (after_k, steps) = (vol(&h, mk), h.st.session.history.undo_len());
     h.st.hear_balance_before(true);
     assert!((vol(&h, mk) - h.st.balance_report.as_ref().unwrap().base[0].before_db).abs() < 0.01 || (vol(&h, mk) - after_k).abs() > 0.01);
     assert_eq!(h.st.session.history.undo_len(), steps, "comparing is not an edit");
+    assert!(!ghost(&h, mk).unwrap().enabled, "Before is without the Ghosts too");
     h.st.close_balance();
     assert!((vol(&h, mk) - after_k).abs() < 0.01, "closing while comparing keeps the balance");
+    assert!(ghost(&h, mk).unwrap().enabled);
+    // A Ghost the user placed on a channel: auto-balance takes its own out there and leaves the user's.
+    h.st.session.edit("my ghost", |p| {
+        let id = p.next_id();
+        let d = dragon_engine::effects::find("ghost").unwrap();
+        p.mixer.get_mut(mp).unwrap().inserts.push(Insert { id, effect: "ghost".into(), enabled: true, mix: 1.0, params: d.defaults(), sidechain: None, plugin: None, preset: "Mine".into(), mods: Vec::new(), file: None });
+    });
+    h.st.set_balance_style(dragon_engine::balance::Style::Balanced);
+    assert!(ghost(&h, mp).is_none());
+    assert!(h.st.session.project.mixer.get(mp).unwrap().inserts.iter().any(|i| i.preset == "Mine"));
+    let rows = crate::state::ghost_rows(&h.st.session.project, &h.st.balance_report.as_ref().unwrap().entries, &h.st.balance_report.as_ref().unwrap().ghost);
+    assert!(rows.iter().any(|r| r.id == mp && r.own && !r.on));
     // Undo balance: every fader back.
     h.st.balance_report.as_mut().unwrap().open = true;
     let base = h.st.balance_report.as_ref().unwrap().base.clone();
     h.st.revert_balance();
     for e in base {
         assert!((vol(&h, e.id) - e.before_db).abs() < 0.01);
+        assert!(ghost(&h, e.id).is_none(), "the Ghosts go with it");
     }
+    assert!(h.st.session.project.mixer.get(mp).unwrap().inserts.iter().any(|i| i.preset == "Mine"), "the user's Ghost stays");
     assert!(h.st.balance_report.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
