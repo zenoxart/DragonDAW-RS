@@ -17,7 +17,7 @@ fn mono(p: &egui::Painter, at: Pos2, align: egui::Align2, text: impl ToString, s
 
 /// The ids drawn here.
 pub fn draws(id: &str) -> bool {
-    matches!(id, "convolver" | "volume_shaper" | "analyzer" | "tuner" | "amp")
+    matches!(id, "convolver" | "volume_shaper" | "analyzer" | "tuner" | "amp" | "vocoder" | "freqshift" | "stutter" | "tape_stop" | "granular" | "lofi" | "exciter" | "autofilter" | "shimmer" | "freeze")
 }
 
 pub fn draw(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
@@ -27,6 +27,16 @@ pub fn draw(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
         "analyzer" => analyzer(p, r, h, col),
         "tuner" => tuner(p, r, h, col),
         "amp" => amp(p, r, h, col),
+        "vocoder" => vocoder(p, r, h, col),
+        "freqshift" => freqshift(p, r, h, col),
+        "stutter" => stutter(p, r, h, col),
+        "tape_stop" => tape_stop(p, r, h, col),
+        "granular" => granular(p, r, h, col),
+        "lofi" => lofi(p, r, h, col),
+        "exciter" => exciter(p, r, h, col),
+        "autofilter" => autofilter(p, r, h, col),
+        "shimmer" => shimmer(p, r, h, col),
+        "freeze" => freeze(p, r, h, col),
         _ => {}
     }
 }
@@ -300,4 +310,315 @@ fn amp(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
     filled_curve(p, &pts, y_of(-24.0), col);
     label(p, Pos2::new(pr.right() - 4.0, pr.top() + 2.0), egui::Align2::RIGHT_TOP, CABS.get(cab).copied().unwrap_or("").to_uppercase(), 11.0, theme::TEXT);
     let _ = TAU;
+}
+
+/// Mandrake: one bar per band (the voice's envelope in it), centred like a mouth; the carrier's pitch.
+fn vocoder(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::voxfx::{BAND_COUNTS, CARRIERS, T_PITCH};
+    super::fx_mod::screen(p, r, 8.0);
+    let n: usize = BAND_COUNTS.get(h.v("bands").round() as usize).and_then(|s| s.parse().ok()).unwrap_or(16);
+    let face = Rect::from_min_max(r.min + Vec2::new(16.0, 26.0), r.max - Vec2::new(16.0, 22.0));
+    let bw = face.width() / n as f32;
+    let t = h.t();
+    for k in 0..n {
+        let e = h.tele.get(k).copied().unwrap_or(0.0);
+        // Without signal (or in tests) a slow breathing shape.
+        let v = if h.tele.is_empty() { 0.15 + 0.1 * ((k as f32 * 0.7 + t * 2.0).sin() + 1.0) } else { (e * 6.0).clamp(0.0, 1.0) };
+        let hgt = v * face.height() * 0.5;
+        let x = face.left() + (k as f32 + 0.5) * bw;
+        let bar = Rect::from_center_size(Pos2::new(x, face.center().y), Vec2::new(bw * 0.7, (hgt * 2.0).max(2.0)));
+        p.rect_filled(bar, 2.0, col.gamma_multiply(0.35 + 0.65 * v));
+    }
+    let carrier = CARRIERS.get(h.v("carrier").round() as usize).copied().unwrap_or("");
+    label(p, Pos2::new(r.left() + 12.0, r.top() + 6.0), egui::Align2::LEFT_TOP, format!("{n} BANDS · {}", carrier.to_uppercase()), 11.0, theme::TEXT);
+    if let Some(f) = h.tele.get(T_PITCH).filter(|f| **f > 0.0) {
+        mono(p, Pos2::new(r.right() - 12.0, r.top() + 6.0), egui::Align2::RIGHT_TOP, format!("carrier {f:.0} Hz"), 10.0, theme::TEXT_DIM);
+    }
+    mono(p, Pos2::new(r.center().x, r.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("formant {:+.1} st · pitch {:+.1} st", h.v("formant"), h.v("pitch")), 10.0, theme::TEXT_DIM);
+}
+
+/// Mercury Wheel: the harmonics of a 220 Hz tone (grey) and where the shift puts them (no longer harmonic).
+fn freqshift(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::voxfx::SHIFT_MODES;
+    grid(p, r, true);
+    let pr = plot(r);
+    let mode = h.v("mode").round() as usize;
+    let f = h.tele.first().copied().filter(|v| *v != 0.0).unwrap_or(h.v("coarse") + h.v("fine"));
+    for k in 1..=24 {
+        let base = 220.0 * k as f32;
+        if base > 20000.0 {
+            break;
+        }
+        let x = fx(pr, base);
+        let a = 1.0 / k as f32;
+        p.line_segment([Pos2::new(x, pr.bottom()), Pos2::new(x, pr.bottom() - pr.height() * 0.85 * a.sqrt())], Stroke::new(1.0_f32, Color32::from_white_alpha(50)));
+        let targets: Vec<f32> = match mode {
+            0 => vec![base + f],
+            1 => vec![base - f],
+            2 => vec![base + f, base - f],
+            _ => vec![base + f, (base - f).abs()],
+        };
+        for t in targets.into_iter().filter(|t| *t > 20.0) {
+            let xt = fx(pr, t);
+            p.line_segment([Pos2::new(xt, pr.bottom()), Pos2::new(xt, pr.bottom() - pr.height() * 0.85 * a.sqrt())], Stroke::new(2.0_f32, col));
+        }
+    }
+    // The wheel: turns with the shifting oscillator.
+    let c = Pos2::new(pr.right() - 30.0, pr.top() + 30.0);
+    let ang = h.tele.get(1).copied().unwrap_or(h.t() * 0.2) * TAU;
+    p.circle_stroke(c, 20.0, Stroke::new(1.5_f32, col.gamma_multiply(0.6)));
+    for k in 0..6 {
+        let a = ang + k as f32 * TAU / 6.0;
+        p.line_segment([c, c + Vec2::new(a.cos(), a.sin()) * 20.0], Stroke::new(1.0_f32, col.gamma_multiply(0.5)));
+    }
+    label(p, Pos2::new(pr.left() + 4.0, pr.top() + 2.0), egui::Align2::LEFT_TOP, format!("{} · {f:+.1} Hz", SHIFT_MODES.get(mode).copied().unwrap_or("").to_uppercase()), 11.0, theme::TEXT);
+}
+
+/// Hex: one group of slices – the captured one and its repeats (height = pitch, a mark for reverse).
+fn stutter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::timefx::{DIVISIONS, HOLDS, STUTTER_MODES};
+    super::fx_mod::screen(p, r, 8.0);
+    let n: usize = HOLDS.get(h.v("hold").round() as usize).and_then(|s| s.parse().ok()).unwrap_or(4);
+    let gate = h.v("gate") / 100.0;
+    let step = h.v("pitch");
+    let face = Rect::from_min_max(r.min + Vec2::new(16.0, 28.0), r.max - Vec2::new(16.0, 22.0));
+    let w = face.width() / n as f32;
+    let active = h.tele.first().copied().unwrap_or(1.0) > 0.5;
+    let pos = h.tele.get(1).copied().unwrap_or(0.0);
+    for k in 0..n {
+        let speed = 2f32.powf(k as f32 * step / 12.0);
+        let hgt = (0.35 + 0.25 * (speed.log2())).clamp(0.1, 0.95) * face.height();
+        let x0 = face.left() + k as f32 * w + 2.0;
+        let cell = Rect::from_min_max(Pos2::new(x0, face.bottom() - hgt), Pos2::new(x0 + (w - 4.0) * gate, face.bottom()));
+        let c = if k == 0 { theme::TEXT.gamma_multiply(0.8) } else { col.gamma_multiply(if active { 0.9 } else { 0.35 }) };
+        p.rect_filled(cell, 3.0, c);
+        // The slice's waveform, compressed by the pitch step.
+        let pts: Vec<Pos2> = (0..=24).map(|j| j as f32 / 24.0).map(|u| Pos2::new(cell.left() + u * cell.width(), cell.center().y + (u * 6.0 * speed * TAU).sin() * cell.height() * 0.3)).collect();
+        p.add(Shape::line(pts, Stroke::new(1.0_f32, Color32::from_black_alpha(140))));
+    }
+    let x = face.left() + pos * face.width() / n as f32;
+    p.line_segment([Pos2::new(x, face.top()), Pos2::new(x, face.bottom())], Stroke::new(1.0_f32, theme::TEXT.gamma_multiply(0.5)));
+    let mode = STUTTER_MODES.get(h.v("mode").round() as usize).copied().unwrap_or("");
+    let div = DIVISIONS.get(h.v("division").round() as usize).copied().unwrap_or("");
+    label(p, Pos2::new(r.left() + 12.0, r.top() + 6.0), egui::Align2::LEFT_TOP, format!("{} · {div} × {n}{}", mode.to_uppercase(), if active { "  · STUTTERING" } else { "" }), 11.0, theme::TEXT);
+}
+
+/// Petrify: the speed over a stop and a start, with the reel turning at the current speed.
+fn tape_stop(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    grid(p, r, false);
+    let pr = plot(r);
+    let (stop_ms, start_ms, curve) = (h.v("stop_time"), h.v("start_time"), h.v("curve") / 100.0);
+    let k = 2f32.powf(2.0 * curve);
+    let total = stop_ms + 200.0 + start_ms;
+    let x_of = |ms: f32| pr.left() + ms / total * pr.width();
+    let y_of = |s: f32| pr.bottom() - s * pr.height();
+    y_axis(p, pr, &[(1.0, "1×"), (0.5, "½"), (0.0, "0")], y_of);
+    let mut pts = Vec::new();
+    for j in 0..=80 {
+        let u = j as f32 / 80.0;
+        pts.push(Pos2::new(x_of(u * stop_ms), y_of((1.0 - u).powf(k))));
+    }
+    pts.push(Pos2::new(x_of(stop_ms + 200.0), y_of(0.0)));
+    for j in 0..=60 {
+        let u = j as f32 / 60.0;
+        pts.push(Pos2::new(x_of(stop_ms + 200.0 + u * start_ms), y_of(1.0 - (1.0 - u).powf(k))));
+    }
+    filled_curve(p, &pts, pr.bottom(), col);
+    let speed = h.tele.first().copied().unwrap_or(1.0);
+    // The reel.
+    let c = Pos2::new(pr.right() - 34.0, pr.top() + 34.0);
+    let id = h.key.with("reel");
+    let ctx = p.ctx();
+    let mut a: f32 = ctx.data(|d| d.get_temp(id)).unwrap_or(0.0);
+    a += speed * 0.15;
+    ctx.data_mut(|d| d.insert_temp(id, a));
+    p.circle_filled(c, 24.0, Color32::from_black_alpha(120));
+    p.circle_stroke(c, 24.0, Stroke::new(1.5_f32, col.gamma_multiply(0.7)));
+    for j in 0..3 {
+        let b = a + j as f32 * TAU / 3.0;
+        p.circle_filled(c + Vec2::new(b.cos(), b.sin()) * 13.0, 5.0, col.gamma_multiply(0.5));
+    }
+    let state = if h.v("stop") > 0.5 { "STOPPED" } else { "RUNNING" };
+    label(p, Pos2::new(pr.left() + 4.0, pr.top() + 2.0), egui::Align2::LEFT_TOP, format!("{state} · speed {speed:.2}×"), 11.0, theme::TEXT);
+}
+
+/// Sandglass: the recent past (right = now), the delay and spray window, and each grain where it reads.
+fn granular(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    super::fx_mod::screen(p, r, 8.0);
+    let face = Rect::from_min_max(r.min + Vec2::new(14.0, 26.0), r.max - Vec2::new(14.0, 22.0));
+    let span = ((h.v("position") + h.v("spray")) * 0.001 * 1.4).max(0.5);
+    let x_of = |sec: f32| face.right() - (sec / span).clamp(0.0, 1.0) * face.width();
+    let win = Rect::from_min_max(Pos2::new(x_of((h.v("position") + h.v("spray")) * 0.001), face.top()), Pos2::new(x_of(h.v("position") * 0.001), face.bottom()));
+    p.rect_filled(win, 4.0, col.gamma_multiply(0.12));
+    let size = h.v("size") * 0.001;
+    let t = h.t();
+    let shown: Vec<f32> = if h.tele.iter().any(|v| *v >= 0.0) {
+        h.tele.iter().copied().filter(|v| *v >= 0.0).collect()
+    } else {
+        (0..12).map(|k| (h.v("position") + h.v("spray") * (((k as f32 * 1.7 + t).sin() + 1.0) * 0.5)) * 0.001).collect()
+    };
+    for (k, sec) in shown.iter().enumerate() {
+        let x = x_of(*sec);
+        let y = face.top() + ((k as f32 * 0.618).fract()) * face.height();
+        let w = (size / span * face.width()).max(4.0);
+        p.circle_filled(Pos2::new(x, y), (w * 0.25).clamp(2.5, 10.0), col.gamma_multiply(0.7));
+    }
+    p.line_segment([Pos2::new(face.right(), face.top()), Pos2::new(face.right(), face.bottom())], Stroke::new(1.5_f32, theme::TEXT.gamma_multiply(0.6)));
+    label(p, Pos2::new(face.right(), face.bottom() + 2.0), egui::Align2::RIGHT_TOP, "now", 9.0, theme::TEXT_DIM);
+    label(p, Pos2::new(face.left(), face.bottom() + 2.0), egui::Align2::LEFT_TOP, format!("-{:.2} s", span), 9.0, theme::TEXT_DIM);
+    let frz = if h.v("freeze") > 0.5 { " · FROZEN" } else { "" };
+    label(p, Pos2::new(r.left() + 12.0, r.top() + 6.0), egui::Align2::LEFT_TOP, format!("{:.0} grains/s · {:.0} ms · {:+.1} st{frz}", h.v("density"), h.v("size"), h.v("pitch")), 11.0, theme::TEXT);
+}
+
+/// Grimoire: the worn band (the age filters' response) and a wobbling pitch line (wow and flutter).
+fn lofi(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::dsp::{Biquad, BiquadKind};
+    grid(p, r, true);
+    let pr = plot(r);
+    let age = h.v("age") / 100.0;
+    let rate = 48000.0;
+    let hp = Biquad::new(BiquadKind::HighPass, 20.0 * 11f32.powf(age), 0.6, 0.0, rate);
+    let lpf = 20_000.0 * (3500.0f32 / 20_000.0).powf(age);
+    let lp = Biquad::new(BiquadKind::LowPass, lpf, 0.7, 0.0, rate);
+    let lp2 = Biquad::new(BiquadKind::LowPass, lpf * 1.2, 0.6, 0.0, rate);
+    let y_of = |db: f32| pr.top() + (-db / 36.0).clamp(0.0, 1.0) * pr.height() * 0.7 + pr.height() * 0.15;
+    let pts: Vec<Pos2> = (0..=140).map(|k| 20.0 * 1000f32.powf(k as f32 / 140.0)).map(|f| Pos2::new(fx(pr, f), y_of(hp.response_db(f, rate) + lp.response_db(f, rate) + lp2.response_db(f, rate)))).collect();
+    filled_curve(p, &pts, pr.bottom(), col);
+    // Wow / flutter as a wavering line across the top.
+    let t = h.t();
+    let (wow, flut) = (h.v("wow") / 100.0, h.v("flutter") / 100.0);
+    let wv: Vec<Pos2> = (0..=120).map(|k| k as f32 / 120.0).map(|u| Pos2::new(pr.left() + u * pr.width(), pr.top() + 14.0 + (wow * 8.0 * (u * 3.0 + t * 0.6).sin() + flut * 3.0 * (u * 40.0 + t * 9.0).sin()))).collect();
+    p.add(Shape::line(wv, Stroke::new(1.5_f32, theme::TEXT.gamma_multiply(0.6))));
+    let bits = h.v("bits");
+    let sr = h.v("sample_rate");
+    let digital = if bits < 23.5 || sr < 47_000.0 { format!(" · {bits:.0} bit / {:.1} kHz", sr / 1000.0) } else { String::new() };
+    label(p, Pos2::new(pr.right() - 4.0, pr.top() + 2.0), egui::Align2::RIGHT_TOP, format!("AGE {:.0} %{digital}", age * 100.0), 11.0, theme::TEXT);
+}
+
+/// Wisp: the split frequency, the new harmonics above it (odd / even) and the air shelf.
+fn exciter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    grid(p, r, true);
+    let pr = plot(r);
+    let f = h.v("freq");
+    let amount = h.v("amount") / 100.0;
+    let character = h.v("character") / 100.0;
+    let xs = fx(pr, f);
+    p.rect_filled(Rect::from_min_max(Pos2::new(xs, pr.top()), pr.right_bottom()), 0.0, col.gamma_multiply(0.08));
+    p.line_segment([Pos2::new(xs, pr.top()), Pos2::new(xs, pr.bottom())], Stroke::new(1.5_f32, col.gamma_multiply(0.7)));
+    // A partial at the split and the harmonics the shaper adds (even ones taller with positive character).
+    for k in 2..=12 {
+        let hf = f * k as f32 / 2.0;
+        if hf > 20000.0 {
+            break;
+        }
+        let even = k % 2 == 0;
+        let w = if even { 0.5 + 0.5 * character } else { 0.5 - 0.5 * character };
+        let hgt = amount * w / (k as f32).sqrt() * pr.height() * 0.9;
+        let x = fx(pr, hf);
+        p.line_segment([Pos2::new(x, pr.bottom()), Pos2::new(x, pr.bottom() - hgt)], Stroke::new(2.5_f32, col));
+    }
+    let air = h.v("air");
+    if air > 0.05 {
+        let y = pr.bottom() - pr.height() * 0.1 - air / 12.0 * pr.height() * 0.3;
+        p.line_segment([Pos2::new(fx(pr, 9000.0), pr.bottom() - pr.height() * 0.1), Pos2::new(fx(pr, 14000.0), y)], Stroke::new(1.5_f32, theme::TEXT.gamma_multiply(0.6)));
+        p.line_segment([Pos2::new(fx(pr, 14000.0), y), Pos2::new(pr.right(), y)], Stroke::new(1.5_f32, theme::TEXT.gamma_multiply(0.6)));
+    }
+    let listen = if h.v("listen") > 0.5 { " · LISTEN" } else { "" };
+    label(p, Pos2::new(pr.left() + 4.0, pr.top() + 2.0), egui::Align2::LEFT_TOP, format!("ABOVE {:.1} kHz{listen}", f / 1000.0), 11.0, theme::TEXT);
+}
+
+/// Familiar: the filter's response at its current cutoff, and a strip with the LFO's shape.
+fn autofilter(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::dsp::{Biquad, BiquadKind};
+    use dragon_engine::effects::colorfx::{FILTER_TYPES, LFO_SHAPES, SYNCS};
+    grid(p, r, true);
+    let pr = plot(r);
+    let kind = h.v("type").round() as usize;
+    let fc = h.tele.first().copied().filter(|v| *v > 0.0).unwrap_or(h.v("cutoff"));
+    let reso = h.v("resonance") / 100.0;
+    // The SVF's response equals an RBJ section with Q = 1 / k, k = 2 − 1.95·r.
+    let q = 1.0 / (2.0 - 1.95 * reso);
+    let bk = match kind {
+        0 => BiquadKind::LowPass,
+        1 => BiquadKind::BandPass,
+        2 => BiquadKind::HighPass,
+        _ => BiquadKind::Notch,
+    };
+    let b = Biquad::new(bk, fc, q, 0.0, 48000.0);
+    let y_of = |db: f32| pr.top() + pr.height() * 0.25 - (db / 36.0) * pr.height() * 0.75;
+    let pts: Vec<Pos2> = (0..=160).map(|k| 20.0 * 1000f32.powf(k as f32 / 160.0)).map(|f| Pos2::new(fx(pr, f), y_of(b.response_db(f, 48000.0).clamp(-36.0, 18.0)))).collect();
+    filled_curve(p, &pts, pr.bottom(), col);
+    let x = fx(pr, fc);
+    p.circle_filled(Pos2::new(x, y_of(b.response_db(fc, 48000.0).clamp(-36.0, 18.0))), 4.0, theme::TEXT);
+    let sync = SYNCS.get(h.v("sync").round() as usize).copied().unwrap_or("");
+    let rate = if sync == "Free" { format!("{:.2} Hz", h.v("lfo_rate")) } else { sync.to_string() };
+    label(
+        p,
+        Pos2::new(pr.right() - 4.0, pr.top() + 2.0),
+        egui::Align2::RIGHT_TOP,
+        format!(
+            "{} · {:.0} Hz · LFO {} {rate} ±{:.1} oct",
+            FILTER_TYPES.get(kind).copied().unwrap_or("").to_uppercase(),
+            fc,
+            LFO_SHAPES.get(h.v("lfo_shape").round() as usize).copied().unwrap_or(""),
+            h.v("lfo_depth") * 0.5
+        ),
+        10.5,
+        theme::TEXT,
+    );
+}
+
+/// Seraph: the generations of the tail, each a pitch step higher (or lower) and quieter.
+fn shimmer(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    super::fx_mod::screen(p, r, 8.0);
+    let face = Rect::from_min_max(r.min + Vec2::new(16.0, 26.0), r.max - Vec2::new(16.0, 20.0));
+    let shift = h.v("shift");
+    let sh = h.v("shimmer") / 100.0;
+    let decay = h.v("decay");
+    let t = h.t();
+    // Vertical: pitch (octaves above the source, −1 … +4); horizontal: time in rounds.
+    let y_of = |oct: f32| face.bottom() - ((oct + 1.0) / 5.0).clamp(0.0, 1.0) * face.height();
+    for gen in 0..8 {
+        let oct = gen as f32 * shift / 12.0;
+        if !(-1.0..=4.0).contains(&oct) {
+            break;
+        }
+        let level = sh.powi(gen) * (-(gen as f32) * 0.25 / decay.max(0.5) * 6.0).exp();
+        if level < 0.02 {
+            break;
+        }
+        let y = y_of(oct);
+        let x0 = face.left() + gen as f32 * face.width() * 0.1;
+        let pts: Vec<Pos2> = (0..=60).map(|k| k as f32 / 60.0).map(|u| Pos2::new(x0 + u * (face.right() - x0), y + (u * 30.0 + t * 2.0 + gen as f32).sin() * 2.0)).collect();
+        p.add(Shape::line(pts, Stroke::new(1.0 + 3.0 * level, col.gamma_multiply(0.25 + 0.75 * level))));
+    }
+    label(p, Pos2::new(r.left() + 12.0, r.top() + 6.0), egui::Align2::LEFT_TOP, format!("{shift:+.0} st per round · shimmer {:.0} % · {decay:.1} s", sh * 100.0), 11.0, theme::TEXT);
+}
+
+/// Rime: the held (or live) spectrum, iced over as the freeze fades in.
+fn freeze(p: &egui::Painter, r: Rect, h: &Hero, col: Color32) {
+    use dragon_engine::effects::spacefx::FREEZE_BANDS;
+    grid(p, r, true);
+    let pr = plot(r);
+    let amount = h.tele.get(FREEZE_BANDS).copied().unwrap_or(0.0);
+    let y_of = |db: f32| pr.top() + (-db / 90.0).clamp(0.0, 1.0) * pr.height();
+    if h.tele.len() >= FREEZE_BANDS {
+        let pts: Vec<Pos2> = (0..FREEZE_BANDS)
+            .map(|b| {
+                let f = 30.0 * (16000.0f32 / 30.0).powf(b as f32 / (FREEZE_BANDS - 1) as f32);
+                Pos2::new(fx(pr, f), y_of(h.tele[b]))
+            })
+            .collect();
+        let c = if amount > 0.0 { Color32::from_rgb(0xc0, 0xe8, 0xff) } else { col };
+        filled_curve(p, &pts, pr.bottom(), c);
+    }
+    let on = h.v("freeze") > 0.5;
+    let state = if on {
+        "FROZEN"
+    } else if amount > 0.0 {
+        "THAWING"
+    } else {
+        "LIVE"
+    };
+    label(p, Pos2::new(pr.right() - 4.0, pr.top() + 2.0), egui::Align2::RIGHT_TOP, format!("{state} · {:.0} %", amount * 100.0), 11.0, theme::TEXT);
 }

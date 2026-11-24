@@ -130,7 +130,7 @@ fn audit(only: Option<&str>) -> (Vec<Finding>, Vec<String>) {
     let mut found = Vec::new();
     let mut slow = Vec::new();
     // Analysers and effects meant to chop / randomise the signal per block are out of scope.
-    let skip = ["scope", "phase_scope", "tuner", "spectrum"];
+    let skip = ["tuner", "analyzer"];
     for def in registry() {
         if skip.contains(&def.id) || only.is_some_and(|o| o != def.id) {
             continue;
@@ -233,7 +233,8 @@ fn stock_effects_do_not_click_on_a_smooth_swell() {
     let (inl, inr) = swell(n);
     let base = spike(&inl, 0).0.max(spike(&inr, 0).0);
     // Effects that chop, crush, randomise or add noise on purpose; analysers.
-    let skip = ["scope", "phase_scope", "tuner", "spectrum", "bitcrusher", "glitch", "stutter", "tape_stop", "rhythm_gate"];
+    // (Grimoire's vinyl crackle is clicks by design.)
+    let skip = ["tuner", "analyzer", "bitcrusher", "stutter", "tape_stop", "lofi"];
     let mut bad = Vec::new();
     for def in registry() {
         if skip.contains(&def.id) || only.as_deref().is_some_and(|o| o != def.id) {

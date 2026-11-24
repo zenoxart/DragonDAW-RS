@@ -7,6 +7,7 @@ pub use color::{shape as saturation_curve, DragonParticle, INGREDIENTS as CRUCIB
 pub mod alter;
 pub mod amp;
 pub mod clipper;
+pub mod colorfx;
 pub mod convolver;
 pub mod dynamics;
 pub mod eq;
@@ -21,8 +22,11 @@ pub mod panner;
 pub mod pitch;
 pub mod reverb;
 pub mod shaper;
+pub mod spacefx;
 pub mod strips;
+pub mod timefx;
 pub mod voice;
+pub mod voxfx;
 
 pub use eq::{ParametricEq, EQ_BANDS};
 
@@ -231,6 +235,8 @@ pub fn registry() -> &'static [EffectDef] {
             ghost::def(),
             reverb::reverb_def(),
             convolver::convolver_def(),
+            spacefx::shimmer_def(),
+            spacefx::freeze_def(),
             modulation::delay_def(),
             modulation::chorus_def(),
             modulation::flanger_def(),
@@ -238,11 +244,18 @@ pub fn registry() -> &'static [EffectDef] {
             modulation::tremolo_def(),
             panner::orbit_def(),
             shaper::volume_shaper_def(),
+            colorfx::autofilter_def(),
+            voxfx::freqshift_def(),
+            timefx::stutter_def(),
+            timefx::tape_stop_def(),
+            timefx::granular_def(),
             color::saturator_def(),
             multisat::multiband_saturator_def(),
             color::bitcrusher_def(),
             clipper::soft_clipper_def(),
             amp::amp_def(),
+            colorfx::lofi_def(),
+            colorfx::exciter_def(),
             color::filter_def(),
             color::utility_def(),
             color::imager_def(),
@@ -251,6 +264,7 @@ pub fn registry() -> &'static [EffectDef] {
             color::dragon_particle_def(),
             pitch::pitch_correct_def(),
             voice::clean_voice_def(),
+            voxfx::vocoder_def(),
             strips::class_a_strip_def(),
             strips::drum_bus_def(),
             alter::alter_def(),
@@ -484,7 +498,7 @@ mod tests {
             v.windows(3).map(|w| (w[0] - 2.0 * w[1] + w[2]).abs()).fold(0.0f32, f32::max) / peak
         };
         // Effects whose knobs are meant to step or grind (bitcrusher's sample-rate reduction, …).
-        let skip = ["bitcrusher", "tape_stop", "glitch", "scope", "phase_scope", "tuner", "spectrum", "rhythm_gate", "stutter", "gate"];
+        let skip = ["bitcrusher", "tape_stop", "tuner", "analyzer", "stutter", "gate"];
         let mut bad = Vec::new();
         for def in registry() {
             if skip.contains(&def.id) {
@@ -770,5 +784,30 @@ mod runaway {
             }
         }
         assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod finite_tests {
+    /// Every stock effect at its defaults keeps its output and its telemetry finite, on silence and on noise.
+    #[test]
+    fn outputs_and_telemetry_stay_finite() {
+        let mut bad = Vec::new();
+        for def in super::registry() {
+            let mut e = super::create(def.id, 48000.0, &def.defaults()).unwrap();
+            e.set_tempo(120.0);
+            let mut rng = crate::dsp::Rng::new(3);
+            for k in 0..200 {
+                e.set_position(k as f64 * 128.0 / 24000.0, true);
+                let mut l: Vec<f32> = (0..128).map(|_| if k < 100 { 0.0 } else { rng.bipolar() * 0.5 }).collect();
+                let mut r = l.clone();
+                e.process(&mut l, &mut r, None);
+                if !l.iter().chain(&r).all(|x| x.is_finite()) || !e.telemetry().iter().all(|x| x.is_finite()) {
+                    bad.push((def.id, k));
+                    break;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:?}");
     }
 }

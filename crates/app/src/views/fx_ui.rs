@@ -119,7 +119,7 @@ pub fn hero(ui: &mut Ui, h: &Hero) -> (Vec<(String, f32)>, bool) {
         "drum_bus" => 200.0,
         "dragon_particle" => 200.0,
         "analyzer" => 210.0,
-        "tuner" | "amp" | "convolver" => 190.0,
+        "tuner" | "amp" | "convolver" | "vocoder" | "granular" | "freeze" | "shimmer" => 190.0,
         _ => 170.0,
     };
     let height = hero_height(h.def.id, base, w, ui.available_height(), ui.ctx().screen_rect().height());
@@ -635,6 +635,16 @@ pub fn xy_params(id: &str) -> Option<(Option<&'static str>, Option<&'static str>
         // The meters: dragging zooms the dB range / moves the reference pitch.
         "analyzer" => (None, Some("range")),
         "tuner" => (Some("reference"), None),
+        "vocoder" => (Some("formant"), Some("pitch")),
+        "freqshift" => (Some("coarse"), Some("feedback")),
+        "stutter" => (Some("gate"), Some("chance")),
+        "tape_stop" => (Some("stop_time"), Some("curve")),
+        "granular" => (Some("position"), Some("size")),
+        "lofi" => (Some("wow"), Some("age")),
+        "exciter" => (Some("freq"), Some("amount")),
+        "autofilter" => (Some("cutoff"), Some("resonance")),
+        "shimmer" => (Some("decay"), Some("shimmer")),
+        "freeze" => (Some("shift"), Some("blur")),
         _ => return None,
     })
 }

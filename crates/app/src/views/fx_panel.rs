@@ -432,6 +432,99 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
                 sec("Cabinet", vec![p("cab", "Cabinet"), p("mic", "Mic"), big("master", "Master")]),
             ],
         },
+        "vocoder" => Panel {
+            skin: STUDIO,
+            bands: None,
+            sections: vec![
+                sec("Carrier", vec![p("carrier", "Carrier"), p("bands", "Bands"), big("pitch", "Pitch"), k("formant", "Formant")]),
+                sec("Bands", vec![k("low", "Low band"), k("high", "High band"), k("attack", "Attack"), k("release", "Release"), k("sibilance", "Sibilance"), k("emphasis", "Emphasis")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "freqshift" => Panel {
+            skin: STUDIO,
+            bands: None,
+            sections: vec![
+                sec("Shift", vec![p("mode", "Mode"), big("coarse", "Shift"), k("fine", "Fine")]),
+                sec("Motion", vec![k("lfo_rate", "LFO rate"), k("lfo_depth", "LFO depth"), k("feedback", "Feedback"), k("delay", "Delay")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "stutter" => Panel {
+            skin: MODERN,
+            bands: None,
+            sections: vec![
+                sec("Hex", vec![p("mode", "Mode"), p("division", "Slice"), p("hold", "Repeats"), big("chance", "Chance")]),
+                sec("Slices", vec![k("gate", "Gate"), k("pitch", "Pitch step"), k("reverse", "Reverse")]),
+                sec("Output", vec![fad("mix", "Mix")]),
+            ],
+        },
+        "tape_stop" => Panel {
+            skin: MODERN,
+            bands: None,
+            sections: vec![
+                sec("Tape", vec![p("stop", "Stop"), p("mode", "Trigger"), big("stop_time", "Stop time"), k("start_time", "Start time")]),
+                sec("Character", vec![k("curve", "Curve"), k("darken", "Darken")]),
+                sec("Output", vec![fad("mix", "Mix")]),
+            ],
+        },
+        "granular" => Panel {
+            skin: MODERN,
+            bands: None,
+            sections: vec![
+                sec("Grains", vec![big("size", "Grain size"), big("density", "Density"), k("position", "Delay"), k("spray", "Spray")]),
+                sec("Pitch", vec![k("pitch", "Pitch"), k("pitch_rand", "Pitch random"), k("reverse", "Reverse"), k("spread", "Spread")]),
+                sec("Loop", vec![k("feedback", "Feedback"), p("freeze", "Freeze")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "lofi" => Panel {
+            skin: STUDIO,
+            bands: None,
+            sections: vec![
+                sec("Tape", vec![k("wow", "Wow"), k("flutter", "Flutter"), big("age", "Age"), k("drive", "Drive")]),
+                sec("Noise", vec![k("hiss", "Hiss"), k("crackle", "Crackle")]),
+                sec("Digital", vec![k("bits", "Bits"), k("sample_rate", "Sample rate")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "exciter" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Harmonics", vec![big("freq", "Frequency"), k("drive", "Drive"), k("character", "Odd / even"), big("amount", "Amount")]),
+                sec("Extremes", vec![k("air", "Air"), k("sub", "Sub harmonics"), p("listen", "Listen")]),
+                sec("Output", vec![k("output", "Output")]),
+            ],
+        },
+        "autofilter" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Filter", vec![p("type", "Type"), big("cutoff", "Cutoff"), k("resonance", "Resonance"), k("drive", "Drive")]),
+                sec("LFO", vec![p("sync", "LFO sync"), k("lfo_rate", "LFO rate"), p("lfo_shape", "LFO shape"), k("lfo_depth", "LFO depth"), k("stereo", "Stereo phase")]),
+                sec("Envelope", vec![k("env_amount", "Envelope"), k("env_attack", "Env attack"), k("env_release", "Env release")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "shimmer" => Panel {
+            skin: VALVE,
+            bands: None,
+            sections: vec![
+                sec("Shimmer", vec![big("shift", "Shift"), big("shimmer", "Shimmer")]),
+                sec("Space", vec![k("decay", "Decay"), k("size", "Size"), k("damping", "Damping"), k("predelay", "Pre-delay"), k("modulation", "Modulation")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
+        "freeze" => Panel {
+            skin: STUDIO,
+            bands: None,
+            sections: vec![
+                sec("Freeze", vec![p("freeze", "Freeze"), big("fade", "Fade")]),
+                sec("Spectrum", vec![k("blur", "Blur"), k("shift", "Shift"), k("tilt", "Tilt"), k("drift", "Drift")]),
+                sec("Output", vec![fad("mix", "Mix"), k("output", "Output")]),
+            ],
+        },
         _ => return None,
     };
     // Every stock effect is an analog unit in its own finish.
