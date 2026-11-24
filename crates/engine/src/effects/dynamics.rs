@@ -48,6 +48,9 @@ impl CompCore {
 
 pub struct Compressor {
     core: CompCore,
+    channels: usize,
+    ms_delay: Vec<f32>,
+    ms_pos: usize,
     makeup: f32,
     mix: f32,
     use_sidechain: bool,
@@ -121,7 +124,45 @@ const COMP_PARAMS: &[ParamInfo] = &[
     ParamInfo::lin("lookahead", "Look-ahead", 0.0, MAX_LOOK_MS, 0.0, "ms"),
     ParamInfo::lin("hold", "Hold", 0.0, 500.0, 0.0, "ms"),
     ParamInfo::log("sc_lp", "Sidechain LPF", 1000.0, 20000.0, 20000.0, "Hz"),
+    ParamInfo::choice("channels", "Channels", COMP_CHANNELS, 0.0),
 ];
+
+/// What the compressor works on: both sides (linked), or only the mid or the side of a mid / side split.
+pub const COMP_CHANNELS: &[&str] = &["Stereo", "Mid", "Side"];
+
+impl Compressor {
+    /// Mid / side mode: splits into `m = (l + r)/2`, `s = (l − r)/2`, compresses one of them (detected on
+    /// itself, or on the external sidechain), delays the other by the look-ahead so both stay aligned, and
+    /// rebuilds `l = m + s`, `r = m − s`.
+    fn process_ms(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>, side: bool) {
+        let mut off = 0;
+        while off < l.len() {
+            let n = (l.len() - off).min(128);
+            let mut a = [0.0f32; 128];
+            let mut b = [0.0f32; 128];
+            let mut other = [0.0f32; 128];
+            for i in 0..n {
+                let (m, s) = (0.5 * (l[off + i] + r[off + i]), 0.5 * (l[off + i] - r[off + i]));
+                let (sel, keep) = if side { (s, m) } else { (m, s) };
+                a[i] = sel;
+                b[i] = sel;
+                // The untouched component waits as long as the look-ahead delays the compressed one.
+                let len = self.ms_delay.len();
+                self.ms_delay[self.ms_pos] = keep;
+                other[i] = self.ms_delay[(self.ms_pos + len - self.look) % len];
+                self.ms_pos = (self.ms_pos + 1) % len;
+            }
+            let sc_part = sc.map(|(x, y)| (&x[off..off + n], &y[off..off + n]));
+            self.process_lr(&mut a[..n], &mut b[..n], sc_part);
+            for i in 0..n {
+                let (m, s) = if side { (other[i], a[i]) } else { (a[i], other[i]) };
+                l[off + i] = m + s;
+                r[off + i] = m - s;
+            }
+            off += n;
+        }
+    }
+}
 
 impl Effect for Compressor {
     fn set_param(&mut self, id: &str, v: f32) {
@@ -133,6 +174,7 @@ impl Effect for Compressor {
             "release" => self.core.release = v,
             "makeup" => self.makeup = v,
             "auto_makeup" => self.auto_makeup = v >= 0.5,
+            "channels" => self.channels = (v.round().max(0.0) as usize).min(COMP_CHANNELS.len() - 1),
             "mix" => self.mix = v.clamp(0.0, 1.0),
             "sidechain" => self.use_sidechain = v >= 0.5,
             "sc_hp" => {
@@ -170,6 +212,22 @@ impl Effect for Compressor {
         self.look
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
+        match self.channels {
+            1 => self.process_ms(l, r, sc, false),
+            2 => self.process_ms(l, r, sc, true),
+            _ => self.process_lr(l, r, sc),
+        }
+    }
+    fn gain_reduction(&self) -> f32 {
+        self.core.gr
+    }
+    fn telemetry(&self) -> &[f32] {
+        &self.tele
+    }
+}
+
+impl Compressor {
+    fn process_lr(&mut self, l: &mut [f32], r: &mut [f32], sc: Option<(&[f32], &[f32])>) {
         let spec = style_spec(self.style);
         let (attack, release, knee) = (self.core.attack, self.core.release, self.core.knee);
         self.core.knee = knee + spec.knee;
@@ -226,12 +284,6 @@ impl Effect for Compressor {
         let db = |x: f32| (20.0 * x.max(1e-6).log10()).max(-90.0);
         self.tele = [db(pin), db(pout), gr];
     }
-    fn gain_reduction(&self) -> f32 {
-        self.core.gr
-    }
-    fn telemetry(&self) -> &[f32] {
-        &self.tele
-    }
 }
 
 pub fn compressor_def() -> EffectDef {
@@ -245,6 +297,9 @@ pub fn compressor_def() -> EffectDef {
         create: |rate| {
             Box::new(Compressor {
                 core: CompCore::new(rate),
+                channels: 0,
+                ms_delay: vec![0.0; (MAX_LOOK_MS * 0.001 * rate) as usize + 2],
+                ms_pos: 0,
                 makeup: 0.0,
                 mix: 1.0,
                 use_sidechain: false,
@@ -1827,5 +1882,25 @@ mod tests {
             peaks.push(tp(&l[4800..]));
         }
         assert!(peaks[1] < peaks[0], "inter-sample peaks: {peaks:?}");
+    }
+
+    /// Side mode compresses only the side: a mono signal passes untouched, a wide one is reduced.
+    #[test]
+    fn compressor_side_mode_leaves_mono_alone() {
+        let mut p = std::collections::BTreeMap::new();
+        p.insert("channels".to_string(), 2.0);
+        p.insert("threshold".to_string(), -40.0);
+        p.insert("ratio".to_string(), 10.0);
+        let mut c = crate::effects::create("compressor", 48000.0, &p).unwrap();
+        let n = 9600;
+        let tone: Vec<f32> = (0..n).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+        let (mut l, mut r) = (tone.clone(), tone.clone());
+        c.process(&mut l, &mut r, None);
+        assert!((l[n - 1] - tone[n - 1]).abs() < 1e-4, "mono changed");
+        let (mut l, mut r) = (tone.clone(), tone.iter().map(|v| -v).collect::<Vec<_>>());
+        c.process(&mut l, &mut r, None);
+        let out: f32 = l[n / 2..].iter().map(|x| x * x).sum();
+        let inp: f32 = tone[n / 2..].iter().map(|x| x * x).sum();
+        assert!(out < inp * 0.3, "side not compressed: {out} vs {inp}");
     }
 }

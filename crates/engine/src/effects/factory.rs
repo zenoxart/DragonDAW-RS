@@ -76,7 +76,8 @@ enum Role {
 fn role(p: &ParamInfo) -> Role {
     let id = p.id;
     let last = id.rsplit('_').next().unwrap_or(id);
-    const KEEP: [&str; 34] = [
+    const KEEP: [&str; 35] = [
+        "channels",
         "mute",
         "master",
         "reference",

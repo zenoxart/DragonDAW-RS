@@ -97,3 +97,10 @@ the gain is already falling when a transient arrives. $D$ is reported as latency
 <!-- knob: hold -->
 After the reduction stops rising it is held for $h = t\,10^{-3} f_s$ samples before the release starts,
 which avoids release ripple between closely spaced hits.
+
+<!-- knob: channels -->
+*Stereo*: both sides through one linked detector. *Mid* or *Side*: the signal is split, $m = \tfrac12(l + r)$,
+$s = \tfrac12(l - r)$; only the chosen component is compressed (detected on itself, or on the external sidechain), the
+other is delayed by the look-ahead to stay aligned, and $l = m + s$, $r = m - s$ are rebuilt. Side compression tames
+wide, harsh reverbs and stereo cymbals without touching the centre; mid compression controls a vocal or bass in a
+finished mix while the stereo field stays.

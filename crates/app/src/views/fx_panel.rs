@@ -146,7 +146,7 @@ pub fn panel(id: &str, band: usize) -> Option<Panel> {
             skin: MODERN,
             bands: None,
             sections: vec![
-                sec("Style", vec![p("style", "Style")]),
+                sec("Style", vec![p("style", "Style"), p("channels", "Channels")]),
                 sec("Compression", vec![big("threshold", "Threshold"), k("ratio", "Ratio"), k("knee", "Knee")]),
                 sec("Timing", vec![k("attack", "Attack"), k("release", "Release"), k("hold", "Hold"), k("lookahead", "Lookahead")]),
                 sec("Sidechain", vec![p("sidechain", "External"), k("sc_hp", "High-pass"), k("sc_lp", "Low-pass")]),

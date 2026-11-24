@@ -11,7 +11,7 @@ The preset bar on top of the unit holds 200 factory presets in eight characters 
 - [Compression](compression/README.md) – Threshold, Ratio, Knee
 - [Output](output/README.md) – Makeup, Auto makeup, Mix
 - [Sidechain](sidechain/README.md) – External sidechain, Sidechain HPF, Sidechain LPF
-- [Style](style/README.md) – Style
+- [Style](style/README.md) – Style, Channels
 - [Timing](timing/README.md) – Attack, Release, Look-ahead, Hold
 
 ## How it works
