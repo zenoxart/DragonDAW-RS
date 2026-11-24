@@ -1,7 +1,7 @@
 //! Channel rack: instrument channels with the step sequencer for the selected pattern, swing, pattern
 //! length, channel volume / pan / mute / solo, mixer routing and per-step velocity.
 
-use super::widgets::{self, knob};
+use super::widgets;
 use crate::state::State;
 use crate::theme;
 use dragon_engine::device::Command as Cmd;
@@ -19,25 +19,44 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         ui.label("No pattern – add one with Add › Pattern.");
         return;
     };
-    // ---- header
+    // ---- header: one row, every control BAR_H tall.
     ui.horizontal(|ui| {
+        ui.spacing_mut().interact_size.y = widgets::BAR_H;
         let mut name = pattern.name.clone();
-        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(110.0)).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0).min_size(Vec2::new(0.0, widgets::BAR_H)).vertical_align(egui::Align::Center)).changed() {
             st.session.gesture("Rename pattern", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.name = name.clone()));
         }
-        if ui.button("▶ Pattern").on_hover_text("Loop this pattern").clicked() {
+        let play = match crate::brand::icon_image(ui.ctx(), crate::brand::icon::PLAY, 15.0) {
+            Some(img) => ui.add(egui::Button::image_and_text(img, "Pattern")),
+            None => ui.button("▶ Pattern"),
+        };
+        if play.on_hover_text("Loop this pattern").clicked() {
             st.ui.pattern_mode = true;
             st.audio.send(Cmd::Stop);
             st.audio.send(Cmd::Play(PlayMode::Pattern(pat)));
         }
         ui.separator();
-        ui.label("Steps");
-        let mut steps = pattern.steps;
-        let r = ui.add(egui::DragValue::new(&mut steps).range(1..=64));
-        widgets::apply(st, &r, "Pattern length", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.steps = steps));
+        // Pattern length: − / + a bar (16 steps) at a time; drag the number for single steps.
+        let steps = pattern.steps;
+        let sq = Vec2::splat(widgets::BAR_H);
+        let set_steps = |st: &mut State, n: u32| st.session.edit("Pattern length", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.steps = n));
+        if ui.add_enabled(steps > 16, egui::Button::new(RichText::new("−").strong()).min_size(sq)).on_hover_text("16 steps (a bar) shorter").clicked() {
+            set_steps(st, ((steps - 1) / 16 * 16).max(16));
+        }
+        let mut n = steps;
+        let r = ui.add(egui::DragValue::new(&mut n).range(1..=64).suffix(" steps").speed(0.2)).on_hover_text("Steps in the pattern – drag for single steps");
+        widgets::apply(st, &r, "Pattern length", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.steps = n));
+        if ui.add_enabled(steps < 64, egui::Button::new(RichText::new("+").strong()).min_size(sq)).on_hover_text("16 steps (a bar) longer").clicked() {
+            set_steps(st, ((steps / 16 + 1) * 16).min(64));
+        }
+        let bars = steps as f32 / 16.0;
+        ui.label(RichText::new(if bars.fract() == 0.0 { format!("{bars:.0} bar{}", if bars == 1.0 { "" } else { "s" }) } else { format!("{bars:.2} bars") }).small().color(theme::TEXT_DIM));
+        ui.separator();
         let mut swing = pattern.swing;
-        let r = knob(ui, &mut swing, 0.0, 1.0, 0.0, "swing", widgets::pct);
+        ui.label(RichText::new("Swing").small().color(theme::TEXT_DIM));
+        let r = ui.add(egui::Slider::new(&mut swing, 0.0..=1.0).show_value(false)).on_hover_text(format!("Swing {:.0} %", swing * 100.0));
         widgets::apply(st, &r, "Swing", |p| p.pattern_mut(pat).iter_mut().for_each(|x| x.swing = swing));
+        ui.label(RichText::new(format!("{:.0}%", swing * 100.0)).small().monospace());
         ui.separator();
         ui.menu_button("+ Channel", |ui| {
             // Stock instruments, then the scanned third-party instruments – one searchable list.

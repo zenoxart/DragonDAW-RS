@@ -1517,44 +1517,56 @@ fn track_header(ui: &mut Ui, st: &mut State, r: Rect, t: &Track) {
 }
 
 fn toolbar(ui: &mut Ui, st: &mut State) {
+    // One row, every control BAR_H tall, icons on the buttons; view options in a menu.
     ui.horizontal(|ui| {
+        ui.spacing_mut().interact_size.y = widgets::BAR_H;
         widgets::tool_buttons(ui, st);
         ui.separator();
-        ui.label("Snap");
         let cur = widgets::SNAPS.iter().find(|s| (s.1 - st.ui.snap).abs() < 1e-9).map(|s| s.0).unwrap_or("custom");
-        egui::ComboBox::from_id_salt("pl.snap").selected_text(cur).width(80.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("pl.snap").selected_text(format!("Snap {cur}")).width(100.0).show_ui(ui, |ui| {
             for (n, v) in widgets::SNAPS {
                 ui.selectable_value(&mut st.ui.snap, *v, *n);
             }
         });
         ui.separator();
-        if ui.small_button("−").clicked() {
+        let sq = egui::Vec2::splat(widgets::BAR_H);
+        let zoom_icon = |ui: &mut Ui, tip: &str| match crate::brand::icon_image(ui.ctx(), crate::brand::icon::DRAW + 8, widgets::BAR_H - 8.0) {
+            Some(img) => ui.add(egui::Button::image(img).min_size(sq)).on_hover_text(tip),
+            None => ui.add(egui::Button::new("Z").min_size(sq)).on_hover_text(tip),
+        };
+        if ui.add(egui::Button::new(RichText::new("−").strong()).min_size(sq)).on_hover_text("Zoom out (Ctrl+wheel)").clicked() {
             st.ui.playlist_zoom = (st.ui.playlist_zoom / 1.25).max(MIN_ZOOM);
         }
-        if ui.small_button("+").clicked() {
+        if ui.add(egui::Button::new(RichText::new("+").strong()).min_size(sq)).on_hover_text("Zoom in (Ctrl+wheel)").clicked() {
             st.ui.playlist_zoom = (st.ui.playlist_zoom * 1.25).min(400.0);
         }
-        if ui.small_button("Fit").on_hover_text("Zoom to the whole song").clicked() {
+        if zoom_icon(ui, "Fit: zoom to the whole song").clicked() {
             fit_song(st);
         }
-        let marker = match crate::brand::icon_image(ui.ctx(), crate::brand::icon::MARKER, 16.0) {
-            Some(img) => ui.add(egui::Button::image_and_text(img, RichText::new("Marker").small().color(theme::ACCENT_2))),
-            None => ui.small_button(RichText::new("Marker").color(theme::ACCENT_2)),
+        let marker = match crate::brand::icon_image(ui.ctx(), crate::brand::icon::MARKER, widgets::BAR_H - 10.0) {
+            Some(img) => ui.add(egui::Button::image_and_text(img, RichText::new("Marker").color(theme::ACCENT_2))),
+            None => ui.button(RichText::new("Marker").color(theme::ACCENT_2)),
         };
         if marker.on_hover_text("Add a time marker at the playhead (Alt+T)").clicked() {
             st.ctx.run("dragon.add.marker", serde_json::Value::Null);
         }
-        ui.checkbox(&mut st.settings.follow_playhead, "Follow");
+        ui.separator();
+        let follow = st.settings.follow_playhead;
+        if widgets::icon_toggle(ui, follow, crate::brand::icon::PLAY, "Follow", theme::PLAYHEAD).on_hover_text("Follow the playhead while playing").clicked() {
+            st.settings.follow_playhead = !follow;
+        }
         let compact = st.settings.compact_tracks;
-        if widgets::toggle(ui, compact, "Compact", theme::ACCENT_2).on_hover_text("Compact tracks: one thin row each, so many more fit on screen").clicked() {
+        if widgets::icon_toggle(ui, compact, crate::brand::icon::DRAW + 2, "Compact", theme::ACCENT_2).on_hover_text("Compact tracks: one thin row each, so many more fit on screen").clicked() {
             st.ctx.run("dragon.view.compact_tracks", serde_json::Value::Null);
         }
-        ui.toggle_value(&mut st.ui.pl_picker, "Picker").on_hover_text("Show the patterns, audio and automation clips to drag into the playlist");
+        let picker = st.ui.pl_picker;
+        if widgets::icon_toggle(ui, picker, crate::brand::icon::PATTERN, "Picker", theme::ACCENT).on_hover_text("Show the patterns, audio and automation clips to drag into the playlist").clicked() {
+            st.ui.pl_picker = !picker;
+        }
         ui.separator();
-        ui.label(
-            RichText::new("Ctrl+drag select · Shift+drag clip = clone · Ctrl+B duplicate · Ctrl+right-drag zoom to area · Ctrl+wheel zoom · middle-drag pan · drag ruler = loop · right-click deletes")
-                .small()
-                .color(theme::TEXT_DIM),
+        // The mouse and key reference, on hover instead of a line of small text.
+        ui.add(egui::Button::new(RichText::new("?").strong()).min_size(sq)).on_hover_text(
+            "Ctrl+drag: select\nShift+drag a clip: clone\nCtrl+B: duplicate\nCtrl+right-drag: zoom to an area · Ctrl+right-click: zoom out\nCtrl+wheel: zoom · middle-drag: pan\nDrag the ruler: loop range (snaps to bars)\nRight-click: delete\nLeft / Right: move the playhead (faster while held)",
         );
     });
 }

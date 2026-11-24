@@ -334,7 +334,9 @@ pub fn mini_knob(ui: &mut Ui, value: &mut f32, min: f32, max: f32, default: f32,
 
 /// The height of every control in the app's toolbars (transport, channel rack, playlist, piano roll):
 /// buttons, menus, combo boxes and fields all line up.
-pub const BAR_H: f32 = 24.0;
+pub const BAR_H: f32 = 26.0;
+/// The height of every control in the main transport bar.
+pub const SHELL_H: f32 = 30.0;
 
 /// The level scale shared by the mixer's dB scale, meters and faders, so a number, a meter's top and a
 /// fader cap at the same level sit at the same height. A console taper: linear in dB between these
@@ -471,7 +473,7 @@ pub fn toggle(ui: &mut Ui, on: bool, text: &str, color: Color32) -> Response {
     let rt = egui::RichText::new(text).color(if on { Color32::BLACK } else { theme::TEXT_DIM });
     // Icon glyphs need the normal size to render crisply; words use the small style.
     let rt = if text.chars().count() <= 2 { rt } else { rt.small() };
-    let b = egui::Button::new(rt).fill(if on { color } else { theme::PANEL_2 }).min_size(Vec2::new(20.0, 16.0));
+    let b = egui::Button::new(rt).fill(if on { color } else { theme::PANEL_2 }).min_size(Vec2::new(ui.spacing().interact_size.y, 16.0));
     let r = ui.add(b);
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, text));
     r
@@ -519,10 +521,14 @@ pub fn snap_floor(beat: f64, grid: f64) -> f64 {
 pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
     use crate::state::Tool;
     ui.spacing_mut().item_spacing.x = 3.0;
+    // As tall as the bar's controls: square icon buttons (name and key in the tooltip); with room for
+    // it (a bar 34 px or taller), the name under the icon.
+    let h = ui.spacing().interact_size.y.max(BAR_H);
+    let labelled = h >= 34.0;
     for (ti, (t, icon, key)) in Tool::ALL.into_iter().enumerate() {
         let (name, what) = t.describe();
         let on = st.ui.tool == t;
-        let (r, resp) = ui.allocate_exact_size(Vec2::new(46.0, 38.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(if labelled { Vec2::new(46.0, h) } else { Vec2::new(h + 6.0, h) }, Sense::click());
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, format!("{name} tool")));
         let p = ui.painter();
         let fill = if on {
@@ -538,14 +544,16 @@ pub fn tool_buttons(ui: &mut Ui, st: &mut State) {
         }
         let ink = if on { Color32::BLACK } else { theme::TEXT };
         // The Higgsfield icon (dark on the lit button), the glyph if the icon set is missing.
-        let ir = Rect::from_center_size(Pos2::new(r.center().x, r.top() + 14.0), Vec2::splat(22.0));
+        let ir = if labelled { Rect::from_center_size(Pos2::new(r.center().x, r.top() + 14.0), Vec2::splat(22.0)) } else { Rect::from_center_size(r.center(), Vec2::splat(h - 6.0)) };
         if on {
             p.rect_filled(ir.expand(1.0), 5.0, Color32::from_black_alpha(150));
         }
         if !crate::brand::paint_icon(p, ir, crate::brand::icon::DRAW + ti, Color32::WHITE) {
-            p.text(Pos2::new(r.center().x, r.top() + 13.0), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(16.0), ink);
+            p.text(ir.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(16.0), ink);
         }
-        p.text(Pos2::new(r.center().x, r.bottom() - 8.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(10.0), if on { Color32::BLACK } else { theme::TEXT_DIM });
+        if labelled {
+            p.text(Pos2::new(r.center().x, r.bottom() - 8.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(10.0), if on { Color32::BLACK } else { theme::TEXT_DIM });
+        }
         let key = key.rsplit('(').next().unwrap_or("").trim_end_matches(')');
         if resp.on_hover_text(format!("{name} tool  ·  key {key}\n{what}")).clicked() {
             st.ui.tool = t;
@@ -640,7 +648,8 @@ pub fn icon_toggle(ui: &mut Ui, on: bool, icon: usize, label: &str, color: Color
     let Some(img) = crate::brand::icon_image(ui.ctx(), icon, 15.0) else { return toggle(ui, on, label, color) };
     let text = RichText::new(label).small().strong().color(if on { Color32::BLACK } else { theme::TEXT_DIM });
     let img = img.tint(if on { Color32::BLACK } else { Color32::from_gray(200) });
-    let r = ui.add(egui::Button::image_and_text(img, text).fill(if on { color } else { theme::PANEL_2 }).corner_radius(4.0));
+    // As tall as the bar's other controls (its interaction height).
+    let r = ui.add(egui::Button::image_and_text(img, text).fill(if on { color } else { theme::PANEL_2 }).corner_radius(4.0).min_size(Vec2::new(0.0, ui.spacing().interact_size.y)));
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
     r
 }

@@ -14,6 +14,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     let rec = ts.recording || st.audio.is_recording() || st.ui.record_started.is_some();
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
+        // Every control of the bar is SHELL_H tall: framed buttons, toggles, menus and fields take it
+        // from the interaction height.
+        ui.spacing_mut().interact_size.y = widgets::SHELL_H;
         // Song / pattern mode.
         let pat_mode = st.ui.pattern_mode;
         if let Some(want_pat) = mode_switch(ui, pat_mode) {
@@ -26,10 +29,10 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         // Transport buttons with the Higgsfield icons (the glyphs if the icon set is missing).
         let icon_btn = |ui: &mut Ui, k: usize, glyph: &str, col: Color32, lit: bool| -> egui::Response {
             match crate::brand::icon_image(ui.ctx(), k, 20.0) {
-                Some(img) => {
-                    ui.add(egui::Button::image(img.tint(if lit { Color32::WHITE } else { Color32::from_gray(185) })).fill(if lit { col.gamma_multiply(0.35) } else { theme::PANEL_2 }).min_size(Vec2::new(36.0, 30.0)))
-                }
-                None => ui.add(egui::Button::new(big(glyph).color(col)).min_size(Vec2::new(36.0, 30.0))),
+                Some(img) => ui.add(
+                    egui::Button::image(img.tint(if lit { Color32::WHITE } else { Color32::from_gray(185) })).fill(if lit { col.gamma_multiply(0.35) } else { theme::PANEL_2 }).min_size(Vec2::new(38.0, widgets::SHELL_H)),
+                ),
+                None => ui.add(egui::Button::new(big(glyph).color(col)).min_size(Vec2::new(38.0, widgets::SHELL_H))),
             }
         };
         let play = if ts.playing { icon_btn(ui, crate::brand::icon::PAUSE, "⏸", theme::OK, true) } else { icon_btn(ui, crate::brand::icon::PLAY, "▶", Color32::WHITE, false) };
@@ -56,12 +59,11 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         let p = &st.session.project;
         let bpb = p.beats_per_bar(beat.max(0.0));
         let time = if beat < 0.0 { format!("count-in {:.0}", (-beat).ceil()) } else { bbt(beat, bpb) };
-        egui::Frame::NONE.fill(theme::BG).corner_radius(4.0).inner_margin(egui::Margin::symmetric(8, 2)).show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.label(RichText::new(time).monospace().size(17.0).color(theme::PLAYHEAD));
-                ui.label(RichText::new(clock(ts.seconds.max(0.0))).monospace().small().color(theme::TEXT_DIM));
-            });
-        });
+        // A fixed box as tall as the rest of the bar: bars:beats:ticks over the clock.
+        let (tr, _) = ui.allocate_exact_size(Vec2::new(112.0, widgets::SHELL_H), egui::Sense::hover());
+        ui.painter().rect_filled(tr, 4.0, theme::BG);
+        ui.painter().text(egui::pos2(tr.left() + 8.0, tr.top() + 1.0), egui::Align2::LEFT_TOP, time, egui::FontId::monospace(16.0), theme::PLAYHEAD);
+        ui.painter().text(egui::pos2(tr.left() + 8.0, tr.bottom() - 1.0), egui::Align2::LEFT_BOTTOM, clock(ts.seconds.max(0.0)), egui::FontId::monospace(9.5), theme::TEXT_DIM);
 
         // Tempo.
         let mut bpm = st.session.project.bpm;
@@ -69,11 +71,13 @@ pub fn show(ui: &mut Ui, st: &mut State) {
         crate::tutorial::anchor(ui.ctx(), "transport.tempo", r.rect);
         widgets::apply(st, &r, "Tempo", |p| p.bpm = bpm);
         ui.label(RichText::new("BPM").small().color(theme::TEXT_DIM));
-        if ui.small_button("TAP").on_hover_text("Tap tempo (T)").clicked() {
+        if ui.add(egui::Button::new(RichText::new("TAP").small().strong()).min_size(Vec2::new(40.0, widgets::SHELL_H))).on_hover_text("Tap tempo (T)").clicked() {
             st.ctx.run("dragon.transport.tap", serde_json::Value::Null);
         }
         let (num, den) = st.session.project.signature_at(0.0);
-        ui.label(RichText::new(format!("{num}/{den}")).color(theme::TEXT_DIM));
+        let (sr, _) = ui.allocate_exact_size(Vec2::new(38.0, widgets::SHELL_H), egui::Sense::hover());
+        ui.painter().rect_filled(sr, 4.0, theme::BG);
+        ui.painter().text(sr.center(), egui::Align2::CENTER_CENTER, format!("{num}/{den}"), egui::FontId::monospace(14.0), theme::TEXT_DIM);
         ui.separator();
 
         // Toggles.
@@ -107,7 +111,7 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 ui.selectable_value(&mut st.ui.pattern, p.id, &p.name);
             }
         });
-        if ui.small_button("+").on_hover_text("New pattern").clicked() {
+        if ui.add(egui::Button::new(RichText::new("+").strong()).min_size(Vec2::splat(widgets::SHELL_H))).on_hover_text("New pattern").clicked() {
             st.ctx.run("dragon.add.pattern", serde_json::Value::Null);
         }
 
@@ -116,11 +120,17 @@ pub fn show(ui: &mut Ui, st: &mut State) {
             crate::update::chip(ui, st);
             ui.add_space(8.0);
             let m = st.audio.meters().snapshot();
+            // What fits: the meter and loudness drop out before they would overlap the controls.
+            let room = ui.available_width();
             ui.label(RichText::new(format!("CPU {:>3.0}%  ·  {} voices", m.cpu_load * 100.0, m.voices)).small().color(if m.cpu_load > 0.8 { theme::REC } else { theme::TEXT_DIM }));
-            let (l, r) = m.strips.get(&st.session.project.mixer.master.id).copied().unwrap_or((0.0, 0.0));
-            ui.add_space(4.0);
-            stereo_bar(ui, l, r);
-            ui.label(RichText::new(format!("{:.1} LUFS-S", m.short_term)).small().monospace());
+            if room > 330.0 {
+                let (l, r) = m.strips.get(&st.session.project.mixer.master.id).copied().unwrap_or((0.0, 0.0));
+                ui.add_space(4.0);
+                stereo_bar(ui, l, r);
+            }
+            if room > 420.0 {
+                ui.label(RichText::new(format!("{:.1} LUFS-S", m.short_term)).small().monospace());
+            }
         });
     });
 }
