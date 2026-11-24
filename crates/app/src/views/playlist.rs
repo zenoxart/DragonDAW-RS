@@ -546,7 +546,9 @@ pub fn show(ui: &mut Ui, st: &mut State) {
     // Ruler: click to seek, drag to set loop (Shift: punch).
     if let Some(pos) = resp.interact_pointer_pos() {
         if ruler.contains(pos) && resp.drag_started_by(egui::PointerButton::Primary) {
-            let b0 = snap(beat_of(pos.x, sx), grid.max(0.25));
+            // Loop and punch ranges always snap to bars (Alt: to beats).
+            let bar = if ui.input(|i| i.modifiers.alt) { 1.0 } else { st.session.project.beats_per_bar(0.0) };
+            let b0 = snap(beat_of(pos.x, sx), bar).max(0.0);
             let shift = ui.input(|i| i.modifiers.shift);
             st.ui.pl_drag = Some(Drag { clip: 0, track: 0, kind: if shift { DragKind::Punch { from: b0 } } else { DragKind::Loop { from: b0 } } });
         }
@@ -819,7 +821,8 @@ pub fn show(ui: &mut Ui, st: &mut State) {
                 }
             }
             DragKind::Loop { from } | DragKind::Punch { from } => {
-                let b = snap(beat, grid.max(0.25)).max(0.0);
+                let bar = if ui.input(|i| i.modifiers.alt) { 1.0 } else { st.session.project.beats_per_bar(0.0) };
+                let b = snap(beat, bar).max(0.0);
                 let r = Range::new(from.min(b), from.max(b));
                 let punch = matches!(d.kind, DragKind::Punch { .. });
                 if r.len() > 0.0 {

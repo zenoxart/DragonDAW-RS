@@ -342,6 +342,33 @@ impl egui_dock::TabViewer for Viewer<'_> {
 }
 
 impl eframe::App for DragonApp {
+    /// Tab outside a text field opens the Tab window instead of moving the focus (egui moves it before
+    /// `update` runs, so the key is taken out here).
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The Tab window's button: one real Tab for egui to move the focus with.
+        if let Some(shift) = self.st.ui.tab_forward.take() {
+            let modifiers = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+            raw.events.push(egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers });
+            return;
+        }
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let mut hit = None;
+        raw.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && !modifiers.command => {
+                if *pressed {
+                    hit = Some(modifiers.shift);
+                }
+                false
+            }
+            _ => true,
+        });
+        if let Some(shift) = hit {
+            self.st.ui.tab_key = Some(shift);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.styled {
             theme::apply(ctx);
@@ -395,6 +422,8 @@ impl eframe::App for DragonApp {
         views::overlays::recovery(ctx, &mut self.st);
         self.st.poll_trust();
         views::overlays::trust_prompt(ctx, &mut self.st);
+        views::overlays::marker_prompt(ctx, &mut self.st);
+        views::overlays::tab_popup(ctx, &mut self.st);
         crate::crash::window(ctx, &mut self.st);
         // A project that has been open (compiled and running) for a moment opened fine.
         if let Some(n) = self.st.open_guard {

@@ -2128,3 +2128,26 @@ fn browser_search_keys_and_double_click() {
     h.frame(browser, vec![Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
     assert_eq!(h.st.session.project.channels.len(), channels + 1, "Enter put it into the rack");
 }
+
+fn marker_view(ui: &mut egui::Ui, st: &mut State) {
+    let ctx = ui.ctx().clone();
+    super::overlays::marker_prompt(&ctx, st);
+}
+
+/// A new marker asks for its name and snaps to the bar at the playhead (Beat: to the beat).
+#[test]
+fn new_marker_asks_for_a_name_and_snaps() {
+    let mut h = Harness::new();
+    let ctx = h.ctx.clone();
+    crate::commands::execute(&mut h.st, "dragon.add.marker", &ctx);
+    let mp = h.st.ui.marker_prompt.as_mut().expect("the prompt opens");
+    mp.beat = 5.3;
+    mp.name = "Chorus".into();
+    h.idle(marker_view, 2);
+    let n = h.st.session.project.markers.len();
+    h.frame(marker_view, vec![Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    assert!(h.st.ui.marker_prompt.is_none(), "Enter adds it");
+    let m = h.st.session.project.markers.iter().find(|m| m.name == "Chorus").expect("named");
+    assert_eq!(m.beat, 4.0, "on the nearest bar");
+    assert_eq!(h.st.session.project.markers.len(), n + 1);
+}

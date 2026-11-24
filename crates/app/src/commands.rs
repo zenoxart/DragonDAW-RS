@@ -487,6 +487,9 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
                 .filter(|c| st.ui.clips.contains(&c.id))
                 .fold(None, |a: Option<(f64, f64)>, c| Some(a.map_or((c.start, c.end()), |(x, y)| (x.min(c.start), y.max(c.end())))));
             if let Some((a, b)) = span {
+                // Out to whole bars, like a loop drawn on the ruler.
+                let bar = st.session.project.beats_per_bar(0.0);
+                let (a, b) = ((a / bar).floor() * bar, ((b / bar).ceil() * bar).max((a / bar).floor() * bar + bar));
                 st.session.edit("Select time", |p| p.loop_range = Some(Range::new(a, b)));
             }
         }
@@ -1184,13 +1187,9 @@ pub fn execute(st: &mut State, id: &str, ctx: &egui::Context) -> bool {
             })
         }
         "add.marker" => {
-            let beat = st.beat_now();
-            st.session.edit("Add marker", |p| {
-                let id = p.next_id();
-                let n = p.markers.len() + 1;
-                p.markers.push(Marker { id, beat, name: format!("Marker {n}") });
-                p.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
-            });
+            // Asks for the name first; the marker snaps to the bar (or beat) at the playhead.
+            let n = st.session.project.markers.len() + 1;
+            st.ui.marker_prompt = Some(crate::state::MarkerPrompt { beat: st.beat_now(), name: format!("Marker {n}"), to_bar: true, focus: true });
         }
         "view.palette" => st.ui.palette = Some(String::new()),
         "view.fx_gallery" => st.ui.fx_gallery = true,

@@ -176,3 +176,85 @@ pub fn trust_prompt(ctx: &egui::Context, st: &mut State) {
         st.ui.trust_dismissed.extend(list);
     }
 }
+
+/// The "new marker" prompt: a name field and where it lands (on the bar or the beat at the playhead);
+/// Enter adds it, Esc cancels.
+pub fn marker_prompt(ctx: &egui::Context, st: &mut State) {
+    let Some(mut mp) = st.ui.marker_prompt.clone() else { return };
+    let bpb = st.session.project.beats_per_bar(mp.beat.max(0.0));
+    let at = |mp: &crate::state::MarkerPrompt| if mp.to_bar { (mp.beat / bpb).round() * bpb } else { mp.beat.round() }.max(0.0);
+    let mut done = None;
+    egui::Window::new("New marker").id(egui::Id::new("marker.prompt")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 120.0]).show(ctx, |ui| {
+        ui.label("Name");
+        let r = ui.add(egui::TextEdit::singleline(&mut mp.name).desired_width(240.0));
+        if mp.focus {
+            r.request_focus();
+            mp.focus = false;
+        }
+        ui.horizontal(|ui| {
+            ui.label("Snap to");
+            ui.selectable_value(&mut mp.to_bar, true, "Bar");
+            ui.selectable_value(&mut mp.to_bar, false, "Beat");
+            ui.label(egui::RichText::new(format!("at {}", dragon_engine::time::bbt(at(&mp), bpb))).monospace().color(crate::theme::TEXT_DIM));
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Add marker").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                done = Some(true);
+            }
+            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                done = Some(false);
+            }
+        });
+    });
+    match done {
+        Some(true) => {
+            let beat = at(&mp);
+            let name = if mp.name.trim().is_empty() { format!("Marker {}", st.session.project.markers.len() + 1) } else { mp.name.trim().to_string() };
+            st.session.edit("Add marker", |p| {
+                let id = p.next_id();
+                p.markers.push(dragon_engine::model::Marker { id, beat, name });
+                p.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+            });
+            st.ui.marker_prompt = None;
+        }
+        Some(false) => st.ui.marker_prompt = None,
+        None => st.ui.marker_prompt = Some(mp),
+    }
+}
+
+/// Tab (outside text fields) opens this small window instead of moving the keyboard focus straight away:
+/// its big button does what Tab did – focus the next control (Shift: the previous one); Tab again presses
+/// it, Esc closes.
+pub fn tab_popup(ctx: &egui::Context, st: &mut State) {
+    // Tab / Shift+Tab, taken out of the input before egui saw it (app.rs raw_input_hook).
+    let key = st.ui.tab_key.take();
+    let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if !st.ui.tab_popup {
+        if key.is_some() {
+            st.ui.tab_popup = true;
+        }
+        return;
+    }
+    let mut go: Option<bool> = key;
+    let mut open = true;
+    egui::Window::new("Tab").id(egui::Id::new("tab.popup")).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        let big = |t: &str| egui::RichText::new(t).size(18.0).strong();
+        if ui.add(egui::Button::new(big("Focus the next control  ▶")).min_size(egui::vec2(300.0, 56.0))).on_hover_text("What Tab does: moves the keyboard focus to the next button, field or knob (Tab again)").clicked()
+        {
+            go = Some(false);
+        }
+        if ui.add(egui::Button::new(egui::RichText::new("Previous control (Shift+Tab)")).min_size(egui::vec2(300.0, 26.0))).clicked() {
+            go = Some(true);
+        }
+        ui.label(egui::RichText::new("Esc closes this window").small().color(crate::theme::TEXT_DIM));
+    });
+    if esc || !open {
+        st.ui.tab_popup = false;
+    }
+    if let Some(back) = go {
+        st.ui.tab_popup = false;
+        // egui moves the focus on a Tab key: the next frame gets one (app.rs raw_input_hook lets it through).
+        st.ui.tab_forward = Some(back);
+        ctx.request_repaint();
+    }
+}

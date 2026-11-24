@@ -146,6 +146,16 @@ pub enum Editor {
     Browser,
 }
 
+/// The "new marker" prompt: where the playhead was, the name being typed, snap to bars (else beats).
+#[derive(Clone, Debug)]
+pub struct MarkerPrompt {
+    pub beat: f64,
+    pub name: String,
+    pub to_bar: bool,
+    /// Give the name field the keyboard focus (first frame).
+    pub focus: bool,
+}
+
 /// Copied clips (with their track index) or notes.
 #[derive(Debug, Clone)]
 pub enum Clipboard {
@@ -217,6 +227,14 @@ pub struct UiState {
     pub browser_sel: Option<PathBuf>,
     /// A double-clicked sound to play once more when its first play ends: (file, started, length s).
     pub preview_again: Option<(PathBuf, Instant, f64)>,
+    /// The "new marker" prompt, while open.
+    pub marker_prompt: Option<MarkerPrompt>,
+    /// The Tab window (a big "focus the next control" button), while open.
+    pub tab_popup: bool,
+    /// Tab pressed outside a text field this frame (Some(shift)).
+    pub tab_key: Option<bool>,
+    /// A Tab to hand to egui next frame (the Tab window's button; Some(shift)).
+    pub tab_forward: Option<bool>,
     /// The start screen is showing.
     pub start_screen: bool,
     /// The album songs' last measured loudness (mixer channel, LUFS).
@@ -363,6 +381,10 @@ impl UiState {
             editor: Editor::Playlist,
             browser_sel: None,
             preview_again: None,
+            marker_prompt: None,
+            tab_popup: false,
+            tab_key: None,
+            tab_forward: None,
             start_screen: false,
             album_lufs: Vec::new(),
             repair: Default::default(),
